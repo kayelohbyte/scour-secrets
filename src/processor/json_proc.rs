@@ -12,17 +12,10 @@
 //! matches the `email` field inside every object in the `users` array.
 
 use crate::error::{Result, SanitizeError};
-use crate::processor::{build_path, find_matching_rule, replace_value, FileTypeProfile, Processor};
+use crate::processor::limits::DEFAULT_INPUT_SIZE;
+use crate::processor::{walk_tree, FileTypeProfile, Processor, TreeNode};
 use crate::store::MappingStore;
 use serde_json::Value;
-
-/// Maximum recursion depth for walking JSON value trees.
-/// Prevents stack overflow from deeply nested or malicious inputs (R-4 fix).
-pub(crate) const MAX_JSON_DEPTH: usize = 128;
-
-/// Maximum allowed input size (bytes) for JSON processing (F-04 fix).
-/// Inputs exceeding this are rejected before parsing.
-const MAX_JSON_INPUT_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
 
 /// Structured processor for JSON files.
 pub struct JsonProcessor;
@@ -48,10 +41,10 @@ impl Processor for JsonProcessor {
         store: &MappingStore,
     ) -> Result<Vec<u8>> {
         // F-04 fix: enforce input size limit.
-        if content.len() > MAX_JSON_INPUT_SIZE {
+        if content.len() > DEFAULT_INPUT_SIZE {
             return Err(SanitizeError::InputTooLarge {
                 size: content.len(),
-                limit: MAX_JSON_INPUT_SIZE,
+                limit: DEFAULT_INPUT_SIZE,
             });
         }
 
@@ -81,10 +74,56 @@ impl Processor for JsonProcessor {
     }
 }
 
-/// Recursively walk a JSON value, replacing matched fields.
-///
-/// `depth` tracks the current recursion level; exceeding `MAX_JSON_DEPTH`
-/// returns an error instead of risking a stack overflow.
+impl TreeNode for Value {
+    fn for_each_map_entry<F>(&mut self, mut f: F) -> Result<()>
+    where
+        F: FnMut(&str, &mut Self) -> Result<()>,
+    {
+        if let Self::Object(map) = self {
+            let keys: Vec<String> = map.keys().cloned().collect();
+            for key in keys {
+                if let Some(v) = map.get_mut(&key) {
+                    f(&key, v)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn for_each_seq_item<F>(&mut self, mut f: F) -> Result<()>
+    where
+        F: FnMut(&mut Self) -> Result<()>,
+    {
+        if let Self::Array(arr) = self {
+            for item in arr.iter_mut() {
+                f(item)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn as_str_mut(&mut self) -> Option<&mut String> {
+        if let Self::String(s) = self {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    fn is_scalar(&self) -> bool {
+        matches!(self, Self::Number(_) | Self::Bool(_))
+    }
+
+    fn scalar_to_string(&self) -> String {
+        self.to_string()
+    }
+
+    fn set_string(&mut self, s: String) {
+        *self = Self::String(s);
+    }
+}
+
+/// Recursively walk a JSON value tree, replacing matched field values.
 pub(crate) fn walk_json(
     value: &mut Value,
     prefix: &str,
@@ -92,47 +131,7 @@ pub(crate) fn walk_json(
     store: &MappingStore,
     depth: usize,
 ) -> Result<()> {
-    if depth > MAX_JSON_DEPTH {
-        return Err(SanitizeError::RecursionDepthExceeded(format!(
-            "JSON recursion depth exceeds limit of {MAX_JSON_DEPTH}"
-        )));
-    }
-    match value {
-        Value::Object(map) => {
-            let keys: Vec<String> = map.keys().cloned().collect();
-            for key in keys {
-                let path = build_path(prefix, &key);
-
-                if let Some(v) = map.get_mut(&key) {
-                    match v {
-                        Value::String(s) => {
-                            if let Some(rule) = find_matching_rule(&path, profile) {
-                                *s = replace_value(s, rule, store)?;
-                            }
-                        }
-                        Value::Number(_) | Value::Bool(_) => {
-                            if let Some(rule) = find_matching_rule(&path, profile) {
-                                let repr = v.to_string();
-                                let replaced = replace_value(&repr, rule, store)?;
-                                *v = Value::String(replaced);
-                            }
-                        }
-                        Value::Object(_) | Value::Array(_) => {
-                            walk_json(v, &path, profile, store, depth + 1)?;
-                        }
-                        Value::Null => {}
-                    }
-                }
-            }
-        }
-        Value::Array(arr) => {
-            for item in arr.iter_mut() {
-                walk_json(item, prefix, profile, store, depth + 1)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
+    walk_tree(value, prefix, profile, store, depth, "JSON")
 }
 
 #[cfg(test)]

@@ -52,13 +52,11 @@
 //! - Heredoc opening and closing marker lines are preserved verbatim.
 
 use crate::error::{Result, SanitizeError};
+use crate::processor::limits::DEFAULT_INPUT_SIZE;
 use crate::processor::profile::FieldRule;
 use crate::processor::{find_matching_rule, replace_value, FileTypeProfile, Processor};
 use crate::store::MappingStore;
 use std::collections::HashMap;
-
-/// Maximum allowed input size (bytes) for key-value processing.
-const MAX_KV_INPUT_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
 
 // ---------------------------------------------------------------------------
 // Internal state machine
@@ -97,10 +95,10 @@ impl Processor for KeyValueProcessor {
         profile: &FileTypeProfile,
         store: &MappingStore,
     ) -> Result<Vec<u8>> {
-        if content.len() > MAX_KV_INPUT_SIZE {
+        if content.len() > DEFAULT_INPUT_SIZE {
             return Err(SanitizeError::InputTooLarge {
                 size: content.len(),
-                limit: MAX_KV_INPUT_SIZE,
+                limit: DEFAULT_INPUT_SIZE,
             });
         }
 

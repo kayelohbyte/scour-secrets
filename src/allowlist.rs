@@ -20,18 +20,20 @@
 //! If a pattern contains regex metacharacters (`^`, `$`, `+`, `(`, `)`)
 //! a warning is emitted — those characters are matched literally.
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Compiled allowlist that can be queried concurrently.
+///
+/// Exact patterns are stored in a [`HashSet`] for O(1) lookup. Glob patterns
+/// (those containing `*`) are stored in a [`Vec`] and scanned linearly after
+/// the hash check misses. This means allowlists with many exact entries —
+/// the common case for common-word lists — pay no linear scan cost.
 pub struct AllowlistMatcher {
-    entries: Vec<AllowlistEntry>,
+    exact: HashSet<String>,
+    globs: Vec<String>,
     /// Number of values passed through as allowed across all `is_allowed` calls.
     seen: AtomicU64,
-}
-
-enum AllowlistEntry {
-    Exact(String),
-    Glob(String),
 }
 
 impl AllowlistMatcher {
@@ -43,7 +45,8 @@ impl AllowlistMatcher {
     /// the matcher so the caller can surface it to the user.
     #[must_use]
     pub fn new(patterns: Vec<String>) -> (Self, Vec<String>) {
-        let mut entries = Vec::with_capacity(patterns.len());
+        let mut exact = HashSet::new();
+        let mut globs = Vec::new();
         let mut warnings = Vec::new();
 
         for pat in patterns {
@@ -58,15 +61,16 @@ impl AllowlistMatcher {
                 }
             }
             if pat.contains('*') {
-                entries.push(AllowlistEntry::Glob(pat));
+                globs.push(pat);
             } else {
-                entries.push(AllowlistEntry::Exact(pat));
+                exact.insert(pat);
             }
         }
 
         (
             Self {
-                entries,
+                exact,
+                globs,
                 seen: AtomicU64::new(0),
             },
             warnings,
@@ -80,21 +84,20 @@ impl AllowlistMatcher {
         self.match_pattern(value).is_some()
     }
 
-    /// Returns the first pattern that matches `value`, or `None`.
+    /// Returns the pattern that matches `value`, or `None`.
     ///
-    /// Increments the seen counter when a match is found, same as `is_allowed`.
+    /// Exact entries are checked first via hash lookup. Glob entries are
+    /// scanned linearly only on a hash miss. Increments the seen counter
+    /// when a match is found.
     pub fn match_pattern<'a>(&'a self, value: &str) -> Option<&'a str> {
-        for entry in &self.entries {
-            let matched = match entry {
-                AllowlistEntry::Exact(s) => s.as_str() == value,
-                AllowlistEntry::Glob(pat) => glob_matches(pat, value),
-            };
-            if matched {
+        if let Some(s) = self.exact.get(value) {
+            self.seen.fetch_add(1, Ordering::Relaxed);
+            return Some(s.as_str());
+        }
+        for pat in &self.globs {
+            if glob_matches(pat, value) {
                 self.seen.fetch_add(1, Ordering::Relaxed);
-                return Some(match entry {
-                    AllowlistEntry::Exact(s) => s.as_str(),
-                    AllowlistEntry::Glob(pat) => pat.as_str(),
-                });
+                return Some(pat.as_str());
             }
         }
         None
@@ -107,7 +110,7 @@ impl AllowlistMatcher {
 
     /// `true` if no patterns are registered (allowlist is effectively disabled).
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.exact.is_empty() && self.globs.is_empty()
     }
 }
 
@@ -303,5 +306,26 @@ mod tests {
         assert!(!m.is_allowed("b"));
         assert!(m.is_allowed("ab"));
         assert!(m.is_allowed("aXb"));
+    }
+
+    #[test]
+    fn large_exact_list_all_match() {
+        // Verify HashSet lookup works correctly across many entries.
+        let words: Vec<String> = (0..500).map(|i| format!("word{i}")).collect();
+        let (m, _) = AllowlistMatcher::new(words.clone());
+        for w in &words {
+            assert!(m.is_allowed(w), "should allow {w}");
+        }
+        assert!(!m.is_allowed("word500"));
+        assert!(!m.is_allowed("notaword"));
+    }
+
+    #[test]
+    fn exact_and_glob_coexist() {
+        let m = matcher(&["localhost", "127.0.0.1", "*.internal"]);
+        assert!(m.is_allowed("localhost"));
+        assert!(m.is_allowed("127.0.0.1"));
+        assert!(m.is_allowed("db.internal"));
+        assert!(!m.is_allowed("github.com"));
     }
 }

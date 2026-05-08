@@ -44,6 +44,7 @@ pub mod ini_proc;
 pub mod json_proc;
 pub mod jsonl_proc;
 pub mod key_value;
+pub(crate) mod limits;
 pub mod log_line;
 pub mod profile;
 pub mod registry;
@@ -56,7 +57,7 @@ pub use profile::{FieldRule, FileTypeProfile};
 pub use registry::ProcessorRegistry;
 
 use crate::category::Category;
-use crate::error::Result;
+use crate::error::{Result, SanitizeError};
 use crate::store::MappingStore;
 use std::io;
 
@@ -265,4 +266,78 @@ pub(crate) fn find_matching_rule<'a>(
         .fields
         .iter()
         .find(|rule| pattern_matches(&rule.pattern, key_path))
+}
+
+// ---------------------------------------------------------------------------
+// Shared tree walker
+// ---------------------------------------------------------------------------
+
+/// Visitor interface over a structured value tree.
+///
+/// Implemented by [`serde_json::Value`], [`serde_yaml_ng::Value`], and
+/// [`toml::Value`] so that [`walk_tree`] can drive sanitization without
+/// knowing the format it is operating on.
+pub(crate) trait TreeNode {
+    /// Call `f(key, child)` for every entry in this map node.
+    /// Is a no-op (returns `Ok(())`) if this node is not a map.
+    fn for_each_map_entry<F>(&mut self, f: F) -> Result<()>
+    where
+        F: FnMut(&str, &mut Self) -> Result<()>;
+
+    /// Call `f(item)` for every item in this sequence node.
+    /// Is a no-op (returns `Ok(())`) if this node is not a sequence.
+    fn for_each_seq_item<F>(&mut self, f: F) -> Result<()>
+    where
+        F: FnMut(&mut Self) -> Result<()>;
+
+    /// Mutable access to the inner `String` if this is a string node.
+    fn as_str_mut(&mut self) -> Option<&mut String>;
+
+    /// `true` if this is a non-string primitive scalar (number, bool, datetime, …).
+    fn is_scalar(&self) -> bool;
+
+    /// String representation used as the replacement input for scalar values.
+    fn scalar_to_string(&self) -> String;
+
+    /// Replace this node's content with a string value in-place.
+    fn set_string(&mut self, s: String);
+}
+
+/// Recursively walk a structured value tree, replacing matched leaf values.
+///
+/// This is the shared implementation for the JSON, YAML, and TOML processors.
+/// Each processor implements [`TreeNode`] for its own value type and wraps
+/// this call in a thin format-named function.
+pub(crate) fn walk_tree<V: TreeNode>(
+    value: &mut V,
+    prefix: &str,
+    profile: &FileTypeProfile,
+    store: &MappingStore,
+    depth: usize,
+    format_name: &str,
+) -> Result<()> {
+    if depth > limits::DEFAULT_DEPTH {
+        return Err(SanitizeError::RecursionDepthExceeded(format!(
+            "{format_name} recursion depth exceeds limit of {}",
+            limits::DEFAULT_DEPTH
+        )));
+    }
+    value.for_each_map_entry(|key, v| {
+        let path = build_path(prefix, key);
+        if let Some(s) = v.as_str_mut() {
+            if let Some(rule) = find_matching_rule(&path, profile) {
+                *s = replace_value(s, rule, store)?;
+            }
+        } else if v.is_scalar() {
+            if let Some(rule) = find_matching_rule(&path, profile) {
+                let repr = v.scalar_to_string();
+                let replaced = replace_value(&repr, rule, store)?;
+                v.set_string(replaced);
+            }
+        } else {
+            walk_tree(v, &path, profile, store, depth + 1, format_name)?;
+        }
+        Ok(())
+    })?;
+    value.for_each_seq_item(|item| walk_tree(item, prefix, profile, store, depth + 1, format_name))
 }

@@ -29,11 +29,9 @@
 //! - The `export` prefix, if present, is retained in the output.
 
 use crate::error::{Result, SanitizeError};
+use crate::processor::limits::DEFAULT_INPUT_SIZE;
 use crate::processor::{find_matching_rule, replace_value, FileTypeProfile, Processor};
 use crate::store::MappingStore;
-
-/// Maximum allowed input size (bytes) for `.env` processing.
-const MAX_ENV_INPUT_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
 
 /// Structured processor for `.env` / shell environment files.
 pub struct EnvProcessor;
@@ -53,10 +51,10 @@ impl Processor for EnvProcessor {
         profile: &FileTypeProfile,
         store: &MappingStore,
     ) -> Result<Vec<u8>> {
-        if content.len() > MAX_ENV_INPUT_SIZE {
+        if content.len() > DEFAULT_INPUT_SIZE {
             return Err(SanitizeError::InputTooLarge {
                 size: content.len(),
-                limit: MAX_ENV_INPUT_SIZE,
+                limit: DEFAULT_INPUT_SIZE,
             });
         }
 

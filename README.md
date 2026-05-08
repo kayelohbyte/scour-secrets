@@ -623,13 +623,36 @@ Maintainers will acknowledge receipt within 5 business days and aim to provide a
 
 ## Stability
 
-This project follows [Semantic Versioning](https://semver.org/). While below
-1.0, breaking changes will bump the minor version.
+This project follows [Semantic Versioning](https://semver.org/). As of 1.0.0,
+the public library API and CLI interface are stable. Breaking changes require a
+major version bump.
 
-- **Stable guarantees:** One-way replacement, deterministic mode (same seed →
-  same output), length preservation, encrypted secrets format.
-- **May evolve:** CLI flag names, report JSON schema, processor heuristics,
-  default limit values.
+### What is stable
+
+- **One-way replacement** — replacements are never reversed or exposed.
+- **Deterministic mode** — same seed + same input → same output, across all
+  1.x releases.
+- **Length preservation** — all 18 built-in categories always produce output
+  whose byte length matches the input.
+- **Encrypted secrets format** — AES-256-GCM + PBKDF2 envelope; files
+  encrypted with any 1.x release can be decrypted by any other 1.x release.
+- **Public library API** — all types and functions re-exported from `lib.rs`
+  (e.g. `Category`, `MappingStore`, `StreamScanner`, `HmacGenerator`).
+- **CLI flags** — all flags documented in `sanitize --help` are stable.
+
+### What may evolve in minor releases
+
+- Internal processor heuristics (which files auto-detect as JSON/YAML/etc.).
+- Default safety limit values (`DEFAULT_ARCHIVE_DEPTH`, chunk sizes, etc.).
+- Report JSON schema (additive changes only — no existing fields removed).
+- Tracing/log output format and verbosity.
+
+### MSRV policy
+
+The minimum supported Rust version is **1.74** (stable toolchain). It will
+only be raised in a **minor** version bump (never in a patch), with at least
+one release cycle of notice. The current MSRV is declared in `Cargo.toml`
+under `rust-version` and is enforced in CI.
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 

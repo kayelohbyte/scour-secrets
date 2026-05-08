@@ -223,59 +223,63 @@ fn format_name_lp(hash: &[u8; 32], target: usize) -> String {
     pad_or_truncate(&raw, target, hash)
 }
 
+/// Replace each character matching `is_replaceable` with a deterministic
+/// character produced by `replacement(original_char, hash[hi % 32])`.
+/// All other characters are preserved as-is.
+/// Returns `None` if no replaceable characters were found (caller falls back).
+fn format_char_class_lp(
+    hash: &[u8; 32],
+    original: &str,
+    is_replaceable: impl Fn(char) -> bool,
+    replacement: impl Fn(char, u8) -> char,
+) -> Option<String> {
+    let mut buf = String::with_capacity(original.len());
+    let mut hi = 0usize;
+    let mut had_replaceable = false;
+    for ch in original.chars() {
+        if is_replaceable(ch) {
+            buf.push(replacement(ch, hash[hi % 32]));
+            hi += 1;
+            had_replaceable = true;
+        } else {
+            buf.push(ch);
+        }
+    }
+    had_replaceable.then_some(buf)
+}
+
 /// Length-preserving digit replacement.
 /// Preserves every non-digit character in `original`; replaces each
 /// ASCII digit with a deterministic digit derived from `hash`.
 /// Falls back to hex if the original contains no digits.
 fn format_digits_lp(hash: &[u8; 32], original: &str, target: usize) -> String {
-    let mut buf = String::with_capacity(target);
-    let mut hi = 0usize;
-    let mut had_digit = false;
-    for ch in original.chars() {
-        if ch.is_ascii_digit() {
-            buf.push((b'0' + hash[hi % 32] % 10) as char);
-            hi += 1;
-            had_digit = true;
-        } else {
-            buf.push(ch);
-        }
-    }
-    if !had_digit {
-        return pad_or_truncate("", target, hash);
-    }
-    // Guard against multi-byte chars causing length mismatch.
-    if buf.len() != target {
-        return pad_or_truncate(&buf, target, hash);
-    }
-    buf
+    format_char_class_lp(
+        hash,
+        original,
+        |c| c.is_ascii_digit(),
+        |_, b| (b'0' + b % 10) as char,
+    )
+    .unwrap_or_else(|| pad_or_truncate("", target, hash))
 }
 
-/// Length-preserving hex-digit replacement (for IPv6).
-/// Preserves non-hex characters (colons, `::`, etc.); replaces each
-/// ASCII hex digit with a deterministic hex digit from `hash`.
+/// Length-preserving hex-digit replacement (for IPv6, UUID, MAC, container ID).
+/// Preserves non-hex characters (colons, dashes, etc.); replaces each
+/// ASCII hex digit with a deterministic hex digit from `hash`, preserving case.
 fn format_hex_digits_lp(hash: &[u8; 32], original: &str, target: usize) -> String {
-    let mut buf = String::with_capacity(target);
-    let mut hi = 0usize;
-    let mut had_hex = false;
-    for ch in original.chars() {
-        if ch.is_ascii_hexdigit() {
-            let nibble = hash[hi % 32] % 16;
-            let replacement = if ch.is_ascii_uppercase() {
-                b"0123456789ABCDEF"[nibble as usize]
+    format_char_class_lp(
+        hash,
+        original,
+        |c| c.is_ascii_hexdigit(),
+        |ch, b| {
+            let nibble = b % 16;
+            if ch.is_ascii_uppercase() {
+                b"0123456789ABCDEF"[nibble as usize] as char
             } else {
-                b"0123456789abcdef"[nibble as usize]
-            };
-            buf.push(replacement as char);
-            hi += 1;
-            had_hex = true;
-        } else {
-            buf.push(ch);
-        }
-    }
-    if !had_hex {
-        return pad_or_truncate("", target, hash);
-    }
-    buf
+                b"0123456789abcdef"[nibble as usize] as char
+            }
+        },
+    )
+    .unwrap_or_else(|| pad_or_truncate("", target, hash))
 }
 
 /// Length-preserving SSN replacement.

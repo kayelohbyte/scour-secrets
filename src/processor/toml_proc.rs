@@ -20,15 +20,10 @@
 //! to avoid replacing non-sensitive numeric values.
 
 use crate::error::{Result, SanitizeError};
-use crate::processor::{build_path, find_matching_rule, replace_value, FileTypeProfile, Processor};
+use crate::processor::limits::DEFAULT_INPUT_SIZE;
+use crate::processor::{walk_tree, FileTypeProfile, Processor, TreeNode};
 use crate::store::MappingStore;
 use toml::Value;
-
-/// Maximum recursion depth for walking TOML value trees.
-const MAX_TOML_DEPTH: usize = 128;
-
-/// Maximum allowed input size (bytes) for TOML processing.
-const MAX_TOML_INPUT_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
 
 /// Structured processor for TOML configuration files.
 pub struct TomlProcessor;
@@ -48,10 +43,10 @@ impl Processor for TomlProcessor {
         profile: &FileTypeProfile,
         store: &MappingStore,
     ) -> Result<Vec<u8>> {
-        if content.len() > MAX_TOML_INPUT_SIZE {
+        if content.len() > DEFAULT_INPUT_SIZE {
             return Err(SanitizeError::InputTooLarge {
                 size: content.len(),
-                limit: MAX_TOML_INPUT_SIZE,
+                limit: DEFAULT_INPUT_SIZE,
             });
         }
 
@@ -74,6 +69,60 @@ impl Processor for TomlProcessor {
     }
 }
 
+impl TreeNode for Value {
+    fn for_each_map_entry<F>(&mut self, mut f: F) -> Result<()>
+    where
+        F: FnMut(&str, &mut Self) -> Result<()>,
+    {
+        if let Self::Table(map) = self {
+            let keys: Vec<String> = map.keys().cloned().collect();
+            for key in keys {
+                if let Some(v) = map.get_mut(&key) {
+                    f(&key, v)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn for_each_seq_item<F>(&mut self, mut f: F) -> Result<()>
+    where
+        F: FnMut(&mut Self) -> Result<()>,
+    {
+        if let Self::Array(arr) = self {
+            for item in arr.iter_mut() {
+                f(item)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn as_str_mut(&mut self) -> Option<&mut String> {
+        if let Self::String(s) = self {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    fn is_scalar(&self) -> bool {
+        // Non-string scalars are converted to string replacements. This changes
+        // the TOML type for matched keys but keeps the file syntactically valid.
+        matches!(
+            self,
+            Self::Integer(_) | Self::Float(_) | Self::Boolean(_) | Self::Datetime(_)
+        )
+    }
+
+    fn scalar_to_string(&self) -> String {
+        self.to_string()
+    }
+
+    fn set_string(&mut self, s: String) {
+        *self = Self::String(s);
+    }
+}
+
 /// Recursively walk a TOML value tree, replacing matched field values.
 fn walk_toml(
     value: &mut Value,
@@ -82,50 +131,7 @@ fn walk_toml(
     store: &MappingStore,
     depth: usize,
 ) -> Result<()> {
-    if depth > MAX_TOML_DEPTH {
-        return Err(SanitizeError::RecursionDepthExceeded(format!(
-            "TOML recursion depth exceeds limit of {MAX_TOML_DEPTH}"
-        )));
-    }
-    match value {
-        Value::Table(map) => {
-            let keys: Vec<String> = map.keys().cloned().collect();
-            for key in keys {
-                let path = build_path(prefix, &key);
-                if let Some(v) = map.get_mut(&key) {
-                    match v {
-                        Value::String(s) => {
-                            if let Some(rule) = find_matching_rule(&path, profile) {
-                                *s = replace_value(s, rule, store)?;
-                            }
-                        }
-                        // Non-string scalars: convert to string replacement when matched.
-                        // This preserves TOML syntax validity while sanitizing the value.
-                        Value::Integer(_)
-                        | Value::Float(_)
-                        | Value::Boolean(_)
-                        | Value::Datetime(_) => {
-                            if let Some(rule) = find_matching_rule(&path, profile) {
-                                let repr = v.to_string();
-                                let replaced = replace_value(&repr, rule, store)?;
-                                *v = Value::String(replaced);
-                            }
-                        }
-                        Value::Table(_) | Value::Array(_) => {
-                            walk_toml(v, &path, profile, store, depth + 1)?;
-                        }
-                    }
-                }
-            }
-        }
-        Value::Array(arr) => {
-            for item in arr.iter_mut() {
-                walk_toml(item, prefix, profile, store, depth + 1)?;
-            }
-        }
-        _ => {}
-    }
-    Ok(())
+    walk_tree(value, prefix, profile, store, depth, "TOML")
 }
 
 #[cfg(test)]

@@ -32,11 +32,9 @@
 
 use crate::error::Result;
 use crate::processor::json_proc::JsonProcessor;
+use crate::processor::limits::DEFAULT_INPUT_SIZE;
 use crate::processor::{FileTypeProfile, Processor};
 use crate::store::MappingStore;
-
-/// Maximum allowed input size (bytes) for log-line processing.
-const MAX_LOG_INPUT_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
 
 /// Structured processor for NDJSON / structured-log files.
 pub struct LogLineProcessor {
@@ -72,11 +70,11 @@ impl Processor for LogLineProcessor {
         profile: &FileTypeProfile,
         store: &MappingStore,
     ) -> Result<Vec<u8>> {
-        if content.len() > MAX_LOG_INPUT_SIZE {
+        if content.len() > DEFAULT_INPUT_SIZE {
             use crate::error::SanitizeError;
             return Err(SanitizeError::InputTooLarge {
                 size: content.len(),
-                limit: MAX_LOG_INPUT_SIZE,
+                limit: DEFAULT_INPUT_SIZE,
             });
         }
 

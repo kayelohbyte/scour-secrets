@@ -28,11 +28,9 @@
 //! - Both `key = value` and `key: value` assignment operators are handled.
 
 use crate::error::{Result, SanitizeError};
+use crate::processor::limits::DEFAULT_INPUT_SIZE;
 use crate::processor::{find_matching_rule, replace_value, FileTypeProfile, Processor};
 use crate::store::MappingStore;
-
-/// Maximum allowed input size (bytes) for INI processing.
-const MAX_INI_INPUT_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
 
 /// Structured processor for INI / CFG files.
 pub struct IniProcessor;
@@ -52,10 +50,10 @@ impl Processor for IniProcessor {
         profile: &FileTypeProfile,
         store: &MappingStore,
     ) -> Result<Vec<u8>> {
-        if content.len() > MAX_INI_INPUT_SIZE {
+        if content.len() > DEFAULT_INPUT_SIZE {
             return Err(SanitizeError::InputTooLarge {
                 size: content.len(),
-                limit: MAX_INI_INPUT_SIZE,
+                limit: DEFAULT_INPUT_SIZE,
             });
         }
 

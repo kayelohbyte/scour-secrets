@@ -111,9 +111,13 @@ const MIN_ENCRYPTED_LEN: usize = SALT_LEN + NONCE_LEN + 16;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecretEntry {
     /// The pattern string (regex or literal text).
+    ///
+    /// For `kind: allow` entries this is the single allowlist pattern.
+    /// Omit when using [`values`](Self::values) instead.
+    #[serde(default)]
     pub pattern: String,
 
-    /// `"regex"` or `"literal"`.
+    /// `"regex"`, `"literal"`, or `"allow"`.
     #[serde(default = "default_kind")]
     pub kind: String,
 
@@ -129,6 +133,19 @@ pub struct SecretEntry {
     /// version of `pattern` if omitted.
     #[serde(default)]
     pub label: Option<String>,
+
+    /// Multiple allowlist patterns for `kind: allow` entries.
+    ///
+    /// When non-empty, used instead of `pattern`. Allows a single entry to
+    /// allowlist many values compactly:
+    ///
+    /// ```toml
+    /// [[secrets]]
+    /// kind = "allow"
+    /// values = ["localhost", "true", "false", "null", "0.0.0.0"]
+    /// ```
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
 }
 
 impl Drop for SecretEntry {
@@ -138,6 +155,9 @@ impl Drop for SecretEntry {
         self.category.zeroize();
         if let Some(ref mut l) = self.label {
             l.zeroize();
+        }
+        for v in &mut self.values {
+            v.zeroize();
         }
     }
 }
@@ -467,12 +487,31 @@ fn zeroize_and_drop_entries(entries: Vec<SecretEntry>) {
 /// Entries with `kind: allow` are returned as raw pattern strings to be
 /// compiled into an [`AllowlistMatcher`]. They are skipped by
 /// [`entries_to_patterns`].
+///
+/// Each entry contributes either its `values` list (when non-empty) or its
+/// `pattern` field (when `values` is absent), so both forms are supported:
+///
+/// ```toml
+/// # single pattern
+/// [[secrets]]
+/// kind = "allow"
+/// pattern = "localhost"
+///
+/// # compact multi-value form
+/// [[secrets]]
+/// kind = "allow"
+/// values = ["true", "false", "null", "0.0.0.0"]
+/// ```
 pub fn extract_allow_patterns(entries: &[SecretEntry]) -> Vec<String> {
-    entries
-        .iter()
-        .filter(|e| e.kind == "allow")
-        .map(|e| e.pattern.clone())
-        .collect()
+    let mut patterns = Vec::new();
+    for entry in entries.iter().filter(|e| e.kind == "allow") {
+        if !entry.values.is_empty() {
+            patterns.extend(entry.values.iter().cloned());
+        } else if !entry.pattern.is_empty() {
+            patterns.push(entry.pattern.clone());
+        }
+    }
+    patterns
 }
 
 /// Convert parsed [`SecretEntry`]s into compiled [`ScanPattern`]s.
@@ -487,7 +526,7 @@ pub fn entries_to_patterns(entries: &[SecretEntry]) -> PatternCompileResult {
     let mut errors = Vec::new();
 
     for (i, entry) in entries.iter().enumerate() {
-        if entry.kind == "allow" {
+        if entry.kind == "allow" || entry.pattern.is_empty() {
             continue;
         }
         let category = parse_category(&entry.category);
@@ -1085,5 +1124,77 @@ label = "openai_key"
             "char count {} exceeds limit: {truncated}",
             truncated.chars().count()
         );
+    }
+
+    // ---- Multi-value allow entries ----
+
+    #[test]
+    fn allow_single_pattern_field() {
+        let json = r#"[{"kind":"allow","pattern":"localhost"}]"#;
+        let entries = parse_secrets(json.as_bytes(), Some(SecretsFormat::Json)).unwrap();
+        let patterns = extract_allow_patterns(&entries);
+        assert_eq!(patterns, vec!["localhost"]);
+    }
+
+    #[test]
+    fn allow_values_list_used_instead_of_pattern() {
+        let json = r#"[{"kind":"allow","values":["localhost","true","false","null"]}]"#;
+        let entries = parse_secrets(json.as_bytes(), Some(SecretsFormat::Json)).unwrap();
+        let patterns = extract_allow_patterns(&entries);
+        assert_eq!(patterns, vec!["localhost", "true", "false", "null"]);
+    }
+
+    #[test]
+    fn allow_values_list_yaml() {
+        let yaml =
+            "- kind: allow\n  values:\n    - localhost\n    - \"127.0.0.1\"\n    - \"0.0.0.0\"\n";
+        let entries = parse_secrets(yaml.as_bytes(), Some(SecretsFormat::Yaml)).unwrap();
+        let patterns = extract_allow_patterns(&entries);
+        assert_eq!(patterns, vec!["localhost", "127.0.0.1", "0.0.0.0"]);
+    }
+
+    #[test]
+    fn allow_values_list_toml() {
+        let toml = "[[secrets]]\nkind = \"allow\"\nvalues = [\"localhost\", \"true\", \"false\"]\n";
+        let entries = parse_secrets(toml.as_bytes(), Some(SecretsFormat::Toml)).unwrap();
+        let patterns = extract_allow_patterns(&entries);
+        assert_eq!(patterns, vec!["localhost", "true", "false"]);
+    }
+
+    #[test]
+    fn allow_mixed_single_and_multi_value_entries() {
+        let json = r#"[
+            {"kind":"allow","pattern":"localhost"},
+            {"kind":"allow","values":["true","false","null"]},
+            {"kind":"allow","pattern":"*.internal"}
+        ]"#;
+        let entries = parse_secrets(json.as_bytes(), Some(SecretsFormat::Json)).unwrap();
+        let patterns = extract_allow_patterns(&entries);
+        assert_eq!(
+            patterns,
+            vec!["localhost", "true", "false", "null", "*.internal"]
+        );
+    }
+
+    #[test]
+    fn allow_entries_skipped_by_entries_to_patterns() {
+        let json = r#"[
+            {"pattern":"secret","kind":"literal"},
+            {"kind":"allow","values":["localhost","true"]}
+        ]"#;
+        let entries = parse_secrets(json.as_bytes(), Some(SecretsFormat::Json)).unwrap();
+        let (patterns, errors) = entries_to_patterns(&entries);
+        assert_eq!(patterns.len(), 1);
+        assert!(errors.is_empty());
+        assert_eq!(patterns[0].label(), "secret");
+    }
+
+    #[test]
+    fn allow_empty_values_falls_back_to_pattern() {
+        // An entry with an empty `values` list should still use `pattern`.
+        let json = r#"[{"kind":"allow","pattern":"localhost","values":[]}]"#;
+        let entries = parse_secrets(json.as_bytes(), Some(SecretsFormat::Json)).unwrap();
+        let patterns = extract_allow_patterns(&entries);
+        assert_eq!(patterns, vec!["localhost"]);
     }
 }

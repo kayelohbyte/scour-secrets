@@ -76,7 +76,7 @@ use sanitize_engine::{
     AtomicFileWriter, Category, FieldRule, FileReport, FileTypeProfile, HmacGenerator, LlmEntry,
     LogContextConfig, MappingStore, ProcessorRegistry, RandomGenerator, ReplacementGenerator,
     ReportBuilder, ReportMetadata, ScanConfig, ScanPattern, ScanStats, StreamScanner,
-    DEFAULT_CONTEXT_LINES, DEFAULT_MAX_ARCHIVE_DEPTH, DEFAULT_MAX_MATCHES,
+    DEFAULT_ARCHIVE_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_MAX_MATCHES,
 };
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -339,7 +339,7 @@ struct Cli {
     /// sanitized recursively up to this depth. Exceeding the limit is an
     /// error. Maximum allowed value is 10 (each level may buffer up to
     /// 256 MiB).
-    #[arg(long, value_name = "N", default_value_t = DEFAULT_MAX_ARCHIVE_DEPTH)]
+    #[arg(long, value_name = "N", default_value_t = DEFAULT_ARCHIVE_DEPTH)]
     max_archive_depth: u32,
 
     /// Log output format: "human" (default) or "json" (for SIEM ingestion).
@@ -934,6 +934,7 @@ fn make_regex_entry(pattern: &str, category: &str, label: &str) -> SecretEntry {
         kind: "regex".to_string(),
         category: category.to_string(),
         label: Some(label.to_string()),
+        values: vec![],
     }
 }
 
@@ -1245,6 +1246,16 @@ fn build_guided_entries(opts: &GuidedOptions) -> Vec<SecretEntry> {
     if opts.exclude_noise_ids {
         entries.retain(|entry| entry.label.as_deref() != Some("high_entropy_token"));
     }
+
+    // Common allow entries — included in every preset so the guided wizard
+    // writes them to the output secrets file and users start with a sane baseline.
+    entries.push(SecretEntry {
+        pattern: String::new(),
+        kind: "allow".into(),
+        category: String::new(),
+        label: Some("common_safe_values".into()),
+        values: common_allow_patterns(),
+    });
 
     entries
 }
@@ -2340,7 +2351,7 @@ fn run_guided() -> Result<(), (String, i32)> {
         chunk_size: 1_048_576,
         max_mappings: 10_000_000,
         max_structured_size: DEFAULT_MAX_STRUCTURED_FILE_SIZE,
-        max_archive_depth: DEFAULT_MAX_ARCHIVE_DEPTH,
+        max_archive_depth: DEFAULT_ARCHIVE_DEPTH,
         log_format: "human".to_string(),
         progress: None,
         no_progress: false,
@@ -2552,6 +2563,43 @@ fn build_store(
         Some(al) => MappingStore::new_with_allowlist(generator, capacity, al),
         None => MappingStore::new(generator, capacity),
     }))
+}
+
+/// Common values that are safe to allow through for any built-in preset.
+///
+/// These values match the balanced detection patterns (IPs, UUIDs, URLs) but
+/// carry no sensitive information — they appear in virtually every config file,
+/// log, and deployment artefact.
+fn common_allow_patterns() -> Vec<String> {
+    vec![
+        // Loopback and unroutable IPv4 addresses.
+        "127.0.0.1".into(),
+        "0.0.0.0".into(),
+        "255.255.255.255".into(),
+        "255.255.255.0".into(),
+        "255.255.0.0".into(),
+        "255.0.0.0".into(),
+        // IPv6 loopback.
+        "::1".into(),
+        // Standard loopback hostnames.
+        "localhost".into(),
+        "localhost.localdomain".into(),
+        // Loopback URLs — common in dev configs and health-check endpoints.
+        "http://localhost*".into(),
+        "https://localhost*".into(),
+        "http://127.0.0.1*".into(),
+        "https://127.0.0.1*".into(),
+        // RFC 2606 example domains (IANA-reserved for documentation and testing).
+        "example.com".into(),
+        "example.org".into(),
+        "example.net".into(),
+        "http://example.com*".into(),
+        "https://example.com*".into(),
+        "https://example.org*".into(),
+        "https://example.net*".into(),
+        // Null UUID — commonly used as a placeholder or uninitialized resource ID.
+        "00000000-0000-0000-0000-000000000000".into(),
+    ]
 }
 
 /// Compile the built-in balanced detection patterns used by `--default`.
@@ -4412,6 +4460,7 @@ fn save_discovered_secrets(
             kind: "literal".into(),
             category: category.to_string(),
             label: Some("discovered".into()),
+            values: vec![],
         })
         .collect();
 
@@ -5234,7 +5283,17 @@ fn run_sanitize(
         all_allow_patterns.extend(allow_from_secrets);
     }
 
-    // Build allowlist from secrets file + --allow CLI values, then store.
+    // 2. From --default or implicitly when --app is used without --secrets-file.
+    //    --app is designed to be zero-setup: users don't need to also add
+    //    --default to get email, IP, JWT, and common token patterns.
+    //    Common allow patterns are added here — before the allowlist is built —
+    //    so the store is aware of them from the first matched value.
+    let load_defaults = cli.default || (!cli.app.is_empty() && cli.secrets_file.is_none());
+    if load_defaults {
+        all_allow_patterns.extend(common_allow_patterns());
+    }
+
+    // Build allowlist from all sources (secrets file, --allow CLI, built-in defaults).
     let allowlist: Option<Arc<sanitize_engine::allowlist::AllowlistMatcher>> =
         if all_allow_patterns.is_empty() {
             None
@@ -5256,10 +5315,6 @@ fn run_sanitize(
     )
     .map_err(|e| (e, 1))?;
 
-    // 2. From --default or implicitly when --app is used without --secrets-file.
-    //    --app is designed to be zero-setup: users don't need to also add
-    //    --default to get email, IP, JWT, and common token patterns.
-    let load_defaults = cli.default || (!cli.app.is_empty() && cli.secrets_file.is_none());
     if load_defaults {
         let default_patterns = build_default_patterns();
         if cli.default {

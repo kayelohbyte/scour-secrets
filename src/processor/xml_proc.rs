@@ -12,18 +12,12 @@
 //! text content of elements and attribute values against field rules.
 
 use crate::error::{Result, SanitizeError};
+use crate::processor::limits::{DEFAULT_INPUT_SIZE, XML_DEPTH};
 use crate::processor::{find_matching_rule, replace_value, FileTypeProfile, Processor};
 use crate::store::MappingStore;
 use quick_xml::events::{BytesStart, BytesText, Event};
 use quick_xml::{Reader, Writer};
 use std::io::Cursor;
-
-/// Maximum element nesting depth for XML processing.
-/// Prevents stack/memory exhaustion from deeply nested documents (R-5 fix).
-const MAX_XML_DEPTH: usize = 256;
-
-/// Maximum allowed input size (bytes) for XML processing (F-04 fix).
-const MAX_XML_INPUT_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
 
 /// Structured processor for XML files.
 pub struct XmlProcessor;
@@ -53,10 +47,10 @@ impl Processor for XmlProcessor {
         store: &MappingStore,
     ) -> Result<Vec<u8>> {
         // F-04 fix: enforce input size limit.
-        if content.len() > MAX_XML_INPUT_SIZE {
+        if content.len() > DEFAULT_INPUT_SIZE {
             return Err(SanitizeError::InputTooLarge {
                 size: content.len(),
-                limit: MAX_XML_INPUT_SIZE,
+                limit: DEFAULT_INPUT_SIZE,
             });
         }
 
@@ -75,9 +69,9 @@ impl Processor for XmlProcessor {
                     let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
                     element_stack.push(name.clone());
 
-                    if element_stack.len() > MAX_XML_DEPTH {
+                    if element_stack.len() > XML_DEPTH {
                         return Err(SanitizeError::RecursionDepthExceeded(format!(
-                            "XML element depth exceeds limit of {MAX_XML_DEPTH}"
+                            "XML element depth exceeds limit of {XML_DEPTH}"
                         )));
                     }
 

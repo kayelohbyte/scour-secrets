@@ -17,13 +17,11 @@
 //! | `has_header` | `"true"`| Whether the first row is a header row. |
 
 use crate::error::{Result, SanitizeError};
+use crate::processor::limits::DEFAULT_INPUT_SIZE;
 use crate::processor::{
     find_matching_rule, pattern_matches, replace_value, FileTypeProfile, Processor,
 };
 use crate::store::MappingStore;
-
-/// Maximum allowed input size (bytes) for CSV processing (F-04 fix).
-const MAX_CSV_INPUT_SIZE: usize = 256 * 1024 * 1024; // 256 MiB
 
 /// Structured processor for CSV/TSV files.
 pub struct CsvProcessor;
@@ -44,10 +42,10 @@ impl Processor for CsvProcessor {
         store: &MappingStore,
     ) -> Result<Vec<u8>> {
         // F-04 fix: enforce input size limit.
-        if content.len() > MAX_CSV_INPUT_SIZE {
+        if content.len() > DEFAULT_INPUT_SIZE {
             return Err(SanitizeError::InputTooLarge {
                 size: content.len(),
-                limit: MAX_CSV_INPUT_SIZE,
+                limit: DEFAULT_INPUT_SIZE,
             });
         }
 

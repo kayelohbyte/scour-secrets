@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-05-08
+
+This release marks the **stability boundary**. The public library API and CLI
+interface are now covered by Semantic Versioning: breaking changes require a
+major version bump. See the [Stability section in README.md](README.md#stability)
+for the full stability contract and MSRV policy.
+
+### Added
+
+- **`SecretEntry.values`** — new optional field in secrets files for compact
+  multi-value `kind: allow` entries. A single entry with `values: [...]`
+  replaces N separate single-pattern entries. Fully backward-compatible via
+  `#[serde(default)]`; existing files require no changes.
+
+- **Common allow patterns in built-in presets** — the `balanced`, `aggressive`,
+  and guided-entry code paths now automatically allow common non-sensitive
+  values: loopback IPs (`127.0.0.1`, `::1`), subnet masks, `localhost`,
+  `example.{com,org,net}`, nil UUID, and localhost URLs. Reduces false
+  positives out of the box.
+
+- **`processor/limits.rs`** — single source of truth for all processor safety
+  limits. Constants (`DEFAULT_ARCHIVE_DEPTH`, `YAML_INPUT_SIZE`, etc.) are now
+  imported from one module instead of redefined per-processor.
+
+- **`TreeNode` trait + `walk_tree` generic function** — shared tree-walker used
+  by the JSON, YAML, and TOML processors. Eliminates ~150 lines of duplicated
+  recursive walk code.
+
+### Changed
+
+- **`AllowlistMatcher` internals** — exact patterns are now stored in a
+  `HashSet` for O(1) lookup; only glob patterns walk a `Vec`. No API change.
+
+- **`DEFAULT_MAX_ARCHIVE_DEPTH` renamed to `DEFAULT_ARCHIVE_DEPTH`** —
+  re-exported from `processor::limits`. The old name is removed; update any
+  direct imports.
+
+- **`format_char_class_lp` extraction in `generator.rs`** — `format_digits_lp`
+  and `format_hex_digits_lp` are now thin wrappers around a shared helper.
+  Outputs are identical to previous versions.
+
+- **`scan_reader_with_progress` split into helpers** — the main scan loop now
+  delegates per-window work to `process_committed_window` and pattern count
+  folding to `fold_chunk_counts`. Behavior is unchanged.
+
+### Fixed
+
+- **`zeroize` on drop for `SecretEntry.values`** — the new `values` field is
+  included in the `Drop` impl that zeros sensitive memory.
+
 ## [0.5.0] — 2026-05-05
 
 ### Added
@@ -233,7 +283,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **290+ tests** including unit, integration, property-based (proptest), and
   4 fuzz targets.
 
-[Unreleased]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/kayelohbyte/rust-sanitize/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.5.0...v1.0.0
+[0.5.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kayelohbyte/rust-sanitize/releases/tag/v0.4.0
 [0.3.0]: https://github.com/kayelohbyte/rust-sanitize/releases/tag/v0.3.0
 [0.2.0]: https://github.com/kayelohbyte/rust-sanitize/releases/tag/v0.2.0

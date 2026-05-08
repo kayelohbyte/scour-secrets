@@ -28,10 +28,11 @@
 //!
 //! ## Stability
 //!
-//! This crate is pre-1.0. The core guarantees — one-way replacement,
-//! deterministic mode, and length preservation — are stable. Processor
-//! heuristics, default limits, and report schema may evolve across minor
-//! versions.
+//! As of 1.0.0 the public API is stable and follows Semantic Versioning.
+//! Breaking changes require a major version bump. The core guarantees —
+//! one-way replacement, deterministic mode, and length preservation — are
+//! stable across all 1.x releases. Processor heuristics, default limit
+//! values, and report schema may change in minor releases (additive only).
 //!
 //! ## Example: Store-Level Replacement
 //!
@@ -157,8 +158,8 @@ pub use log_context::{
 };
 pub use processor::archive::{
     ArchiveFilter, ArchiveFormat, ArchiveProcessor, ArchiveProgress, ArchiveStats,
-    DEFAULT_MAX_ARCHIVE_DEPTH,
 };
+pub use processor::limits::DEFAULT_ARCHIVE_DEPTH;
 pub use processor::{FieldRule, FileTypeProfile, Processor, ProcessorRegistry};
 pub use report::{FileReport, ReportBuilder, ReportMetadata, SanitizeReport};
 pub use scanner::{ScanConfig, ScanPattern, ScanProgress, ScanStats, StreamScanner};

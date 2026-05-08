@@ -667,57 +667,28 @@ impl StreamScanner {
 
             // Build the scan window: carry ++ new_data.
             // Reuse the window buffer to avoid per-chunk allocation.
-            let new_data = &read_buf[..bytes_read];
             window.clear();
             window.extend_from_slice(&carry);
-            window.extend_from_slice(new_data);
+            window.extend_from_slice(&read_buf[..bytes_read]);
 
             if window.is_empty() {
                 break;
             }
 
-            // Find all non-overlapping matches in the window (fills scratch.selected).
-            self.find_matches(&window, &mut scratch);
-
-            // Determine the commit point — how much of the window we can
-            // safely emit this iteration.
-            let base_commit = if is_eof {
-                window.len()
-            } else {
-                window.len().saturating_sub(self.config.overlap_size)
-            };
-
-            let commit_point =
-                self.adjusted_commit_point(&scratch.selected, base_commit, window.len(), is_eof);
-
-            // Build output into scratch.output and update stats counters.
-            // Matches beyond commit_point are filtered inside apply_replacements.
-            self.apply_replacements(
-                &window[..commit_point],
-                &scratch.selected,
+            // Scan the window: find matches, determine commit point, apply
+            // replacements, and flush the committed region to the writer.
+            // Returns the commit_point so we can slice the carry for next iter.
+            let commit_point = self.process_committed_window(
+                &window,
+                is_eof,
+                &mut scratch,
+                &mut writer,
                 &mut stats,
-                &mut scratch.output,
-                &mut scratch.pattern_counts,
             )?;
 
-            writer
-                .write_all(&scratch.output)
-                .map_err(|e| SanitizeError::IoError(e.to_string()))?;
-            stats.bytes_output += scratch.output.len() as u64;
-
-            // Fold per-chunk pattern counts into stats.
-            // label.clone() is called at most once per distinct pattern per
-            // chunk (not once per match hit), which is far cheaper at scale.
-            for (idx, count) in scratch.pattern_counts.iter_mut().enumerate() {
-                if *count > 0 {
-                    *stats
-                        .pattern_counts
-                        .entry(self.patterns[idx].label.clone())
-                        .or_insert(0) += *count;
-                    *count = 0; // reset for next chunk
-                }
-            }
-
+            // Fold per-chunk pattern hit counts into the cumulative stats map,
+            // then emit a progress snapshot to the caller.
+            self.fold_chunk_counts(&mut scratch.pattern_counts, &mut stats);
             on_progress(&ScanProgress {
                 bytes_processed: stats.bytes_processed,
                 bytes_output: stats.bytes_output,
@@ -726,8 +697,7 @@ impl StreamScanner {
                 replacements_applied: stats.replacements_applied,
             });
 
-            // Update carry for next iteration. Reuse the carry buffer
-            // by copying remaining bytes down.
+            // Update carry for next iteration.
             if is_eof {
                 carry.clear();
                 break;
@@ -737,6 +707,63 @@ impl StreamScanner {
         }
 
         Ok(stats)
+    }
+
+    /// Scan one window, apply replacements up to the commit point, and flush
+    /// the result to `writer`. Returns the commit point so the caller can
+    /// slice the carry for the next iteration.
+    fn process_committed_window(
+        &self,
+        window: &[u8],
+        is_eof: bool,
+        scratch: &mut ScanScratch,
+        writer: &mut dyn io::Write,
+        stats: &mut ScanStats,
+    ) -> Result<usize> {
+        // Find all non-overlapping matches in the window.
+        self.find_matches(window, scratch);
+
+        // Determine how much of the window can be safely committed this iteration.
+        let base_commit = if is_eof {
+            window.len()
+        } else {
+            window.len().saturating_sub(self.config.overlap_size)
+        };
+        let commit_point =
+            self.adjusted_commit_point(&scratch.selected, base_commit, window.len(), is_eof);
+
+        // Build output for the committed region (fills scratch.output).
+        self.apply_replacements(
+            &window[..commit_point],
+            &scratch.selected,
+            stats,
+            &mut scratch.output,
+            &mut scratch.pattern_counts,
+        )?;
+
+        writer
+            .write_all(&scratch.output)
+            .map_err(|e| SanitizeError::IoError(e.to_string()))?;
+        stats.bytes_output += scratch.output.len() as u64;
+
+        Ok(commit_point)
+    }
+
+    /// Fold per-chunk pattern hit counts into the cumulative `stats.pattern_counts`
+    /// map, then reset `counts` to zero for the next chunk.
+    ///
+    /// `label.clone()` is called at most once per distinct pattern per chunk,
+    /// not once per match hit, which keeps cost proportional to pattern count.
+    fn fold_chunk_counts(&self, counts: &mut [u64], stats: &mut ScanStats) {
+        for (idx, count) in counts.iter_mut().enumerate() {
+            if *count > 0 {
+                *stats
+                    .pattern_counts
+                    .entry(self.patterns[idx].label.clone())
+                    .or_insert(0) += *count;
+                *count = 0;
+            }
+        }
     }
 
     /// Convenience: scan byte slice in-memory and return sanitized output.

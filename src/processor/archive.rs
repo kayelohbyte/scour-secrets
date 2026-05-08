@@ -86,38 +86,10 @@ use std::collections::HashMap;
 use std::io::{self, Read, Seek, Write};
 use std::sync::Arc;
 
-/// Maximum size (in bytes) for a single archive entry to be loaded into
-/// memory for structured processing. Entries larger than this are
-/// streamed through the scanner instead (M-3 fix).
-const MAX_STRUCTURED_ENTRY_SIZE: u64 = 256 * 1024 * 1024; // 256 MiB
-
-/// Maximum total uncompressed data size (bytes) across all zip entries
-/// before the parallel processing path is disabled.  Above this threshold
-/// the zip processor falls back to sequential (one entry at a time) to
-/// avoid loading the entire archive into memory simultaneously.
-const MAX_PARALLEL_ZIP_DATA_SIZE: u64 = 256 * 1024 * 1024; // 256 MiB
-
-/// Default maximum nesting depth for recursive archive processing.
-///
-/// Depth 0 is the top-level archive. Nested archives at depths 1
-/// through `DEFAULT_MAX_ARCHIVE_DEPTH` are recursively extracted and
-/// sanitized. Exceeding this limit returns
-/// [`SanitizeError::RecursionDepthExceeded`].
-///
-/// Each nesting level buffers the inner archive in memory (up to
-/// `MAX_STRUCTURED_ENTRY_SIZE` per level), so the hard maximum is
-/// capped at 10 to bound peak memory.
-pub const DEFAULT_MAX_ARCHIVE_DEPTH: u32 = 3;
-
-/// Absolute maximum allowed value for archive nesting depth.
-/// Guards against excessive memory usage (each level can buffer up to
-/// 256 MiB).
-const MAX_ALLOWED_ARCHIVE_DEPTH: u32 = 10;
-
-/// Minimum number of file entries in an archive before parallel entry
-/// processing is enabled. Below this threshold the overhead of spawning
-/// rayon tasks exceeds the savings.
-const PARALLEL_ENTRY_THRESHOLD: usize = 4;
+use crate::processor::limits::{
+    DEFAULT_ARCHIVE_DEPTH, MAX_ARCHIVE_DEPTH, PARALLEL_ENTRY_THRESHOLD, PARALLEL_ZIP_DATA_SIZE,
+    STRUCTURED_ENTRY_SIZE,
+};
 
 // ---------------------------------------------------------------------------
 // Archive format enum
@@ -424,7 +396,7 @@ impl ArchiveProcessor {
             scanner,
             store,
             profiles,
-            max_depth: DEFAULT_MAX_ARCHIVE_DEPTH,
+            max_depth: DEFAULT_ARCHIVE_DEPTH,
             progress_callback: None,
             parallel_threshold: PARALLEL_ENTRY_THRESHOLD,
             filter: ArchiveFilter::default(),
@@ -435,11 +407,11 @@ impl ArchiveProcessor {
     /// Override the maximum nesting depth for recursive archive
     /// processing.
     ///
-    /// The default is [`DEFAULT_MAX_ARCHIVE_DEPTH`] (3). Values above
+    /// The default is [`DEFAULT_ARCHIVE_DEPTH`] (3). Values above
     /// 10 are clamped.
     #[must_use]
     pub fn with_max_depth(mut self, depth: u32) -> Self {
-        self.max_depth = depth.min(MAX_ALLOWED_ARCHIVE_DEPTH);
+        self.max_depth = depth.min(MAX_ARCHIVE_DEPTH);
         self
     }
 
@@ -565,7 +537,7 @@ impl ArchiveProcessor {
         // Try structured processing first, but only if the entry is
         // within the size cap and --force-text is not set.
         // Oversized entries fall through to the streaming scanner (M-3 fix).
-        let within_size_cap = entry_size_hint.map_or(true, |sz| sz <= MAX_STRUCTURED_ENTRY_SIZE); // unknown size → allow (conservative)
+        let within_size_cap = entry_size_hint.map_or(true, |sz| sz <= STRUCTURED_ENTRY_SIZE); // unknown size → allow (conservative)
 
         if !self.force_text && within_size_cap {
             if let Some(profile) = self.find_profile(filename) {
@@ -661,12 +633,12 @@ impl ArchiveProcessor {
             )));
         }
 
-        // Buffer the nested archive (bounded by MAX_STRUCTURED_ENTRY_SIZE).
+        // Buffer the nested archive (bounded by STRUCTURED_ENTRY_SIZE).
         if let Some(sz) = entry_size_hint {
-            if sz > MAX_STRUCTURED_ENTRY_SIZE {
+            if sz > STRUCTURED_ENTRY_SIZE {
                 return Err(SanitizeError::ArchiveError(format!(
                     "nested archive '{}' is too large ({} bytes, limit {} bytes)",
-                    filename, sz, MAX_STRUCTURED_ENTRY_SIZE,
+                    filename, sz, STRUCTURED_ENTRY_SIZE,
                 )));
             }
         }
@@ -827,7 +799,7 @@ impl ArchiveProcessor {
     ///
     /// Processes entries one at a time in a single streaming pass so only
     /// one entry's bytes are in memory at a time (bounded by
-    /// `MAX_STRUCTURED_ENTRY_SIZE`). File-level parallelism (multiple
+    /// `STRUCTURED_ENTRY_SIZE`). File-level parallelism (multiple
     /// archive files processed concurrently by the outer loop) replaces
     /// intra-archive parallelism, which required buffering the whole archive.
     fn process_tar_at_depth<R: Read, W: Write>(
@@ -977,7 +949,7 @@ impl ArchiveProcessor {
     /// Uses a lightweight metadata pre-pass (local-header reads, no data
     /// decompression) to decide between parallel and sequential strategies:
     ///
-    /// - **Parallel** (total uncompressed ≤ `MAX_PARALLEL_ZIP_DATA_SIZE` AND
+    /// - **Parallel** (total uncompressed ≤ `PARALLEL_ZIP_DATA_SIZE` AND
     ///   file count ≥ threshold AND depth == 0): load all entry data into
     ///   memory, sanitize with rayon, write in order.
     /// - **Sequential** (everything else): read → sanitize → write one entry
@@ -1037,7 +1009,7 @@ impl ArchiveProcessor {
         // would over-subscribe the pool without proportional gains).
         let use_parallel = file_count >= self.parallel_threshold
             && rayon::current_thread_index().is_none()
-            && total_uncompressed_size <= MAX_PARALLEL_ZIP_DATA_SIZE;
+            && total_uncompressed_size <= PARALLEL_ZIP_DATA_SIZE;
 
         let mut stats = ArchiveStats::default();
 
@@ -1803,8 +1775,14 @@ mod tests {
     #[test]
     fn zip_entry_name_strips_dotdot() {
         assert_eq!(sanitize_zip_entry_name("../etc/passwd"), "etc/passwd");
-        assert_eq!(sanitize_zip_entry_name("a/../../etc/passwd"), "a/etc/passwd");
-        assert_eq!(sanitize_zip_entry_name("../../root/.ssh/id_rsa"), "root/.ssh/id_rsa");
+        assert_eq!(
+            sanitize_zip_entry_name("a/../../etc/passwd"),
+            "a/etc/passwd"
+        );
+        assert_eq!(
+            sanitize_zip_entry_name("../../root/.ssh/id_rsa"),
+            "root/.ssh/id_rsa"
+        );
     }
 
     #[test]
