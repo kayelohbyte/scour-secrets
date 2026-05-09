@@ -1,0 +1,4 @@
+# /etc/fstab — mount table
+# Sensitive values (CIFS credentials, server addresses) are matched by
+# secrets.yaml regex patterns. The fstab format (column-based with embedded
+# comma-separated options) does not map to a key-value or YAML processor.

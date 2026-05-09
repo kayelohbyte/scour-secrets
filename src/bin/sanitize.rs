@@ -2825,6 +2825,12 @@ const BUILTIN_APPS: &[BuiltinApp] = &[
         profile_yaml: Some(include_str!("../../apps/elasticsearch/profile.yaml")),
     },
     BuiltinApp {
+        name: "fstab",
+        description: "fstab — /etc/fstab CIFS/SMB credentials, NFS and iSCSI server addresses",
+        secrets_yaml: Some(include_str!("../../apps/fstab/secrets.yaml")),
+        profile_yaml: Some(include_str!("../../apps/fstab/profile.yaml")),
+    },
+    BuiltinApp {
         name: "github-actions",
         description: "GitHub Actions — workflow env vars, step inputs, container registry credentials",
         secrets_yaml: Some(include_str!("../../apps/github-actions/secrets.yaml")),

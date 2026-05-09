@@ -123,3 +123,110 @@
     - pattern: "registry.storage.*.secretkey"
       category: auth_token
       label: gitlab_helm_registry_secret_key
+
+# --- GitLab Rails production JSON log (production_json.log) ---
+# Sensitive fields per gitlab-scrubber structured/field_extractors.go:
+# keys containing "user"/"author", "ip", "email", project path fields.
+- processor: json
+  extensions: [".log"]
+  include:
+    - "production_json.log"
+    - "*/production_json.log"
+    - "log/production_json.log"
+  fields:
+    - pattern: "username"
+      category: name
+      label: rails_log_username
+    - pattern: "remote_ip"
+      category: ipv4
+      label: rails_log_remote_ip
+    - pattern: "meta.user"
+      category: name
+      label: rails_log_meta_user
+    - pattern: "meta.remote_ip"
+      category: ipv4
+      label: rails_log_meta_remote_ip
+    - pattern: "meta.caller_id"
+      category: name
+      label: rails_log_meta_caller_id
+    - pattern: "meta.project"
+      category: name
+      label: rails_log_meta_project
+
+# --- Sidekiq JSON log (sidekiq.log) ---
+# "args" is scrubbed entirely — job arguments can contain arbitrary secrets.
+- processor: json
+  extensions: [".log"]
+  include:
+    - "sidekiq.log"
+    - "*/sidekiq.log"
+    - "log/sidekiq.log"
+  fields:
+    - pattern: "args"
+      category: auth_token
+      label: sidekiq_log_args
+    - pattern: "meta.user"
+      category: name
+      label: sidekiq_log_meta_user
+    - pattern: "meta.project"
+      category: name
+      label: sidekiq_log_meta_project
+    - pattern: "meta.remote_ip"
+      category: ipv4
+      label: sidekiq_log_meta_remote_ip
+
+# --- GitLab Workhorse log (gitlab-workhorse.log / workhorse.log) ---
+- processor: json
+  extensions: [".log"]
+  include:
+    - "gitlab-workhorse.log"
+    - "workhorse.log"
+    - "*/gitlab-workhorse.log"
+    - "log/workhorse.log"
+  fields:
+    - pattern: "remote_addr"
+      category: ipv4
+      label: workhorse_log_remote_addr
+    - pattern: "host"
+      category: hostname
+      label: workhorse_log_host
+    - pattern: "uri"
+      category: url
+      label: workhorse_log_uri
+
+# --- Gitaly log (gitaly.log) ---
+# grpc.request.glProjectPath contains the group/project path.
+# grpc.request.repoPath is a content-addressed hash path — not user data, skip.
+- processor: json
+  extensions: [".log"]
+  include:
+    - "gitaly.log"
+    - "*/gitaly.log"
+    - "log/gitaly.log"
+  fields:
+    - pattern: "grpc.request.glProjectPath"
+      category: name
+      label: gitaly_log_project_path
+    - pattern: "peer.address"
+      category: ipv4
+      label: gitaly_log_peer_address
+
+# --- GitLab Shell log (gitlab-shell.log / gitlab_shell.log) ---
+# originalCommand leaks group/project.git from git-upload-pack / git-receive-pack calls.
+- processor: json
+  extensions: [".log"]
+  include:
+    - "gitlab-shell.log"
+    - "gitlab_shell.log"
+    - "*/gitlab-shell.log"
+    - "log/gitlab-shell.log"
+  fields:
+    - pattern: "username"
+      category: name
+      label: shell_log_username
+    - pattern: "remote_addr"
+      category: ipv4
+      label: shell_log_remote_addr
+    - pattern: "original_command"
+      category: name
+      label: shell_log_original_command
