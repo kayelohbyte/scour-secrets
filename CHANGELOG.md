@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **secrets.yaml for every built-in app** — all 21 apps now ship a secrets
+  file. Apps with TruffleHog detectors get regex patterns sourced from those
+  detectors (AWS AKIA key IDs, GitHub ghp_/gho_/ghs_ tokens, GitLab glpat-
+  v2/v3, CircleCI CCIPAT_, Grafana glc_eyJ/glsa_, Heroku HRKU-AA, MongoDB and
+  Redis connection URIs, Terraform Cloud .atlasv1. tokens, Splunk observability
+  tokens, Docker auth config). Every secrets file includes app-specific
+  `kind: allow` entries so the app name, official hostnames, and common local
+  dev URIs are never flagged as sensitive.
+
 - **13 new built-in app bundles** — ansible, aws-cli, circleci, elasticsearch,
   github-actions, grafana, heroku, laravel, mongodb, mysql, redis, splunk,
   terraform. Each profile targets only
