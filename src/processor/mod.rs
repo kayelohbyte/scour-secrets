@@ -158,7 +158,17 @@ pub trait Processor: Send + Sync {
 // ---------------------------------------------------------------------------
 
 /// Replace a value through the mapping store using a field rule's category.
+///
+/// Returns the original `value` unchanged when it is shorter than
+/// `rule.min_length` (if set). This prevents broad glob patterns like
+/// `*token*` from redacting obviously non-secret values such as `"false"`,
+/// `"0"`, or `"nil"`.
 pub(crate) fn replace_value(value: &str, rule: &FieldRule, store: &MappingStore) -> Result<String> {
+    if let Some(min) = rule.min_length {
+        if value.len() < min {
+            return Ok(value.to_string());
+        }
+    }
     let category = rule
         .category
         .clone()
@@ -181,76 +191,91 @@ pub(crate) fn build_path(prefix: &str, key: &str) -> String {
 
 /// Check whether a single glob `pattern` matches `key_path`.
 ///
+/// `*` is the only wildcard character. It matches any sequence of characters,
+/// including empty strings and path separators (`.`, `[`, `]`).
+///
 /// | Pattern | Matches |
 /// |---------|---------|
 /// | `"*"` | anything |
 /// | `"password"` | `"password"` exactly |
 /// | `"*.password"` | `"password"`, `"db.password"`, `"a.b.password"` |
-/// | `"db.*"` | `"db.host"`, `"db.port"` (one level) |
+/// | `"db.*"` | `"db.host"`, `"db.port"`, `"db.nested.key"` |
+/// | `"*password*"` | any key containing `"password"` as a substring |
 /// | `"*['smtp_password']"` | `"gitlab_rails['smtp_password']"` (bracket notation) |
-///
-/// # Examples
-///
-/// ```
-/// # use sanitize_engine::processor::profile::{FieldRule, FileTypeProfile};
-/// // Exact match.
-/// // (pattern_matches is pub(crate); use find_matching_rule from a profile instead)
-/// let profile = FileTypeProfile::new("key_value", vec![
-///     FieldRule::new("*.password"),
-///     FieldRule::new("*['smtp_password']"),
-/// ]);
-///
-/// // *.password matches any dot-separated path ending in password.
-/// assert!(profile.fields.iter().any(|r| {
-///     let p = &r.pattern;
-///     p == "*.password"
-/// }));
-///
-/// // Bracket-notation keys like gitlab_rails['smtp_password'] are matched
-/// // by the *['smtp_password'] pattern.
-/// let bracket_key = "gitlab_rails['smtp_password']";
-/// let suffix = "['smtp_password']";
-/// assert!(bracket_key.ends_with(suffix));
-/// ```
 #[must_use]
 pub(crate) fn pattern_matches(pattern: &str, key_path: &str) -> bool {
+    // Fast path: `*` matches everything.
     if pattern == "*" {
         return true;
     }
+    // Fast path: exact match.
     if pattern == key_path {
         return true;
     }
-    // Dot-path glob: *.suffix — requires a dot boundary before the suffix.
+    // Fast path: no wildcards — only the exact match above can succeed.
+    if !pattern.contains('*') {
+        return false;
+    }
+    // Dot-path glob: `*.suffix` — requires a dot boundary before the suffix
+    // so that `*.password` matches `db.password` but not `dbpassword`.
     if let Some(suffix) = pattern.strip_prefix("*.") {
-        if key_path == suffix
-            || key_path
-                .strip_suffix(suffix)
-                .is_some_and(|rest| rest.ends_with('.'))
-        {
-            return true;
+        if !suffix.contains('*') {
+            if key_path == suffix
+                || key_path
+                    .strip_suffix(suffix)
+                    .is_some_and(|rest| rest.ends_with('.'))
+            {
+                return true;
+            }
         }
     }
-    // Dot-path glob: prefix.*
+    // Dot-path glob: `prefix.*` — `db.*` matches `db.host`, `db.nested.key`.
     if let Some(prefix) = pattern.strip_suffix(".*") {
-        if key_path
-            .strip_prefix(prefix)
-            .is_some_and(|rest| rest.starts_with('.'))
+        if !prefix.contains('*')
+            && key_path
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.starts_with('.'))
         {
             return true;
         }
     }
-    // General wildcard prefix: *suffix (e.g. *['key'] for bracket notation).
-    // Only applies when suffix does not start with '.' (those are handled above).
-    if let Some(suffix) = pattern.strip_prefix('*') {
-        if !suffix.is_empty()
-            && !suffix.starts_with('.')
-            && !suffix.contains('*')
-            && key_path.ends_with(suffix)
-        {
-            return true;
+    // General multi-wildcard glob: split on `*` and verify segments appear in
+    // order. This handles patterns like `*password*`, `*['key']`, `a*b*c`.
+    glob_matches(pattern, key_path)
+}
+
+/// Match `key` against a `*`-glob `pattern` where `*` matches any sequence.
+///
+/// Identical algorithm to `AllowlistMatcher::glob_matches` — kept local to
+/// avoid a cross-module dependency on the allowlist crate internals.
+fn glob_matches(pattern: &str, key: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    let n = parts.len();
+    // First segment must be a prefix.
+    if !key.starts_with(parts[0]) {
+        return false;
+    }
+    // Last segment must be a suffix.
+    if !key.ends_with(parts[n - 1]) {
+        return false;
+    }
+    // Guard against overlap when prefix and suffix together are longer than key.
+    if n == 2 {
+        return key.len() >= parts[0].len() + parts[n - 1].len();
+    }
+    // For 3+ segments, verify inner segments appear in order between prefix and suffix.
+    let mut pos = parts[0].len();
+    let end = key.len().saturating_sub(parts[n - 1].len());
+    for part in &parts[1..n - 1] {
+        if part.is_empty() {
+            continue;
+        }
+        match key[pos..end].find(part) {
+            Some(found) => pos += found + part.len(),
+            None => return false,
         }
     }
-    false
+    true
 }
 
 /// Return the first rule in `profile` whose pattern matches `key_path`.

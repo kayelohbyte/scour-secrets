@@ -9,18 +9,23 @@
     - pattern: "*password*"
       category: custom:password
       label: tf_password
+      min_length: 8
     - pattern: "*secret*"
       category: auth_token
       label: tf_secret
+      min_length: 8
     - pattern: "*_token"
       category: auth_token
       label: tf_token
+      min_length: 8
     - pattern: "*_key"
       category: auth_token
       label: tf_key
+      min_length: 8
     - pattern: "*api_key*"
       category: auth_token
       label: tf_api_key
+      min_length: 8
     - pattern: "access_key"
       category: auth_token
       label: tf_access_key
@@ -38,6 +43,7 @@
     - pattern: "*.attributes.*_password"
       category: custom:password
       label: tf_state_password_attr
+      min_length: 8
     - pattern: "*.attributes.access_key"
       category: auth_token
       label: tf_state_access_key
@@ -47,12 +53,16 @@
     - pattern: "*.attributes.*_secret"
       category: auth_token
       label: tf_state_secret
+      min_length: 8
     - pattern: "*.attributes.*_token"
       category: auth_token
       label: tf_state_token
+      min_length: 8
     - pattern: "*.attributes.*_key"
       category: auth_token
       label: tf_state_key
+      min_length: 8
     - pattern: "*.sensitive_values.*"
       category: auth_token
       label: tf_state_sensitive
+      min_length: 8

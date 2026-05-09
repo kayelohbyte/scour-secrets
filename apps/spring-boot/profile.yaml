@@ -7,6 +7,7 @@
     - pattern: "*.datasource.password"
       category: custom:password
       label: spring_datasource_password
+      min_length: 8
     - pattern: "*.datasource.username"
       category: name
       label: spring_datasource_username
@@ -16,36 +17,45 @@
     - pattern: "*.datasource.hikari.password"
       category: custom:password
       label: spring_hikari_password
+      min_length: 8
     - pattern: "*.security.oauth2.client.registration.*.client-secret"
       category: auth_token
       label: spring_oauth_client_secret
+      min_length: 8
     - pattern: "*.security.oauth2.client.registration.*.client-id"
       category: auth_token
       label: spring_oauth_client_id
     - pattern: "*.mail.password"
       category: custom:password
       label: spring_mail_password
+      min_length: 8
     - pattern: "*.mail.username"
       category: name
       label: spring_mail_username
     - pattern: "*.redis.password"
       category: custom:password
       label: spring_redis_password
+      min_length: 8
     - pattern: "*.management.server.ssl.key-store-password"
       category: custom:password
       label: spring_ssl_keystore_password
+      min_length: 8
     - pattern: "*.jwt.secret"
       category: auth_token
       label: spring_jwt_secret
+      min_length: 8
     - pattern: "*.jwt.signing-key"
       category: auth_token
       label: spring_jwt_signing_key
+      min_length: 8
     - pattern: "*.api-key"
       category: auth_token
       label: spring_api_key
+      min_length: 8
     - pattern: "*.secret-key"
       category: auth_token
       label: spring_secret_key
+      min_length: 8
 
 - processor: key-value
   extensions: [".properties"]

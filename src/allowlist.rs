@@ -29,15 +29,29 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// (those containing `*`) are stored in a [`Vec`] and scanned linearly after
 /// the hash check misses. This means allowlists with many exact entries —
 /// the common case for common-word lists — pay no linear scan cost.
+///
+/// # Case sensitivity
+///
+/// By default the matcher is **case-insensitive**: patterns and query values
+/// are both lowercased before comparison. Use [`AllowlistMatcher::new_case_sensitive`]
+/// when exact-case matching is required (e.g. allowlisting a known token value
+/// that must not match a differently-cased substring).
 pub struct AllowlistMatcher {
     exact: HashSet<String>,
     globs: Vec<String>,
+    /// When `false` (the default), patterns and query values are lowercased
+    /// before comparison.
+    case_sensitive: bool,
     /// Number of values passed through as allowed across all `is_allowed` calls.
     seen: AtomicU64,
 }
 
 impl AllowlistMatcher {
-    /// Build an [`AllowlistMatcher`] from a list of pattern strings.
+    /// Build a case-insensitive [`AllowlistMatcher`] from a list of pattern strings.
+    ///
+    /// This is the default constructor. Patterns and query values are both
+    /// lowercased before comparison, so `"Localhost"` matches a pattern of
+    /// `"localhost"` and vice-versa.
     ///
     /// Each string is treated as a glob if it contains `*`, otherwise as an
     /// exact match. Patterns that look like regexes (contain `^`, `$`, `+`,
@@ -45,6 +59,19 @@ impl AllowlistMatcher {
     /// the matcher so the caller can surface it to the user.
     #[must_use]
     pub fn new(patterns: Vec<String>) -> (Self, Vec<String>) {
+        Self::build(patterns, false)
+    }
+
+    /// Build a case-sensitive [`AllowlistMatcher`] from a list of pattern strings.
+    ///
+    /// Use this when exact-case matching is required (e.g. allowlisting a
+    /// known token value that must not match differently-cased substrings).
+    #[must_use]
+    pub fn new_case_sensitive(patterns: Vec<String>) -> (Self, Vec<String>) {
+        Self::build(patterns, true)
+    }
+
+    fn build(patterns: Vec<String>, case_sensitive: bool) -> (Self, Vec<String>) {
         let mut exact = HashSet::new();
         let mut globs = Vec::new();
         let mut warnings = Vec::new();
@@ -60,10 +87,17 @@ impl AllowlistMatcher {
                     break;
                 }
             }
-            if pat.contains('*') {
-                globs.push(pat);
+            // Normalize to lowercase for case-insensitive matchers so that
+            // both the stored pattern and the query value are in the same case.
+            let stored = if case_sensitive {
+                pat
             } else {
-                exact.insert(pat);
+                pat.to_lowercase()
+            };
+            if stored.contains('*') {
+                globs.push(stored);
+            } else {
+                exact.insert(stored);
             }
         }
 
@@ -71,6 +105,7 @@ impl AllowlistMatcher {
             Self {
                 exact,
                 globs,
+                case_sensitive,
                 seen: AtomicU64::new(0),
             },
             warnings,
@@ -89,7 +124,19 @@ impl AllowlistMatcher {
     /// Exact entries are checked first via hash lookup. Glob entries are
     /// scanned linearly only on a hash miss. Increments the seen counter
     /// when a match is found.
+    ///
+    /// When the matcher was built with [`new`](Self::new) (case-insensitive),
+    /// `value` is lowercased before comparison so the check is case-insensitive.
     pub fn match_pattern<'a>(&'a self, value: &str) -> Option<&'a str> {
+        if self.case_sensitive {
+            self.match_pattern_inner(value)
+        } else {
+            let lower = value.to_lowercase();
+            self.match_pattern_inner(&lower)
+        }
+    }
+
+    fn match_pattern_inner<'a>(&'a self, value: &str) -> Option<&'a str> {
         if let Some(s) = self.exact.get(value) {
             self.seen.fetch_add(1, Ordering::Relaxed);
             return Some(s.as_str());
@@ -166,13 +213,29 @@ mod tests {
         m
     }
 
+    fn matcher_cs(pats: &[&str]) -> AllowlistMatcher {
+        let (m, _) =
+            AllowlistMatcher::new_case_sensitive(pats.iter().map(|s| (*s).to_string()).collect());
+        m
+    }
+
     #[test]
     fn exact_match() {
+        // Default: case-insensitive
         let m = matcher(&["localhost", "127.0.0.1"]);
         assert!(m.is_allowed("localhost"));
         assert!(m.is_allowed("127.0.0.1"));
-        assert!(!m.is_allowed("Localhost"));
-        assert!(!m.is_allowed("localhost2"));
+        assert!(m.is_allowed("Localhost"));   // now matches — case-insensitive
+        assert!(m.is_allowed("LOCALHOST"));   // now matches
+        assert!(!m.is_allowed("localhost2")); // suffix still fails
+    }
+
+    #[test]
+    fn exact_match_case_sensitive() {
+        let m = matcher_cs(&["localhost", "127.0.0.1"]);
+        assert!(m.is_allowed("localhost"));
+        assert!(!m.is_allowed("Localhost")); // case-sensitive: no match
+        assert!(!m.is_allowed("LOCALHOST"));
     }
 
     #[test]

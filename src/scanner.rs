@@ -328,6 +328,11 @@ struct RawMatch {
     end: usize,
     /// Index into the `StreamScanner::patterns` vector.
     pattern_idx: usize,
+    /// Byte range of capture group 1 within the window, if the pattern has one.
+    /// When present, only this sub-range is replaced; the bytes between
+    /// `start..capture_start` and `capture_end..end` are emitted verbatim,
+    /// preserving surrounding context (delimiters, key names, prefixes).
+    capture: Option<(usize, usize)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -938,12 +943,14 @@ impl StreamScanner {
         // find_overlapping_iter reports every match position including
         // overlapping ones, so the sort+greedy step below correctly resolves
         // ambiguities between literals (e.g. "abc" vs "abcd" at same offset).
+        // Literals never have capture groups — capture is always None.
         if let Some(ac) = &self.aho_corasick {
             for mat in ac.find_overlapping_iter(window) {
                 scratch.all_matches.push(RawMatch {
                     start: mat.start(),
                     end: mat.end(),
                     pattern_idx: self.literal_indices[mat.pattern().as_usize()],
+                    capture: None,
                 });
             }
         }
@@ -951,13 +958,19 @@ impl StreamScanner {
         // Steps 2+3: RegexSet pre-filter then individual scan for non-literal
         // patterns.  regex_set only contains non-literal pattern strings, so
         // literals are never scanned twice.
+        // Use captures_iter so that patterns with a capture group 1 record
+        // the sub-range to replace, while patterns without one fall back to
+        // replacing the full match.
         for rs_idx in self.regex_set.matches(window) {
             let pattern_idx = self.regex_indices[rs_idx];
-            for m in self.patterns[pattern_idx].regex.find_iter(window) {
+            for cap in self.patterns[pattern_idx].regex.captures_iter(window) {
+                let full = cap.get(0).expect("group 0 always exists");
+                let capture = cap.get(1).map(|g| (g.start(), g.end()));
                 scratch.all_matches.push(RawMatch {
-                    start: m.start(),
-                    end: m.end(),
+                    start: full.start(),
+                    end: full.end(),
                     pattern_idx,
+                    capture,
                 });
             }
         }
@@ -1059,15 +1072,26 @@ impl StreamScanner {
             // Emit bytes before this match verbatim.
             output_buf.extend_from_slice(&committed[last_end..m.start]);
 
-            // Decode matched bytes.  from_utf8_lossy is zero-copy (Cow::Borrowed)
-            // for valid UTF-8, which covers all ASCII secrets.
-            let matched_text = String::from_utf8_lossy(&committed[m.start..m.end]);
-
-            // One-way deterministic replacement via the MappingStore.
             let pattern = &self.patterns[m.pattern_idx];
-            let replacement = self.store.get_or_insert(&pattern.category, &matched_text)?;
 
-            output_buf.extend_from_slice(replacement.as_bytes());
+            if let Some((cap_start, cap_end)) = m.capture {
+                // Pattern has a capture group: replace only the capture group,
+                // emitting the surrounding context bytes of the full match verbatim.
+                // This preserves delimiters, key names, and prefixes that the
+                // pattern uses as anchors to reduce false positives.
+                output_buf.extend_from_slice(&committed[m.start..cap_start]);
+                let secret = String::from_utf8_lossy(&committed[cap_start..cap_end]);
+                let replacement = self.store.get_or_insert(&pattern.category, &secret)?;
+                output_buf.extend_from_slice(replacement.as_bytes());
+                output_buf.extend_from_slice(&committed[cap_end..m.end]);
+            } else {
+                // No capture group — replace the full match (e.g. token-prefix
+                // patterns like `glpat-[...]` where the full match IS the secret).
+                let matched_text = String::from_utf8_lossy(&committed[m.start..m.end]);
+                let replacement = self.store.get_or_insert(&pattern.category, &matched_text)?;
+                output_buf.extend_from_slice(replacement.as_bytes());
+            }
+
             last_end = m.end;
 
             stats.matches_found += 1;

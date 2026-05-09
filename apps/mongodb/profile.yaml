@@ -12,6 +12,7 @@
     - pattern: "*.password"
       category: custom:password
       label: mongo_password
+      min_length: 8
 
 - processor: env
   extensions: [".env"]

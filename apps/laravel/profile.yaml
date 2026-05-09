@@ -40,12 +40,16 @@
     - pattern: "*PASSWORD"
       category: custom:password
       label: env_password
+      min_length: 8
     - pattern: "*SECRET"
       category: auth_token
       label: env_secret
+      min_length: 8
     - pattern: "*_KEY"
       category: auth_token
       label: env_key
+      min_length: 8
     - pattern: "*TOKEN"
       category: auth_token
       label: env_token
+      min_length: 8

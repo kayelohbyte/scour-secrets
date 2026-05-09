@@ -51,6 +51,17 @@ pub struct FieldRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
 
+    /// Minimum byte length a value must reach before it is replaced.
+    ///
+    /// Values shorter than this threshold pass through unchanged. Use this
+    /// to avoid redacting obviously non-secret values matched by broad glob
+    /// patterns (e.g. `"false"`, `"0"`, `"nil"` matched by `*secret*`).
+    ///
+    /// A value of `8` is a reasonable default for token/password fields.
+    /// Omit (or set to `0`) to replace all matching values regardless of length.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_length: Option<usize>,
+
     /// Name of the processor to use for the field's value when it contains
     /// an embedded structured document (e.g. `"yaml"`, `"json"`, `"toml"`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -70,9 +81,17 @@ impl FieldRule {
             pattern: pattern.into(),
             category: None,
             label: None,
+            min_length: None,
             sub_processor: None,
             sub_fields: Vec::new(),
         }
+    }
+
+    /// Set the minimum value length required for replacement.
+    #[must_use]
+    pub fn with_min_length(mut self, min: usize) -> Self {
+        self.min_length = Some(min);
+        self
     }
 
     /// Set the category for this rule.

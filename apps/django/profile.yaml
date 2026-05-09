@@ -25,18 +25,23 @@
     - pattern: "*PASSWORD"
       category: custom:password
       label: env_password
+      min_length: 8
     - pattern: "*SECRET"
       category: auth_token
       label: env_secret
+      min_length: 8
     - pattern: "*_KEY"
       category: auth_token
       label: env_key
+      min_length: 8
     - pattern: "*TOKEN"
       category: auth_token
       label: env_token
+      min_length: 8
     - pattern: "*PRIVATE_KEY"
       category: auth_token
       label: env_private_key
+      min_length: 8
     - pattern: "AWS_ACCESS_KEY_ID"
       category: auth_token
       label: aws_access_key_id

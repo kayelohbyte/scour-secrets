@@ -6,24 +6,31 @@
     - pattern: "*.secure_password"
       category: custom:password
       label: es_secure_password
+      min_length: 8
     - pattern: "*.password"
       category: custom:password
       label: es_password
+      min_length: 8
     - pattern: "*.keystore.secure_password"
       category: custom:password
       label: es_keystore_password
+      min_length: 8
     - pattern: "*.truststore.secure_password"
       category: custom:password
       label: es_truststore_password
+      min_length: 8
     - pattern: "*.ssl.keystore.password"
       category: custom:password
       label: es_ssl_keystore_password
+      min_length: 8
     - pattern: "*.access_key"
       category: auth_token
       label: es_access_key
+      min_length: 8
     - pattern: "*.secret_key"
       category: auth_token
       label: es_secret_key
+      min_length: 8
 
 - processor: env
   extensions: [".env"]

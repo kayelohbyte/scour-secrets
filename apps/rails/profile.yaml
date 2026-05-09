@@ -6,6 +6,7 @@
     - pattern: "*.password"
       category: custom:password
       label: rails_db_password
+      min_length: 8
     - pattern: "*.username"
       category: name
       label: rails_db_username
@@ -23,27 +24,35 @@
     - pattern: "*.secret_key_base"
       category: auth_token
       label: rails_secret_key_base
+      min_length: 8
     - pattern: "*.secret_token"
       category: auth_token
       label: rails_secret_token
+      min_length: 8
     - pattern: "*.devise_secret_key"
       category: auth_token
       label: rails_devise_secret
+      min_length: 8
     - pattern: "*.aws_access_key_id"
       category: auth_token
       label: aws_access_key_id
+      min_length: 8
     - pattern: "*.aws_secret_access_key"
       category: auth_token
       label: aws_secret_access_key
+      min_length: 8
     - pattern: "*.stripe_secret_key"
       category: auth_token
       label: stripe_secret_key
+      min_length: 8
     - pattern: "*.jwt_secret"
       category: auth_token
       label: rails_jwt_secret
+      min_length: 8
     - pattern: "*.jwt_key"
       category: auth_token
       label: rails_jwt_key
+      min_length: 8
 
 - processor: env
   extensions: [".env"]
@@ -62,15 +71,19 @@
     - pattern: "*PASSWORD"
       category: custom:password
       label: env_password
+      min_length: 8
     - pattern: "*SECRET"
       category: auth_token
       label: env_secret
+      min_length: 8
     - pattern: "*_KEY"
       category: auth_token
       label: env_key
+      min_length: 8
     - pattern: "*TOKEN"
       category: auth_token
       label: env_token
+      min_length: 8
     - pattern: "AWS_ACCESS_KEY_ID"
       category: auth_token
       label: aws_access_key_id

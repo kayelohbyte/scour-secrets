@@ -15,39 +15,51 @@
     - pattern: "*password*"
       category: custom:password
       label: gitlab_rb_password
+      min_length: 8
     - pattern: "*secret*"
       category: auth_token
       label: gitlab_rb_secret
+      min_length: 8
     - pattern: "*token*"
       category: auth_token
       label: gitlab_rb_token
+      min_length: 8
     - pattern: "*_key*"
       category: auth_token
       label: gitlab_rb_key
+      min_length: 8
     - pattern: "*key_base*"
       category: auth_token
       label: gitlab_rb_key_base
+      min_length: 8
     - pattern: "*authorization*"
       category: auth_token
       label: gitlab_rb_authorization
+      min_length: 8
     - pattern: "*aws_access_key*"
       category: auth_token
       label: gitlab_rb_aws_access_key
+      min_length: 8
     - pattern: "*accesskey*"
       category: auth_token
       label: gitlab_rb_accesskey
+      min_length: 8
     - pattern: "*secretkey*"
       category: auth_token
       label: gitlab_rb_secretkey
+      min_length: 8
     - pattern: "*accountkey*"
       category: auth_token
       label: gitlab_rb_accountkey
+      min_length: 8
     - pattern: "*bind_dn*"
       category: auth_token
       label: gitlab_rb_ldap_bind_dn
+      min_length: 8
     - pattern: "*_fingerprint*"
       category: auth_token
       label: gitlab_rb_fingerprint
+      min_length: 8
     - pattern: "*_dsn*"
       category: url
       label: gitlab_rb_sentry_dsn
@@ -63,6 +75,7 @@
     - pattern: "variables.*"
       category: auth_token
       label: ci_variable
+      min_length: 8
 
 # --- GitLab Helm chart values (gitlab-specific deep paths) ---
 # Note: broad *.password / *.token patterns intentionally catch inlined credentials
@@ -80,12 +93,15 @@
     - pattern: "*.password"
       category: custom:password
       label: gitlab_helm_password
+      min_length: 8
     - pattern: "*.token"
       category: auth_token
       label: gitlab_helm_token
+      min_length: 8
     - pattern: "*.authToken"
       category: auth_token
       label: gitlab_helm_auth_token
+      min_length: 8
     # GitLab-specific global paths
     - pattern: "global.smtp.password"
       category: custom:password

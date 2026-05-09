@@ -30,15 +30,20 @@
     - pattern: "*_password"
       category: custom:password
       label: ansible_var_password
+      min_length: 8
     - pattern: "*_secret"
       category: auth_token
       label: ansible_var_secret
+      min_length: 8
     - pattern: "*_token"
       category: auth_token
       label: ansible_var_token
+      min_length: 8
     - pattern: "*_api_key"
       category: auth_token
       label: ansible_var_api_key
+      min_length: 8
     - pattern: "*_private_key"
       category: auth_token
       label: ansible_var_private_key
+      min_length: 8

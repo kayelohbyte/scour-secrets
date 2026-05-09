@@ -43,27 +43,36 @@
     - pattern: "*.password"
       category: custom:password
       label: helm_password
+      min_length: 8
     - pattern: "*.secret"
       category: auth_token
       label: helm_secret
+      min_length: 8
     - pattern: "*.secretKey"
       category: auth_token
       label: helm_secret_key
+      min_length: 8
     - pattern: "*.apiKey"
       category: auth_token
       label: helm_api_key
+      min_length: 8
     - pattern: "*.privateKey"
       category: auth_token
       label: helm_private_key
+      min_length: 8
     - pattern: "*.jwt_secret"
       category: auth_token
       label: jwt_secret
+      min_length: 8
     - pattern: "*.jwtSecret"
       category: auth_token
       label: jwt_secret_camel
+      min_length: 8
     - pattern: "*.jwt_key"
       category: auth_token
       label: jwt_key
+      min_length: 8
     - pattern: "*.jwtKey"
       category: auth_token
       label: jwt_key_camel
+      min_length: 8

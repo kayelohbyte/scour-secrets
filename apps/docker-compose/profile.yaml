@@ -32,15 +32,19 @@
     - pattern: "*.environment.*PASSWORD"
       category: custom:password
       label: compose_env_password
+      min_length: 8
     - pattern: "*.environment.*SECRET"
       category: auth_token
       label: compose_env_secret
+      min_length: 8
     - pattern: "*.environment.*TOKEN"
       category: auth_token
       label: compose_env_token
+      min_length: 8
     - pattern: "*.environment.*_KEY"
       category: auth_token
       label: compose_env_key
+      min_length: 8
     - pattern: "*.registries.*.password"
       category: custom:password
       label: compose_registry_password
