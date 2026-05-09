@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Structured YAML/JSON/TOML output corrupted by key=value patterns** — the
+  format-preserving double-pass scanner used by `--profile` included the
+  built-in balanced `password_kv` / `secret_kv` patterns which match
+  `key: value` as a unit. These patterns caused the YAML key (e.g. `password:`)
+  to be lost from the output, producing lines like `  __SANITIZED_xxx__` instead
+  of `  password: __SANITIZED_xxx__`. Fixed by adding
+  `StreamScanner::for_structured_pass()` which filters out `_kv`-labelled patterns
+  from the base scanner so only value-only patterns and profile-discovered literals
+  are used in the structured pass.
+
 ## [1.0.0] — 2026-05-08
 
 This release marks the **stability boundary**. The public library API and CLI
@@ -36,6 +48,15 @@ for the full stability contract and MSRV policy.
   recursive walk code.
 
 ### Changed
+
+- **`--update-secrets` replaced by `--no-update-secrets`** — saving discovered
+  field values to the secrets file is now the default when a profile is active
+  (`--profile` or `--app` with a profile). Pass `--no-update-secrets` to
+  suppress the write. The old `--update-secrets` flag is removed.
+
+- **Common allow patterns apply to `--profile` runs** — `--profile` now loads
+  the same common non-sensitive allow patterns as `--default` and `--app`,
+  so loopback IPs, `localhost`, `example.com`, etc. are not replaced.
 
 - **`AllowlistMatcher` internals** — exact patterns are now stored in a
   `HashSet` for O(1) lookup; only glob patterns walk a `Vec`. No API change.

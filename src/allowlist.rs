@@ -108,6 +108,11 @@ impl AllowlistMatcher {
         self.seen.load(Ordering::Relaxed)
     }
 
+    /// Number of patterns registered (exact + glob).
+    pub fn pattern_count(&self) -> usize {
+        self.exact.len() + self.globs.len()
+    }
+
     /// `true` if no patterns are registered (allowlist is effectively disabled).
     pub fn is_empty(&self) -> bool {
         self.exact.is_empty() && self.globs.is_empty()

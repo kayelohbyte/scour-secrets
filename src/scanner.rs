@@ -588,6 +588,30 @@ impl StreamScanner {
         Self::new(patterns, Arc::clone(&self.store), self.config.clone())
     }
 
+    /// Build a scanner suitable for format-preserving structured-file passes.
+    ///
+    /// Patterns whose labels end with `"_kv"` are excluded from the base set.
+    /// Those patterns match both a key name and its value (e.g. `password: s3cr3t`)
+    /// as a single unit; in a structured pass the key must survive untouched so
+    /// only the discovered field-value literals are safe to replace.
+    ///
+    /// `extra` (the profile-discovered literals) are always included.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SanitizeError`] if Aho-Corasick or RegexSet construction fails
+    /// or the combined pattern count exceeds the default limit.
+    pub fn for_structured_pass(&self, extra: Vec<ScanPattern>) -> Result<Self> {
+        let mut patterns: Vec<ScanPattern> = self
+            .patterns
+            .iter()
+            .filter(|p| !p.label.ends_with("_kv"))
+            .cloned()
+            .collect();
+        patterns.extend(extra);
+        Self::new(patterns, Arc::clone(&self.store), self.config.clone())
+    }
+
     /// Scan a reader and write sanitized output to a writer.
     ///
     /// Processes the input in chunks of `config.chunk_size` bytes,

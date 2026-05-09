@@ -281,18 +281,18 @@ struct Cli {
 
     /// Use HMAC-deterministic replacements so that identical inputs
     /// always produce identical outputs across runs (requires a stable
-    /// seed derived from the secrets key). When combined with `--profile`,
-    /// also implies `--update-secrets`.
+    /// seed derived from the secrets key).
     #[arg(short = 'd', long)]
     deterministic: bool,
 
-    /// After a profile-driven run, append any values discovered by structured
-    /// scanning to the secrets file (`--secrets-file`, or
+    /// Disable the automatic save of values discovered by structured
+    /// scanning. By default, when a profile is active, any field values
+    /// found are appended to the secrets file (`--secrets-file`, or
     /// `sanitize-discovered.yaml` if none is given) as `kind: literal`
-    /// entries. Existing patterns are not duplicated.  Implies the same
-    /// write when `--deterministic` is also set.
+    /// entries so future runs can match them without re-running the profile.
+    /// Pass this flag to suppress that write.
     #[arg(long)]
-    update_secrets: bool,
+    no_update_secrets: bool,
 
     /// Process entries that appear to be binary data (default: skip).
     #[arg(long)]
@@ -2344,7 +2344,7 @@ fn run_guided() -> Result<(), (String, i32)> {
         report: None,
         strict: false,
         deterministic,
-        update_secrets: false,
+        no_update_secrets: false,
         include_binary: false,
         force_text: false,
         threads: None,
@@ -3059,13 +3059,10 @@ fn plan_input_targets(cli: &Cli) -> Result<Vec<InputTarget>, String> {
 
     let mut units = Vec::new();
 
-    // No file inputs — stdin only; return immediately.
+    // No file inputs — stdin only. Output goes to --output if given, else stdout.
     if cli.input.is_empty() {
         units.push(InputTarget::Stdin {
-            output: cli
-                .output
-                .clone()
-                .or_else(|| Some(PathBuf::from("input-sanitized.txt"))),
+            output: cli.output.clone(),
         });
         return Ok(units);
     }
@@ -4592,7 +4589,7 @@ fn build_format_preserving_scanner(
         })
         .collect();
 
-    base_scanner.with_extra_literals(extra)
+    base_scanner.for_structured_pass(extra)
 }
 
 /// Fall back to the streaming scanner for raw bytes.
@@ -5288,7 +5285,8 @@ fn run_sanitize(
     //    --default to get email, IP, JWT, and common token patterns.
     //    Common allow patterns are added here — before the allowlist is built —
     //    so the store is aware of them from the first matched value.
-    let load_defaults = cli.default || (!cli.app.is_empty() && cli.secrets_file.is_none());
+    let load_defaults =
+        cli.default || (!cli.app.is_empty() && cli.secrets_file.is_none()) || cli.profile.is_some();
     if load_defaults {
         all_allow_patterns.extend(common_allow_patterns());
     }
@@ -5304,7 +5302,7 @@ fn run_sanitize(
                 warn!(warning = %w, "allowlist pattern warning");
             }
             let matcher = Arc::new(matcher);
-            info!(patterns = matcher.seen_count(), "allowlist loaded");
+            info!(patterns = matcher.pattern_count(), "allowlist loaded");
             Some(matcher)
         };
     let store = build_store(
@@ -5731,11 +5729,11 @@ fn run_sanitize(
         return Err(("interrupted by signal".into(), 130));
     }
 
-    // --- persist discovered secrets (profile + deterministic or --update-secrets) ----------
-    // When a profile is active and either --deterministic or --update-secrets is set,
-    // append literal values found by structured scanning to the secrets file so that
-    // future runs' scanner can match them everywhere they appear.
-    if (cli.deterministic || cli.update_secrets) && !profiles.is_empty() {
+    // --- persist discovered secrets (profile active + not suppressed) -------------------
+    // When a profile is active, append literal values found by structured scanning to
+    // the secrets file by default so future runs can match them everywhere they appear.
+    // Pass --no-update-secrets to suppress this write.
+    if !cli.no_update_secrets && !profiles.is_empty() {
         let save_path = cli
             .secrets_file
             .clone()

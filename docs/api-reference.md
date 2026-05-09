@@ -15,6 +15,8 @@ All public types are re-exported from the crate root (`sanitize_engine::*`) for 
 | `StreamScanner::scan_bytes(input)` | Scan an in-memory byte slice. Returns `(Vec<u8>, ScanStats)`. |
 | `StreamScanner::pattern_count()` | Number of compiled patterns. |
 | `StreamScanner::config()` / `store()` | Accessors for the scanner's config and mapping store. |
+| `StreamScanner::with_extra_literals(extra)` | Returns a new scanner with the same base patterns plus additional literal patterns. |
+| `StreamScanner::for_structured_pass(extra)` | Returns a new scanner for format-preserving structured-file passes. Filters out `_kv`-labeled patterns (those that match key+value pairs as a unit, which would corrupt YAML/JSON/TOML keys) and adds the provided extra literals. |
 | `ScanPattern` | A single detection pattern with category and label. |
 | `ScanPattern::from_regex(pattern, category, label)` | Create from a regex string. |
 | `ScanPattern::from_literal(literal, category, label)` | Create from a literal string (auto-escaped). |
@@ -76,7 +78,7 @@ All public types are re-exported from the crate root (`sanitize_engine::*`) for 
 | `ArchiveProcessor::with_parallel_threshold(threshold)` | Builder method: set the minimum file-entry count required to enable parallel entry sanitization. Default: `4`. Set to `usize::MAX` to disable entry-level parallelism (e.g. when outer file-level parallelism already saturates the thread budget). |
 | `ArchiveFormat` | Enum: `Tar`, `TarGz`, `Zip`. |
 | `ArchiveStats` | Processing results: `files_processed`, `entries_skipped`, `structured_hits`, `scanner_fallback`, `nested_archives`, `total_input_bytes`, `total_output_bytes`, `file_methods`, `file_scan_stats`. |
-| `DEFAULT_MAX_ARCHIVE_DEPTH` | Default maximum nesting depth for recursive archive processing (`3`). |
+| `DEFAULT_ARCHIVE_DEPTH` | Default maximum nesting depth for recursive archive processing (`3`). |
 
 ## Report Module (`report`)
 
@@ -192,7 +194,7 @@ When `--extract-context` is used, each file entry in the report's `files` array 
 
 | Type / Function | Description |
 |-----------------|-------------|
-| `SecretEntry` | A single secret: `pattern`, `kind` (`"regex"` or `"literal"`), `category`, `label`. Zeroized on drop. |
+| `SecretEntry` | A single secret: `pattern`, `kind` (`"regex"`, `"literal"`, or `"allow"`), `category`, `label`, `values` (optional `Vec<String>` for compact multi-value `kind: allow` entries). Zeroized on drop. |
 | `SecretsFormat` | Enum: `Json`, `Yaml`, `Toml`. |
 | `load_secrets_auto(data, password, format, force_plaintext)` | Detect encrypted vs plaintext and load secret patterns accordingly. Returns `(PatternCompileResult, was_encrypted)`. |
 | `looks_encrypted(data)` | Heuristic: returns `true` if the data does not look like plaintext JSON/YAML/TOML (i.e. it's likely encrypted). |
