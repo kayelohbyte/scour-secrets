@@ -34,7 +34,7 @@ const MAX_CONTENT_BYTES = parseInt(
   10,
 );
 const SANITIZE_SECRETS_DIR = Deno.env.get("SANITIZE_SECRETS_DIR");
-const SERVER_VERSION = "0.5.0";
+const SERVER_VERSION = "1.0.0";
 
 // ---------------------------------------------------------------------------
 // Subprocess helpers
