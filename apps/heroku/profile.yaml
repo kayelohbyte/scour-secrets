@@ -1,0 +1,98 @@
+# Heroku — app.json env values, .env add-on credentials, .buildpacks private repo URLs
+- processor: json
+  extensions: [".json"]
+  include: ["app.json"]
+  fields:
+    # env.*.value — actual secret values committed to app.json
+    - pattern: "env.*.value"
+      category: auth_token
+      label: heroku_app_json_env_value
+    # env.*.default — some fields use "default" instead of "value"
+    - pattern: "env.*.default"
+      category: auth_token
+      label: heroku_app_json_env_default
+
+- processor: env
+  extensions: [".env"]
+  include: [".env", ".env.local", ".env.production", ".env.staging",
+            ".env.development", ".env.test", "*.env"]
+  fields:
+    # Heroku Postgres / JDBC
+    - pattern: "DATABASE_URL"
+      category: url
+      label: heroku_database_url
+    - pattern: "JDBC_DATABASE_URL"
+      category: url
+      label: heroku_jdbc_database_url
+    - pattern: "JDBC_DATABASE_USERNAME"
+      category: name
+      label: heroku_jdbc_db_user
+    - pattern: "JDBC_DATABASE_PASSWORD"
+      category: custom:password
+      label: heroku_jdbc_db_password
+    # Heroku Redis (plain + colored instances e.g. HEROKU_REDIS_PINK_URL)
+    - pattern: "REDIS_URL"
+      category: url
+      label: heroku_redis_url
+    - pattern: "HEROKU_REDIS_*_URL"
+      category: url
+      label: heroku_redis_instance_url
+    # Rails master key (often stored in Heroku config vars)
+    - pattern: "RAILS_MASTER_KEY"
+      category: auth_token
+      label: rails_master_key
+    # Cloudinary
+    - pattern: "CLOUDINARY_URL"
+      category: url
+      label: cloudinary_url
+    # SendGrid
+    - pattern: "SENDGRID_API_KEY"
+      category: auth_token
+      label: sendgrid_api_key
+    - pattern: "SENDGRID_PASSWORD"
+      category: custom:password
+      label: sendgrid_password
+    - pattern: "SENDGRID_USERNAME"
+      category: name
+      label: sendgrid_username
+    # Mailgun
+    - pattern: "MAILGUN_API_KEY"
+      category: auth_token
+      label: mailgun_api_key
+    - pattern: "MAILGUN_SMTP_PASSWORD"
+      category: custom:password
+      label: mailgun_smtp_password
+    - pattern: "MAILGUN_SMTP_LOGIN"
+      category: name
+      label: mailgun_smtp_login
+    # New Relic
+    - pattern: "NEW_RELIC_LICENSE_KEY"
+      category: auth_token
+      label: new_relic_license_key
+    # Rollbar
+    - pattern: "ROLLBAR_ACCESS_TOKEN"
+      category: auth_token
+      label: rollbar_access_token
+    # Sentry (DSN contains key material)
+    - pattern: "SENTRY_DSN"
+      category: url
+      label: sentry_dsn
+    # Papertrail
+    - pattern: "PAPERTRAIL_API_TOKEN"
+      category: auth_token
+      label: papertrail_api_token
+    # Algolia
+    - pattern: "ALGOLIA_API_KEY"
+      category: auth_token
+      label: algolia_api_key
+    - pattern: "ALGOLIA_SEARCH_KEY"
+      category: auth_token
+      label: algolia_search_key
+    # Scout APM
+    - pattern: "SCOUT_KEY"
+      category: auth_token
+      label: scout_apm_key
+    # Bonsai Elasticsearch
+    - pattern: "BONSAI_URL"
+      category: url
+      label: bonsai_url

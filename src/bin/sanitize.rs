@@ -2825,6 +2825,12 @@ const BUILTIN_APPS: &[BuiltinApp] = &[
         profile_yaml: Some(include_str!("../../apps/gitlab/profile.yaml")),
     },
     BuiltinApp {
+        name: "heroku",
+        description: "Heroku — app.json env values, add-on credentials (Postgres, Redis, SendGrid, Mailgun, Cloudinary…)",
+        secrets_yaml: None,
+        profile_yaml: Some(include_str!("../../apps/heroku/profile.yaml")),
+    },
+    BuiltinApp {
         name: "grafana",
         description: "Grafana — grafana.ini admin credentials, provisioning datasource secrets",
         secrets_yaml: None,
