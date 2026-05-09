@@ -691,6 +691,21 @@ EXAMPLES:\n  \
   sanitize apps remove myapp -y")]
     Remove(AppsRemoveArgs),
 
+    /// Copy a built-in app bundle to the user apps directory for editing.
+    ///
+    /// For built-in apps, copies profile.yaml and/or secrets.yaml into
+    /// ~/.config/sanitize/apps/<name>/ so they can be customised. The local
+    /// copy takes precedence over the built-in automatically — no extra flags
+    /// needed. For user-defined apps the existing directory path is printed.
+    ///
+    /// To revert to the built-in, run `sanitize apps remove <name> --yes`.
+    #[command(after_help = "\
+EXAMPLES:\n  \
+  sanitize apps edit rails\n  \
+  sanitize apps edit kubernetes\n  \
+  sanitize apps edit gitlab")]
+    Edit(AppsEditArgs),
+
     /// Print the user apps directory path.
     ///
     /// Custom app bundles are stored here. You can also drop directories
@@ -728,6 +743,16 @@ struct AppsRemoveArgs {
     /// Confirm removal without an interactive prompt.
     #[arg(long, short = 'y')]
     yes: bool,
+}
+
+#[derive(Parser, Debug)]
+struct AppsEditArgs {
+    /// Name of the app bundle to edit.
+    ///
+    /// For built-in apps this copies the files to the user apps directory.
+    /// For user-defined apps this prints the existing directory path.
+    #[arg(value_name = "NAME")]
+    name: String,
 }
 
 fn parse_template_preset(s: &str) -> Result<TemplatePreset, String> {
@@ -1818,14 +1843,37 @@ fn run_apps(args: &AppsArgs) -> Result<(), (String, i32)> {
         None => run_apps_list(),
         Some(AppsSubCommand::Add(a)) => run_apps_add(a),
         Some(AppsSubCommand::Remove(a)) => run_apps_remove(a),
+        Some(AppsSubCommand::Edit(a)) => run_apps_edit(a),
         Some(AppsSubCommand::Dir) => run_apps_dir(),
     }
 }
 
 fn run_apps_list() -> Result<(), (String, i32)> {
+    let overridden: std::collections::HashSet<String> = user_apps_dir()
+        .filter(|d| d.is_dir())
+        .map(|d| {
+            fs::read_dir(&d)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                        .map(|e| e.file_name().to_string_lossy().to_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .unwrap_or_default();
+
     println!("Built-in app bundles (use with --app <name>):\n");
     for app in BUILTIN_APPS {
-        println!("  {:<18} {}", app.name, app.description);
+        if overridden.contains(app.name) {
+            println!(
+                "  {:<18} {} (overridden by user copy)",
+                app.name, app.description
+            );
+        } else {
+            println!("  {:<18} {}", app.name, app.description);
+        }
     }
 
     let apps_dir = user_apps_dir();
@@ -1865,7 +1913,10 @@ fn run_apps_list() -> Result<(), (String, i32)> {
     }
 
     println!("\nCombine multiple apps:  sanitize file.zip --app gitlab,nginx,postgresql");
-    println!("Manage custom apps:     sanitize apps add <name> --profile p.yaml --secrets s.yaml");
+    println!(
+        "Manage custom apps:     sanitize apps edit <name>        # copy built-in for editing"
+    );
+    println!("                        sanitize apps add <name> --profile p.yaml --secrets s.yaml");
     println!("                        sanitize apps remove <name> --yes");
     println!("                        sanitize apps dir");
     Ok(())
@@ -1947,17 +1998,6 @@ fn run_apps_add(args: &AppsAddArgs) -> Result<(), (String, i32)> {
 fn run_apps_remove(args: &AppsRemoveArgs) -> Result<(), (String, i32)> {
     validate_app_name(&args.name).map_err(|e| (e, 1))?;
 
-    // Refuse to remove a built-in.
-    if BUILTIN_APPS.iter().any(|a| a.name == args.name.as_str()) {
-        return Err((
-            format!(
-                "'{}' is a built-in app bundle and cannot be removed",
-                args.name
-            ),
-            1,
-        ));
-    }
-
     let apps_dir = user_apps_dir().ok_or_else(|| {
         (
             "cannot determine user apps directory: HOME is not set".into(),
@@ -1967,7 +2007,19 @@ fn run_apps_remove(args: &AppsRemoveArgs) -> Result<(), (String, i32)> {
 
     let target_dir = apps_dir.join(&args.name);
 
+    // Only a user copy (in the apps dir) can be removed.  Refuse when the
+    // name is a built-in AND there is no user copy to revert.
     if !target_dir.is_dir() {
+        if BUILTIN_APPS.iter().any(|a| a.name == args.name.as_str()) {
+            return Err((
+                format!(
+                    "'{}' is a built-in app — nothing to remove.\n\
+                     Use `sanitize apps edit {}` first to create a local copy.",
+                    args.name, args.name
+                ),
+                1,
+            ));
+        }
         return Err((
             format!(
                 "no custom app '{}' found at {}",
@@ -1991,7 +2043,85 @@ fn run_apps_remove(args: &AppsRemoveArgs) -> Result<(), (String, i32)> {
     fs::remove_dir_all(&target_dir)
         .map_err(|e| (format!("failed to remove {}: {e}", target_dir.display()), 1))?;
 
+    let is_builtin = BUILTIN_APPS.iter().any(|a| a.name == args.name.as_str());
     println!("Removed app '{}'  ({})", args.name, target_dir.display());
+    if is_builtin {
+        println!("Built-in '{}' is now active again.", args.name);
+    }
+    Ok(())
+}
+
+fn run_apps_edit(args: &AppsEditArgs) -> Result<(), (String, i32)> {
+    validate_app_name(&args.name).map_err(|e| (e, 1))?;
+
+    let apps_dir = user_apps_dir().ok_or_else(|| {
+        (
+            "cannot determine user apps directory: HOME is not set".into(),
+            1,
+        )
+    })?;
+
+    let target_dir = apps_dir.join(&args.name);
+
+    // Already a user-defined app — just show the path.
+    if target_dir.is_dir() {
+        println!("'{}' is already in your user apps directory:", args.name);
+        println!("  {}", target_dir.display());
+        for file in &["profile.yaml", "secrets.yaml"] {
+            let p = target_dir.join(file);
+            if p.exists() {
+                println!("  {}", p.display());
+            }
+        }
+        println!("\nEdits here already override the built-in.");
+        println!("To revert:  sanitize apps remove {} --yes", args.name);
+        return Ok(());
+    }
+
+    // Must be a built-in.
+    let entry = BUILTIN_APPS
+        .iter()
+        .find(|a| a.name == args.name.as_str())
+        .ok_or_else(|| {
+            format!(
+                "unknown app '{}'. Built-in apps: {}.",
+                args.name,
+                builtin_app_names().join(", ")
+            )
+        })
+        .map_err(|e| (e, 1))?;
+
+    fs::create_dir_all(&target_dir)
+        .map_err(|e| (format!("failed to create {}: {e}", target_dir.display()), 1))?;
+
+    let mut wrote: Vec<PathBuf> = vec![];
+
+    if let Some(yaml) = entry.profile_yaml {
+        let dst = target_dir.join("profile.yaml");
+        fs::write(&dst, yaml)
+            .map_err(|e| (format!("failed to write {}: {e}", dst.display()), 1))?;
+        wrote.push(dst);
+    }
+    if let Some(yaml) = entry.secrets_yaml {
+        let dst = target_dir.join("secrets.yaml");
+        fs::write(&dst, yaml)
+            .map_err(|e| (format!("failed to write {}: {e}", dst.display()), 1))?;
+        wrote.push(dst);
+    }
+
+    println!(
+        "Copied built-in '{}' to your user apps directory:",
+        args.name
+    );
+    for path in &wrote {
+        println!("  {}", path.display());
+    }
+    println!(
+        "\nEdits here override the built-in — use --app {} as usual.",
+        args.name
+    );
+    println!("To revert:  sanitize apps remove {} --yes", args.name);
+
     Ok(())
 }
 

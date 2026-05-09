@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`sanitize apps edit <name>`** — copies a built-in app bundle's YAML files
+  into `~/.config/sanitize/apps/<name>/` so they can be customised. The local
+  copy automatically takes precedence over the compiled built-in (no extra
+  flags needed). Re-running `edit` on an app that already has a user copy
+  just prints the file paths. Reverting to the built-in: `sanitize apps
+  remove <name> --yes`.
+
+- **Built-in override indicator in `sanitize apps`** — when a built-in app has
+  a user copy, the list now shows `(overridden by user copy)` next to its name.
+
+- **`sanitize apps remove` works on built-in overrides** — previously the
+  command refused to remove any app whose name matched a built-in; it now
+  allows removal of user copies of built-ins and prints "Built-in 'X' is now
+  active again." after removal.
+
 - **JWT secret patterns** — `jwt_secret` and `jwt_key` (and camelCase variants
   `jwtSecret`, `jwtKey`) added to plaintext log scanning (`secret_kv` regex in
   `build_guided_entries`) and to the `apps/rails/profile.yaml` and
