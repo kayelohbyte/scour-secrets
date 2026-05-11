@@ -220,7 +220,11 @@ mod tests {
         ]);
 
         let result = proc.process(input, &profile, &store).unwrap();
-        let v: Value = serde_json::from_slice(result.trim_ascii_end()).unwrap();
+        let trimmed = result
+            .iter()
+            .rposition(|b| !b.is_ascii_whitespace())
+            .map_or(&[][..], |i| &result[..=i]);
+        let v: Value = serde_json::from_slice(trimmed).unwrap();
         assert_ne!(v["db"]["password"].as_str().unwrap(), "pw1");
         assert_eq!(v["name"].as_str().unwrap(), "app");
     }
