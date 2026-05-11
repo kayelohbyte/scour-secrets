@@ -2673,7 +2673,6 @@ fn build_store(
             Some(k) => {
                 use hmac::Hmac;
                 use sha2::Sha256;
-                use zeroize::Zeroizing;
                 let mut buf = Zeroizing::new([0u8; 32]);
                 let salt = b"sanitize-engine:deterministic-seed:v1";
                 pbkdf2::pbkdf2::<Hmac<Sha256>>(k.as_bytes(), salt, 600_000, buf.as_mut())
@@ -3186,7 +3185,23 @@ fn stdin_is_pipe() -> bool {
         .unwrap_or(false)
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn stdin_is_pipe() -> bool {
+    // GetFileType returns FILE_TYPE_PIPE (3) only for actual anonymous/named
+    // pipes.  NUL, regular files, and consoles return other values, so this
+    // correctly excludes `Stdio::null()` (which maps to NUL) from being
+    // treated as piped input.
+    use std::os::windows::io::AsRawHandle;
+    extern "system" {
+        fn GetFileType(hFile: *mut std::ffi::c_void) -> u32;
+    }
+    const FILE_TYPE_PIPE: u32 = 3;
+    let handle = io::stdin().as_raw_handle();
+    // SAFETY: stdin handle is valid for the lifetime of the process.
+    unsafe { GetFileType(handle as *mut _) == FILE_TYPE_PIPE }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn stdin_is_pipe() -> bool {
     !io::stdin().is_terminal()
 }
@@ -5994,12 +6009,12 @@ fn run_sanitize(
         }
 
         // --- JSON report (--report) ---
-        if cli.report.is_some() {
+        if let Some(report_opt) = &cli.report {
             let json = report
                 .to_json_pretty()
                 .map_err(|e| (format!("failed to serialize report: {e}"), 1))?;
 
-            match cli.report.as_ref().unwrap() {
+            match report_opt {
                 Some(path) if path.to_string_lossy() == "-" => {
                     println!("{json}");
                 }
