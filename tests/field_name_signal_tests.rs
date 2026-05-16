@@ -26,7 +26,9 @@ fn write_json_profile(dir: &tempfile::TempDir, filename: &str) -> std::path::Pat
 }
 
 fn sanitize_cmd() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_sanitize"));
+    cmd.stdin(std::process::Stdio::null());
+    cmd
 }
 
 // ---------------------------------------------------------------------------
