@@ -108,7 +108,7 @@ pub trait Processor: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`SanitizeError`](crate::error::SanitizeError) if parsing or replacement generation fails.
+    /// Returns [`SanitizeError`] if parsing or replacement generation fails.
     fn process(
         &self,
         content: &[u8],
@@ -136,7 +136,7 @@ pub trait Processor: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Returns [`SanitizeError`](crate::error::SanitizeError) on read, parse,
+    /// Returns [`SanitizeError`] on read, parse,
     /// or write failure.
     fn process_stream(
         &self,

@@ -290,8 +290,8 @@ fn derive_key(password: &[u8], salt: &[u8]) -> Zeroizing<[u8; 32]> {
 ///
 /// # Errors
 ///
-/// Returns [`SanitizeError::SecretsError`] if the password is empty or
-/// encryption fails.
+/// Returns [`SanitizeError::SecretsEmptyPassword`] if the password is empty, or
+/// [`SanitizeError::SecretsCipherError`] if encryption fails.
 ///
 /// # Security
 ///
@@ -347,8 +347,8 @@ pub fn encrypt_secrets(plaintext: &[u8], password: &str) -> Result<Vec<u8>> {
 ///
 /// # Errors
 ///
-/// - [`SanitizeError::SecretsError`] if the blob is too short, the
-///   password is wrong, or the ciphertext has been tampered with.
+/// - [`SanitizeError::SecretsTooShort`] if the blob is too short,
+///   [`SanitizeError::SecretsDecryptFailed`] if the password is wrong or the ciphertext has been tampered with.
 pub fn decrypt_secrets(encrypted: &[u8], password: &str) -> Result<Zeroizing<Vec<u8>>> {
     if encrypted.len() < MIN_ENCRYPTED_LEN {
         return Err(SanitizeError::SecretsTooShort);
@@ -382,9 +382,9 @@ pub fn decrypt_secrets(encrypted: &[u8], password: &str) -> Result<Zeroizing<Vec
 ///
 /// # Errors
 ///
-/// Returns [`SanitizeError::SecretsError`] if the plaintext is not
-/// valid UTF-8 or cannot be parsed in the specified format, or if the
-/// file exceeds the [`MAX_SECRETS_PLAINTEXT_BYTES`] limit.
+/// Returns [`SanitizeError::SecretsInvalidUtf8`] if the plaintext is not
+/// valid UTF-8, [`SanitizeError::SecretsFormatError`] if it cannot be parsed
+/// in the specified format or if the file exceeds the size limit.
 pub fn parse_secrets(plaintext: &[u8], format: Option<SecretsFormat>) -> Result<Vec<SecretEntry>> {
     if plaintext.len() > MAX_SECRETS_PLAINTEXT_BYTES {
         return Err(SanitizeError::SecretsFormatError {
@@ -431,7 +431,7 @@ pub fn parse_secrets(plaintext: &[u8], format: Option<SecretsFormat>) -> Result<
 ///
 /// # Errors
 ///
-/// Returns [`SanitizeError::SecretsError`] if serialization fails.
+/// Returns [`SanitizeError::SecretsFormatError`] if serialization fails.
 pub fn serialize_secrets(entries: &[SecretEntry], format: SecretsFormat) -> Result<Vec<u8>> {
     match format {
         SecretsFormat::Json => {
@@ -504,7 +504,7 @@ pub fn parse_category(s: &str) -> Category {
 /// Extract allowlist patterns from a set of entries.
 ///
 /// Entries with `kind: allow` are returned as raw pattern strings to be
-/// compiled into an [`AllowlistMatcher`]. They are skipped by
+/// compiled into an [`AllowlistMatcher`](crate::allowlist::AllowlistMatcher). They are skipped by
 /// [`entries_to_patterns`].
 ///
 /// Each entry contributes either its `values` list (when non-empty) or its
@@ -626,7 +626,7 @@ fn truncate_label(s: &str) -> String {
 ///
 /// # Errors
 ///
-/// Returns [`SanitizeError::SecretsError`] if decryption or parsing fails.
+/// Returns a secrets-related [`SanitizeError`] if decryption or parsing fails.
 pub fn load_encrypted_secrets(
     encrypted_bytes: &[u8],
     password: &str,
@@ -661,7 +661,7 @@ pub fn load_encrypted_secrets(
 ///
 /// # Errors
 ///
-/// Returns [`SanitizeError::SecretsError`] if parsing or pattern
+/// Returns a secrets-related [`SanitizeError`] if parsing or pattern
 /// compilation fails.
 pub fn load_plaintext_secrets(
     plaintext: &[u8],
@@ -742,13 +742,13 @@ pub fn looks_encrypted(data: &[u8]) -> bool {
 ///
 /// # Errors
 ///
-/// Returns [`SanitizeError::SecretsError`] if decryption or parsing
+/// Returns a secrets-related [`SanitizeError`] if decryption or parsing
 /// fails, or if a password is required but not provided.
 /// Returns `((patterns, warnings, allow_patterns), was_encrypted)`.
 ///
 /// `allow_patterns` are the raw strings from `kind: allow` entries in the
 /// secrets file — the caller should combine these with any `--allow` CLI
-/// values and pass the merged list to [`AllowlistMatcher::new`].
+/// values and pass the merged list to [`AllowlistMatcher::new`](crate::allowlist::AllowlistMatcher::new).
 pub fn load_secrets_auto(
     data: &[u8],
     password: Option<&str>,

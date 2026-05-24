@@ -129,7 +129,7 @@ const DEFAULT_MAX_STRUCTURED_FILE_SIZE: u64 = 256 * 1024 * 1024; // 256 MiB
 const MAX_CONTEXT_BUFFER_BYTES: u64 = 256 * 1024 * 1024; // 256 MiB
 
 /// Shared per-run collector for `--llm`: (label, sanitized_bytes) pairs in
-/// input order. Wrapped in Arc<Mutex> so it can be passed into parallel file
+/// input order. Wrapped in `Arc<Mutex>` so it can be passed into parallel file
 /// processing paths alongside the report builder.
 type LlmCollector = Arc<Mutex<Vec<LlmEntry>>>;
 
@@ -1023,7 +1023,7 @@ pub(crate) enum AppsSubCommand {
     /// Install a custom app bundle from local YAML files.
     ///
     /// Copies the supplied profile and/or secrets files into the user apps
-    /// directory so the bundle is available via --app <name>.
+    /// directory so the bundle is available via `--app <name>`.
     #[command(after_help = "\
 EXAMPLES:\n  \
   sanitize apps add elastic --profile elastic.profile.yaml --secrets elastic.secrets.yaml\n  \
@@ -1043,7 +1043,7 @@ EXAMPLES:\n  \
     /// Copy a built-in app bundle to the user apps directory for editing.
     ///
     /// For built-in apps, copies profile.yaml and/or secrets.yaml into
-    /// ~/.config/sanitize/apps/<name>/ so they can be customised. The local
+    /// `~/.config/sanitize/apps/<name>/` so they can be customised. The local
     /// copy takes precedence over the built-in automatically — no extra flags
     /// needed. For user-defined apps the existing directory path is printed.
     ///
@@ -1064,17 +1064,17 @@ EXAMPLES:\n  \
 
 #[derive(Parser, Debug)]
 pub(crate) struct AppsAddArgs {
-    /// Name for the new app bundle (used with --app <name>).
+    /// Name for the new app bundle (used with `--app <name>`).
     ///
     /// Only letters, digits, hyphens, and underscores are allowed.
     #[arg(value_name = "NAME")]
     name: String,
 
-    /// Path to a profile YAML file (Vec<FileTypeProfile>).
+    /// Path to a profile YAML file (`Vec<FileTypeProfile>`).
     #[arg(long, value_name = "FILE")]
     profile: Option<PathBuf>,
 
-    /// Path to a secrets YAML file (Vec<SecretEntry>).
+    /// Path to a secrets YAML file (`Vec<SecretEntry>`).
     #[arg(long, value_name = "FILE")]
     secrets: Option<PathBuf>,
 

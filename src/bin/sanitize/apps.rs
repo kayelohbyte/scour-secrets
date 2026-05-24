@@ -28,9 +28,9 @@ pub(crate) struct AppBundle {
 pub(crate) struct BuiltinApp {
     pub(crate) name: &'static str,
     pub(crate) description: &'static str,
-    /// Vec<SecretEntry> YAML; None when the app has no unique secrets patterns.
+    /// `Vec<SecretEntry>` YAML; None when the app has no unique secrets patterns.
     pub(crate) secrets_yaml: Option<&'static str>,
-    /// Vec<FileTypeProfile> YAML; None when the app has no profile rules.
+    /// `Vec<FileTypeProfile>` YAML; None when the app has no profile rules.
     pub(crate) profile_yaml: Option<&'static str>,
 }
 

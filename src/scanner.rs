@@ -932,7 +932,7 @@ impl StreamScanner {
     ///
     /// # Errors
     ///
-    /// Returns [`SanitizeError::SecretsError`] on decryption failure
+    /// Returns a secrets-related [`SanitizeError`] on decryption failure
     /// or [`SanitizeError::InvalidConfig`] on invalid scanner config.
     pub fn from_encrypted_secrets(
         encrypted_bytes: &[u8],
@@ -962,7 +962,7 @@ impl StreamScanner {
     ///
     /// # Errors
     ///
-    /// Returns [`SanitizeError::SecretsError`] on parse failure
+    /// Returns a secrets-related [`SanitizeError`] on parse failure
     /// or [`SanitizeError::InvalidConfig`] on invalid scanner config.
     pub fn from_plaintext_secrets(
         plaintext: &[u8],

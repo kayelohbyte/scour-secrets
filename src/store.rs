@@ -323,7 +323,7 @@ impl MappingStore {
 
     /// Snapshot the current insertion count.
     ///
-    /// Returns an opaque `usize` that can be passed to [`iter_since`] to
+    /// Returns an opaque `usize` that can be passed to [`Self::iter_since`] to
     /// iterate only the entries added *after* this point — useful for
     /// finding which mappings a structured processor pass discovered without
     /// building a full `HashSet` of all existing keys.
@@ -336,7 +336,7 @@ impl MappingStore {
 
     /// Iterate over entries added at or after the given snapshot.
     ///
-    /// `snapshot` is the value returned by a previous call to [`snapshot`].
+    /// `snapshot` is the value returned by a previous call to [`Self::snapshot`].
     /// Entries whose insertion index is ≥ `snapshot` are yielded; older
     /// entries are skipped. Still O(n) in total store size, but avoids
     /// allocating a `HashSet` of all prior keys.

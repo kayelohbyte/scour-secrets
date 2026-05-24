@@ -1,7 +1,7 @@
 //! NDJSON / JSON Lines structured processor.
 //!
 //! Processes files where each non-empty line is an independent JSON object
-//! (Newline-Delimited JSON, also called JSON Lines). Unlike the [`JsonProcessor`],
+//! (Newline-Delimited JSON, also called JSON Lines). Unlike the [`JsonProcessor`](crate::processor::json_proc::JsonProcessor),
 //! this processor never builds a full in-memory parse tree for the whole file —
 //! each line is parsed, walked, serialised, and written out independently,
 //! keeping per-line memory overhead constant regardless of input size.
