@@ -439,11 +439,12 @@ sanitize scan [OPTIONS] [INPUT]...
 | `-P, --password-file <FILE>` | Read decryption password from a file (0600/0400 only). |
 | `--app <APPS>` | App bundle(s) to load. Comma-separated. Repeatable. |
 | `--allow <PATTERN>` | Allow values through unchanged. Repeatable. Supports exact strings, `*` glob wildcards, and `regex:<pattern>` for full regex matching. |
-| `--profile <FILE>` | Field-level profile for structured files. |
+| `--profile <FILE>` | Field-level profile for structured files. Requires `--secrets-file`. |
 | `--hidden` | Walk hidden files and directories. |
-| `--ignore-path <GLOB>` | Exclude paths by glob pattern. Repeatable. |
+| `--exclude-path <GLOB>` | Exclude paths by glob pattern during directory walks. Repeatable. |
+| `--include-path <GLOB>` | Only scan files matching this glob pattern during directory walks. Repeatable. When both `--include-path` and `--exclude-path` match a file, exclusion wins. No effect on explicitly named file arguments. |
 | `-r, --report [PATH]` | Write a JSON match report to PATH (or stderr if omitted). |
-| `--entropy-threshold <THRESHOLD>` | Enable Shannon entropy detection for high-entropy tokens (bits/char, e.g. `4.5`). Off by default. |
+| `--entropy-threshold <THRESHOLD>` | Enable Shannon entropy detection for high-entropy tokens (bits/char, e.g. `4.5`). Off by default. Prints an entropy calibration histogram to stderr (counts only — no token values). |
 | `--use-default` | Load built-in balanced detection patterns. Additive with `--secrets-file` and `--app`. |
 | `--json` | Write findings as NDJSON to stdout instead of human-readable log. One JSON object per file plus a summary line. Implies `--progress off`. |
 | `--threads <N>` | Worker thread count (default: auto). |
@@ -460,10 +461,12 @@ sanitize scan [OPTIONS] [INPUT]...
 ```
 
 ```bash
-sanitize scan app.log -s secrets.yaml          # scan a file
-sanitize scan ./logs/ --app gitlab             # scan a directory
-sanitize scan . --ignore-path tests/fixtures/  # skip test fixtures
-git diff HEAD | sanitize scan -s secrets.yaml  # scan a patch
+sanitize scan app.log -s secrets.yaml                           # scan a file
+sanitize scan ./logs/ --app gitlab                              # scan a directory
+sanitize scan . --exclude-path tests/fixtures/                   # skip test fixtures
+sanitize scan ./logs/ --include-path '*.log'                    # only .log files
+sanitize scan ./support-bundle/ --include-path '**/*.conf' --include-path '**/*.log'
+git diff HEAD | sanitize scan -s secrets.yaml                   # scan a patch
 
 # Machine-readable output:
 sanitize scan ./logs/ --app gitlab --json
@@ -806,14 +809,15 @@ sanitize template --preset aws --overwrite
 | `--include-binary` | | Process entries that appear to be binary data (default: skip). |
 | `--threads <N>` | | Number of worker threads. When multiple input files are given, files are processed in parallel up to this limit. For a single archive input, entries are sanitized in parallel using the same budget. Defaults to the number of logical CPUs. Capped to available parallelism. |
 | `--max-archive-depth <N>` | | Maximum nesting depth for recursive archive processing (default: `3`, max: `10`). Each nesting level may buffer up to 256 MiB. Advanced flag — hidden from `--help` but works at runtime. |
-| `--profile <FILE>` | | Path to a file-type profile (JSON or YAML). Enables structured field-level sanitization for matched files. Discovered field values are automatically saved to the secrets file after the run (see `--no-structured-handoff`). Loads common allow patterns (loopback IPs, `localhost`, `example.com`, nil UUID, etc.) so those values are never replaced. See [Structured Processing](structured-processing.md). |
-| `--use-default` | | Use built-in balanced detection patterns without a secrets file. Covers API keys (AWS, GCP, GitHub, Stripe, Slack, OpenAI, Anthropic, HuggingFace, GitLab, SendGrid, npm), JWTs, emails, IPv4/IPv6, UUIDs, MAC addresses, PEM headers, password/secret key=value pairs, and credential URLs. Loads common allow patterns so loopback IPs, `localhost`, `example.com`, etc. are never replaced. Additive with `--secrets-file`, `--app`, and `--profile`. |
+| `--profile <FILE>` | | Path to a file-type profile (JSON or YAML). Enables structured field-level sanitization for matched files. **Requires `--secrets-file`** — without one, discovered field values have nowhere to go and Phase 2 runs blind, producing incomplete sanitization. The secrets file may be empty on the first run; discovered literals are appended to it automatically (see `--no-structured-handoff`) so subsequent runs catch those values everywhere. See [Structured Processing](structured-processing.md). |
+| `--use-default` | | Use built-in balanced detection patterns without a secrets file. Covers API keys (AWS, GCP, GitHub, Stripe, Slack, OpenAI, Anthropic, HuggingFace, GitLab, SendGrid, npm), JWTs, emails, IPv4/IPv6, UUIDs, MAC addresses, PEM headers, password/secret key=value pairs, and credential URLs. Loads common allow patterns so loopback IPs, `localhost`, `example.com`, etc. are never replaced. Additive with `--secrets-file`, `--app`, and `--profile`. These same built-in patterns are also loaded automatically (without this flag) when none of `--secrets-file`, `--app`, `--profile`, or `--use-default` is specified (zero-config), or when `--app` is used without `--secrets-file`. Note: `--profile` alone no longer triggers built-in defaults — use `--use-default` explicitly if you want both. |
 | `--app <APPS>` | | Load built-in secrets patterns and structured field profiles for one or more applications. Comma-separated app names (e.g. `--app gitlab` or `--app gitlab,nginx`). Additive with `--use-default`, `--secrets-file`, and `--profile`. Loads common allow patterns. Run `sanitize apps` to list available app names. |
 | `--allow <PATTERN>` | | Allow a specific value through unchanged (repeatable). Matched values are not replaced and not recorded in the mapping store — they will pass through in every file processed in the same run. Supports exact strings and `*` glob patterns. Matching is **case-insensitive** by default (patterns and values are lowercased before comparison). Examples: `--allow localhost`, `--allow "*.internal"`, `--allow "192.168.1.*"`. Allowlist entries can also be placed in the secrets file as `kind: allow` entries. |
 | `--only <PATTERN>` | | Keep only archive entries whose full path matches `PATTERN`. Must follow the archive path it applies to. Multiple `--only` flags accumulate. Combined with `--exclude`: `--only` narrows first, then `--exclude` removes. Only affects archive inputs; ignored for plain files. |
 | `--exclude <PATTERN>` | | Remove archive entries whose full path matches `PATTERN`. Must follow the archive path it applies to. Multiple `--exclude` flags accumulate. |
 | `--log-format <FMT>` | | Log output format: `human` (default) or `json`. |
 | `--progress <MODE>` | | Progress display mode: `auto`, `on`, or `off`. Default: `auto`. |
+| `--quiet` | | Suppress the post-run redaction summary and all decorative stderr output. Implies `--progress off`. Use in scripts or pipelines where only the exit code matters. |
 | `--no-progress` | | Deprecated. Use `--progress off` instead. Hidden from `--help`. |
 | `--extract-context` | | After sanitizing, scan the output for error/warning/failure keywords and embed matching lines with surrounding context in the JSON report. Each file entry in `files[]` gets its own `log_context` object. Requires `--report`. Has no effect without `--report`. For stdout paths larger than 256 MiB the flag is silently skipped (use file output and the two-pass reader path instead). |
 | `--context-lines <N>` | | Lines of context to capture before and after each keyword match when `--extract-context` is set. Default: `10`. |
@@ -822,14 +826,15 @@ sanitize template --preset aws --overwrite
 | `--max-context-matches <N>` | | Maximum number of keyword matches to capture per file when `--extract-context` is set. Default: `50`. Once this cap is hit, `truncated: true` is set in `log_context` and the rest of the file is skipped. Increase this (not `--context-lines`) when you are missing events. |
 | `--context-case-sensitive` | | Make keyword matching case-sensitive when `--extract-context` is set. By default keywords are matched case-insensitively (`error` matches `ERROR`, `Error`, etc.). |
 | `--findings [PATH]` | | Write per-file findings as NDJSON to PATH (or stdout when PATH is omitted or `-`). Each line is a JSON object: one `{"type":"file",...}` per processed file with match count and per-pattern breakdown, followed by `{"type":"summary",...}`. In default sanitize mode, use `--output` to redirect sanitized content so stdout is free for findings. |
-| `--entropy-threshold <THRESHOLD>` | | Enable Shannon entropy detection for high-entropy tokens not caught by pattern matching. `THRESHOLD` is bits per character (e.g. `4.5`). Tokens of 20–200 alphanumeric characters whose entropy meets or exceeds this value are treated as secrets. Off by default. Supplement with `kind: entropy` entries in the secrets file for finer control. |
+| `--entropy-threshold <THRESHOLD>` | | Enable Shannon entropy detection for high-entropy tokens not caught by pattern matching. `THRESHOLD` is bits per character (e.g. `4.5`). Tokens of 20–200 alphanumeric characters whose entropy meets or exceeds this value are treated as secrets. Off by default. Supplement with `kind: entropy` entries in the secrets file for finer control. In `--dry-run` / `sanitize scan` mode, prints an entropy calibration histogram to stderr (counts only — no token values) so you can tune the threshold before committing to a full run. See "Entropy Calibration Histogram" below. |
 | `--hidden` | | When an input is a directory, also walk hidden files and directories (names starting with `.`). VCS metadata directories (`.git`, `.hg`, `.svn`, `.bzr`) are always skipped regardless of this flag. |
-| `--ignore-path <GLOB>` | | Exclude paths matching these glob patterns from scanning (repeatable). Patterns are matched against the path relative to the input root (or against the filename alone when no `/` is present in the pattern). A trailing `/` excludes the entire subtree. Merged with `exclude` entries in `.sanitize.toml`; CLI patterns are applied in addition to, not instead of, project config patterns. Example: `--ignore-path "tests/fixtures/"`. |
+| `--exclude-path <GLOB>` | | Exclude paths matching these glob patterns from directory walks (repeatable). Patterns are matched against the path relative to the input root (or against the filename alone when no `/` is present in the pattern). A trailing `/` excludes the entire subtree. Merged with `exclude` entries in `.sanitize.toml`; CLI patterns are applied in addition to, not instead of, project config patterns. Example: `--exclude-path "tests/fixtures/"`. |
+| `--include-path <GLOB>` | | Only process files matching these glob patterns during directory walks (repeatable). Patterns use the same rules as `--exclude-path`: matched against the relative path first, then the bare filename when no `/` is present. A trailing `/` includes the entire subtree. When both `--include-path` and `--exclude-path` match a file, exclusion wins. Has no effect on explicitly named file arguments or archive entries. Example: `--include-path "**/*.log" --include-path "**/*.conf"`. |
 | `--force-text` | | Bypass all structured processors (JSON, YAML, XML, TOML, etc.) and run only the streaming scanner on every file. Use when you want a guarantee that every byte is pattern-scanned regardless of file type. |
 | `--strip-values` | | Strip all values from structured output, emitting only keys and structure. Useful for generating a profile template from a real config file without exposing any values. Bypasses the sanitization pipeline — no secrets file is required. |
 | `--strip-delimiter <DELIM>` | | Delimiter string used to split key/value lines when `--strip-values` is set. Default: `=`. Use `--strip-delimiter :` for YAML-style or nginx-style config files. Requires `--strip-values`. |
 | `--strip-comment-prefix <PREFIX>` | | Line prefix that marks a comment when `--strip-values` is set. Comment lines are preserved verbatim. Default: `#`. Use `--strip-comment-prefix //` for C-style or nginx-style comment lines. Requires `--strip-values`. |
-| `--llm [TEMPLATE]` | | Format the sanitized output as an LLM-ready prompt written to stdout instead of writing raw sanitized bytes. `TEMPLATE` selects the instruction set: `troubleshoot` (default — root cause analysis), `review-config` (configuration review and security audit), or a path to a custom template file. Combine with `--extract-context` to include notable log events in the prompt. When this flag is set, `--output` / `-o` is ignored for the main payload (the prompt goes to stdout); `--report` still writes its JSON file normally. |
+| `--llm [TEMPLATE]` | | Format the sanitized output as an LLM-ready prompt written to stdout instead of writing raw sanitized bytes. `TEMPLATE` selects the instruction set: `troubleshoot` (default — incident triage: root cause, event sequence, remediation), `review-config` (configuration review: misconfigurations and best practices), `review-security` (security posture: auth, network exposure, TLS, CVEs, hardcoded secrets), or a path to a custom template file. All built-in templates include a preamble explaining the sanitization model and instructing the LLM to ask clarifying questions rather than guessing at redacted values. Template text uses [caveman compression](https://github.com/wilpel/caveman-compression) to minimise instruction tokens (~45% reduction vs. natural prose) while preserving all semantic content. Combine with `--extract-context` to include notable log events. When this flag is set, `--output` / `-o` is ignored for the main payload (the prompt goes to stdout); `--report` still writes its JSON file normally. |
 | `-h, --help` | `-h` | Print help. |
 | `-V, --version` | `-V` | Print version. |
 
@@ -896,6 +901,106 @@ sanitize report.txt backup.zip --only 'logs/' -s secrets.yaml
 cat extra.log | sanitize - backup.zip --only 'logs/' -s secrets.yaml
 ```
 
+#### Directory Walk Filtering (`--include-path` / `--exclude-path`)
+
+`--include-path` and `--exclude-path` filter which files are processed when a directory is given as input. They apply to files discovered during the recursive walk — not to files named explicitly on the command line.
+
+**Pattern syntax**
+
+| Pattern | Meaning |
+|---------|---------|
+| `*.log` | Matches any `.log` file anywhere in the tree (bare filename match). |
+| `**/*.log` | Matches `.log` files at any depth via relative path. |
+| `logs/` | Subtree match: includes (or excludes) `logs/` and everything under it. Trailing `/` required. |
+| `vendor/` | Prunes the entire `vendor/` subtree when used with `--exclude-path`. |
+
+**Rules**
+
+- Both flags are **global** — they apply to all directory inputs in the same invocation.
+- When `--include-path` and `--exclude-path` both match a file, **exclusion wins**.
+- Patterns without a `/` are matched against the bare filename, so `*.log` skips minified files anywhere in the tree without needing a `**/*.log` prefix.
+- Neither flag affects explicitly named files or archive entries (`--only` / `--exclude` handle archives).
+
+```bash
+# Only process .log files in a directory:
+sanitize ./logs/ -s secrets.yaml --include-path '*.log'
+
+# Only .conf and .log files anywhere in the tree:
+sanitize /etc/ -s secrets.yaml --include-path '**/*.conf' --include-path '**/*.log'
+
+# Include a subtree:
+sanitize ./support-bundle/ -s secrets.yaml --include-path 'app/'
+
+# Include only logs but skip test fixtures (exclusion wins):
+sanitize ./logs/ -s secrets.yaml --include-path '*.log' --exclude-path 'tests/'
+
+# Exclude a vendor subtree (no include filter — all other files are processed):
+sanitize . -s secrets.yaml --exclude-path 'vendor/'
+```
+
+**Directory expansion feedback**
+
+When a directory input is expanded, `sanitize` prints a brief line to stderr before processing begins:
+
+```
+  14 files in /etc/nginx/ (3 excluded)
+```
+
+This line is suppressed in `--log-format json` mode (the structured `expanding directory input` log event is emitted instead). It is not suppressed by `--dry-run`.
+
+#### Redaction Summary
+
+After every successful run, `sanitize` prints a one-line redaction summary to `stderr`:
+
+```
+Redacted: 4 email, 2 ipv4, 1 auth_token
+```
+
+If nothing was found:
+
+```
+Redacted: nothing
+```
+
+Counts are sorted by frequency (highest first). In `sanitize scan` (dry-run) mode the label reads `Matched:` instead of `Redacted:` since no output is written.
+
+The summary is always printed regardless of `--progress` mode — it appears even in non-TTY and CI contexts where the live spinner is silent. Suppress it with `--quiet` when only the exit code matters (e.g. in scripts).
+
+#### Entropy Calibration Histogram
+
+When `--entropy-threshold` (or `kind: entropy` entries in the secrets file) is active **and** the run is in dry-run mode (`-n` / `sanitize scan`), `sanitize` prints an entropy calibration histogram to `stderr` after processing:
+
+```
+Entropy calibration — alphanumeric (20–200 chars):
+  ≥3.0 bits      45
+  ≥3.5 bits      23
+  ≥4.0 bits      12
+  ≥4.5 bits       3  ← threshold
+  ≥5.0 bits       1
+  ≥5.5 bits       0
+  3 candidates examined
+```
+
+Each row is the count of candidate tokens whose Shannon entropy **met or exceeded** that level. "Candidates examined" is the number of tokens that passed the charset and length filter — a useful denominator for false-positive estimation.
+
+- `← threshold` marks the row matching the configured threshold.
+- If the configured threshold does not align with a standard 0.5-bit step, a note is printed below the table.
+- If no candidates were found (no token passed the charset/length filter), prints `no candidates found` instead of the table.
+- For `kind: entropy` entries with a non-default label, the header shows `Entropy calibration [label_name] — ...`.
+- The histogram is always printed to `stderr`, even when `--quiet` is set, because the calibration data is the primary output of a dry-run entropy scan.
+
+This output contains only counts — no token values are ever printed or stored.
+
+Use this to tune your threshold before a full run:
+
+```bash
+# See how many tokens exceed each level across all files — no output written:
+sanitize scan ./logs/ --app gitlab --entropy-threshold 4.5
+
+# Adjust threshold down if too few matches, up if too many:
+sanitize scan ./logs/ --app gitlab --entropy-threshold 4.0
+```
+
 #### Progress Behavior
 
 Progress output is designed to stay safe for pipelines and machine-readable logging:
@@ -905,18 +1010,20 @@ Progress output is designed to stay safe for pipelines and machine-readable logg
 - In `auto` mode, live progress is disabled when `stderr` is not a TTY, when `TERM=dumb`, when `CI` is set, or when `--log-format json` is active.
 - In `json` log mode, spinner frames are suppressed so logs remain parseable.
 - `--progress on` forces progress reporting, but non-interactive environments fall back to milestone-style status instead of a live spinner.
+- `--quiet` suppresses both the redaction summary and all progress output. Implies `--progress off`.
 
 Examples:
 
 ```bash
 # Default behavior: spinner in interactive terminals, silent in CI/non-TTY.
+# Redaction summary always prints to stderr.
 sanitize large.log -s secrets.enc --encrypted-secrets --password
 
 # Force progress messages even in non-interactive environments.
 sanitize large.log -s secrets.enc --encrypted-secrets --password --progress on
 
-# Disable progress completely.
-sanitize large.log -s secrets.enc --encrypted-secrets --password --no-progress
+# Suppress all decorative output (summary + progress). Exit code only.
+sanitize large.log -s secrets.enc --encrypted-secrets --password --quiet
 
 # Redirect sanitized payload and progress separately.
 sanitize large.log -s secrets.enc --encrypted-secrets --password --progress on > clean.log 2> progress.log
@@ -927,12 +1034,13 @@ sanitize large.log -s secrets.enc --encrypted-secrets --password --log-format js
 
 #### Output Naming
 
-When no `--output` is given, each input gets its own output file written next to the source:
+When no `--output` is given, the output location depends on the input type:
 
-| Input type | Default output name |
-|------------|--------------------|
-| Plain / structured file (`foo.txt`, `a.json`) | `<stem>-sanitized.<ext>` — e.g. `foo-sanitized.txt`, `a-sanitized.json` |
-| Archive (`data.tar`, `data.tar.gz`, `archive.zip`) | `<stem>.sanitized.<ext>` — e.g. `data.sanitized.tar`, `data.sanitized.tar.gz`, `archive.sanitized.zip` |
+| Input type | Default output |
+|------------|----------------|
+| Plain / structured file (`foo.txt`, `a.json`) | `<stem>-sanitized.<ext>` next to the source — e.g. `foo-sanitized.txt` |
+| Archive (`data.tar`, `data.tar.gz`, `archive.zip`) | `<stem>.sanitized.<ext>` next to the source — e.g. `data.sanitized.tar.gz` |
+| **Directory** (`logs/`, `/etc/nginx/`) | **`<dirname>-sanitized/` peer directory** — tree structure is mirrored inside it. E.g. `sanitize logs/` → `logs-sanitized/` with all relative paths preserved. |
 | Stdin (no file path) | stdout |
 
 When multiple inputs map to the same computed output name within one run, a numeric suffix is appended automatically (e.g. `same-sanitized-1.txt`, `same-sanitized-2.txt`).
@@ -940,6 +1048,7 @@ When multiple inputs map to the same computed output name within one run, a nume
 When `--output <PATH>` is given:
 - **Single input:** writes to that exact path.
 - **Multiple inputs:** `PATH` is treated as a directory. The directory is created if absent. Output files are placed inside it using the per-input naming rules above.
+- **Directory input with `--output`:** the tree is mirrored into the specified output directory (same as without `--output`, but under your chosen path).
 
 
 #### Stdin Support
@@ -1011,6 +1120,13 @@ sanitize a.log b.log c.log -s secrets.yaml   # same result as c b a order
 ```bash
 # Sanitize a single log file (output goes to data-sanitized.log):
 sanitize data.log -s secrets.yaml
+
+# Sanitize a directory (output goes to logs-sanitized/, tree structure preserved):
+sanitize logs/ -s secrets.yaml
+# Produces: logs-sanitized/app.log  logs-sanitized/sub/db.log  …
+
+# Sanitize a directory to an explicit output location:
+sanitize logs/ -s secrets.yaml -o /tmp/clean-logs/
 
 # Sanitize multiple files in one command:
 sanitize test.txt a.json b.zip -s secrets.yaml
@@ -1113,8 +1229,12 @@ sanitize app.conf --strip-values --strip-comment-prefix // -o app-stripped.conf
 # Generate a sanitized LLM-ready prompt with built-in troubleshoot template:
 sanitize app.log -s secrets.yaml --llm
 
-# Use a specific LLM template:
+# Configuration review:
 sanitize app.log -s secrets.yaml --llm review-config
+
+# Security posture review:
+sanitize nginx.conf --app nginx --llm review-security
+sanitize kubeconfig --app kubernetes --llm review-security
 
 # Use a custom template file:
 sanitize app.log -s secrets.yaml --llm /path/to/my-template.txt
@@ -1126,13 +1246,20 @@ sanitize app.log -s secrets.yaml --report /tmp/report.json --extract-context --l
 sanitize app.log -s secrets.yaml --entropy-threshold 4.5
 sanitize app.log -s secrets.yaml --entropy-threshold 4.0 --report report.json
 
-# Exclude paths from scanning:
-sanitize ./logs/ -s secrets.yaml --ignore-path "tests/fixtures/"
-sanitize ./logs/ -s secrets.yaml --ignore-path "vendor/" --ignore-path "**/*.generated.*"
+# Exclude paths from a directory walk:
+sanitize ./logs/ -s secrets.yaml --exclude-path "tests/fixtures/"
+sanitize ./logs/ -s secrets.yaml --exclude-path "vendor/" --exclude-path "**/*.generated.*"
+
+# Only process specific file types in a directory:
+sanitize ./support-bundle/ -s secrets.yaml --include-path '*.log'
+sanitize /etc/ -s secrets.yaml --include-path '**/*.conf' --include-path '**/*.yaml'
+
+# Combine include and exclude (exclusion wins when both match):
+sanitize ./logs/ -s secrets.yaml --include-path '*.log' --exclude-path "tests/"
 
 # Walk hidden files (dot-files) in a directory:
 sanitize ./config/ -s secrets.yaml --hidden
-sanitize . --app gitlab --hidden --ignore-path ".git/"
+sanitize . --app gitlab --hidden --exclude-path ".git/"
 ```
 
 ### `sanitize encrypt`

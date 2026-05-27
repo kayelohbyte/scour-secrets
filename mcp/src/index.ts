@@ -13,6 +13,8 @@
  *   SANITIZE_MCP_THREADS            worker thread cap for every sanitize invocation (default: unset = CLI default = logical CPUs)
  *   SANITIZE_MCP_MAX_ARCHIVE_DEPTH  default maximum archive nesting depth (default: 2; CLI default is 3)
  *   SANITIZE_SECRETS_DIR            base directory for namespace resolution (required for `namespace` param)
+ *   SANITIZE_MCP_FILES_DENYLIST     comma-separated glob patterns for file paths that the `files` param must never match
+ *                                   (e.g. "secrets/**,*.key,*.pem"). Patterns without '/' also match the basename.
  *
  * Namespace directory layout:
  *   $SANITIZE_SECRETS_DIR/
@@ -24,7 +26,8 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio";
-import { join } from "@std/path";
+import { basename, join, resolve } from "@std/path";
+import { globToRegExp } from "@std/path/glob-to-regexp";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
@@ -47,6 +50,21 @@ const THREADS_ARGS: string[] = (() => {
   return t ? ["--threads", t] : [];
 })();
 const SANITIZE_SECRETS_DIR = Deno.env.get("SANITIZE_SECRETS_DIR");
+const SANITIZE_SECRETS_DIR_RESOLVED = SANITIZE_SECRETS_DIR
+  ? resolve(SANITIZE_SECRETS_DIR)
+  : undefined;
+
+// Operator-configured denylist: comma-separated glob patterns.
+const FILES_DENYLIST: RegExp[] = (() => {
+  const raw = Deno.env.get("SANITIZE_MCP_FILES_DENYLIST");
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => globToRegExp(p, { extended: true, globstar: true }));
+})();
+
 // Keep in sync with version field in Cargo.toml.
 const SERVER_VERSION = "0.9.0";
 
@@ -187,6 +205,35 @@ function validatePath(p: string, paramName: string, allowAbsolute = false): void
   const segments = p.replace(/\\/g, "/").split("/");
   if (segments.some((s) => s === "..")) {
     throw new Error(`${paramName} must not contain '..' path traversal segments`);
+  }
+}
+
+/**
+ * Guard `files` entries against three threat classes:
+ *   1. Paths inside $SANITIZE_SECRETS_DIR (operator secrets store)
+ *   2. .password files (namespace encryption keys)
+ *   3. Operator-configured denylist patterns (SANITIZE_MCP_FILES_DENYLIST)
+ */
+function validateFilesPath(p: string): void {
+  if (basename(p) === ".password") {
+    throw new Error(`files path '${p}' is not permitted: .password files cannot be processed`);
+  }
+
+  if (SANITIZE_SECRETS_DIR_RESOLVED) {
+    const abs = resolve(p);
+    if (abs === SANITIZE_SECRETS_DIR_RESOLVED || abs.startsWith(SANITIZE_SECRETS_DIR_RESOLVED + "/")) {
+      throw new Error(`files path '${p}' is not permitted: path resolves inside SANITIZE_SECRETS_DIR`);
+    }
+  }
+
+  if (FILES_DENYLIST.length > 0) {
+    const normalized = p.replace(/\\/g, "/");
+    const base = basename(normalized);
+    for (const pattern of FILES_DENYLIST) {
+      if (pattern.test(normalized) || pattern.test(base)) {
+        throw new Error(`files path '${p}' is not permitted: matches operator denylist`);
+      }
+    }
   }
 }
 
@@ -372,7 +419,7 @@ interface InlinePattern {
 function buildSecretsJson(patterns: InlinePattern[]): string {
   return JSON.stringify(
     patterns.map((p) => {
-      const kind = p.kind ?? "literal";
+      const kind = p.kind ?? "regex";
       if (kind !== "allow" && !p.category) {
         throw new Error(`pattern "${p.name}" requires a category when kind is "${kind}"`);
       }
@@ -426,7 +473,7 @@ async function toolSanitize(params: {
   force_text?: boolean;
   include_binary?: boolean;
   hidden?: boolean;
-  ignore_path?: string[];
+  exclude_path?: string[];
   max_archive_depth?: number;
   entropy_threshold?: number;
   extract_context?: boolean;
@@ -451,6 +498,7 @@ async function toolSanitize(params: {
   if (hasFiles) {
     for (const f of params.files!) {
       validatePath(f, "files", true);
+      validateFilesPath(f);
     }
   } else {
     checkContentSize(params.content!);
@@ -512,8 +560,8 @@ async function toolSanitize(params: {
     if (params.force_text) commonArgs.push("--force-text");
     if (params.include_binary) commonArgs.push("--include-binary");
     if (params.hidden) commonArgs.push("--hidden");
-    if (params.ignore_path?.length) {
-      for (const pattern of params.ignore_path) commonArgs.push("--ignore-path", pattern);
+    if (params.exclude_path?.length) {
+      for (const pattern of params.exclude_path) commonArgs.push("--exclude-path", pattern);
     }
     if (params.entropy_threshold !== undefined) {
       commonArgs.push("--entropy-threshold", String(params.entropy_threshold));
@@ -657,7 +705,7 @@ async function toolScan(params: {
   force_text?: boolean;
   include_binary?: boolean;
   hidden?: boolean;
-  ignore_path?: string[];
+  exclude_path?: string[];
   max_archive_depth?: number;
   entropy_threshold?: number;
   strict?: boolean;
@@ -672,7 +720,7 @@ async function toolScan(params: {
     throw new Error("'content' and 'files' are mutually exclusive — provide one or the other");
   }
   if (hasFiles) {
-    for (const f of params.files!) validatePath(f, "files", true);
+    for (const f of params.files!) { validatePath(f, "files", true); validateFilesPath(f); }
   } else {
     checkContentSize(params.content!);
   }
@@ -725,8 +773,8 @@ async function toolScan(params: {
     if (params.force_text) commonArgs.push("--force-text");
     if (params.include_binary) commonArgs.push("--include-binary");
     if (params.hidden) commonArgs.push("--hidden");
-    if (params.ignore_path?.length) {
-      for (const pattern of params.ignore_path) commonArgs.push("--ignore-path", pattern);
+    if (params.exclude_path?.length) {
+      for (const pattern of params.exclude_path) commonArgs.push("--exclude-path", pattern);
     }
     if (params.entropy_threshold !== undefined) {
       commonArgs.push("--entropy-threshold", String(params.entropy_threshold));
@@ -788,7 +836,7 @@ async function toolStripConfigValues(params: {
     throw new Error("'content' and 'files' are mutually exclusive — provide one or the other");
   }
   if (hasFiles) {
-    for (const f of params.files!) validatePath(f, "files", true);
+    for (const f of params.files!) { validatePath(f, "files", true); validateFilesPath(f); }
   } else {
     checkContentSize(params.content!);
   }
@@ -1140,7 +1188,7 @@ const SanitizeSchema = {
     .describe(
       "Also walk hidden files and directories (names starting with '.'). By default dot-files are skipped when expanding directories.",
     ),
-  ignore_path: z
+  exclude_path: z
     .array(z.string())
     .optional()
     .describe(
@@ -1249,7 +1297,7 @@ const ScanSchema = {
     .describe(
       "Also walk hidden files and directories (names starting with '.'). By default dot-files are skipped when expanding directories.",
     ),
-  ignore_path: z
+  exclude_path: z
     .array(z.string())
     .optional()
     .describe(
@@ -1547,6 +1595,67 @@ server.tool(
         isError: true,
       };
     }
+  },
+);
+
+server.tool(
+  "list_processors",
+  "List all supported input format processors (json, yaml, toml, csv, jsonl, etc.) and the --format flag value to use for each. Use this to discover which format_flag to pass to the sanitize or scan tools when the file extension is ambiguous or missing.",
+  {},
+  async () => {
+    const processors = [
+      { name: "json",       format_flag: "json",      description: "JSON objects and arrays" },
+      { name: "yaml",       format_flag: "yaml",      description: "YAML documents" },
+      { name: "toml",       format_flag: "toml",      description: "TOML configuration files" },
+      { name: "xml",        format_flag: "xml",       description: "XML documents" },
+      { name: "csv",        format_flag: "csv",       description: "Comma-separated values" },
+      { name: "jsonl",      format_flag: "jsonl",     description: "Newline-delimited JSON (one object per line)" },
+      { name: "key_value",  format_flag: "key-value", description: "Key=value pairs (e.g. .env files)" },
+      { name: "env",        format_flag: "env",       description: "Shell environment files (KEY=VALUE)" },
+      { name: "ini",        format_flag: "ini",       description: "INI configuration files with [sections]" },
+      { name: "log",        format_flag: "log",       description: "Unstructured log files (scanner only)" },
+      { name: "text",       format_flag: "text",      description: "Plain text (scanner only; default for unknown extensions)" },
+    ];
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          processors,
+          note: "Pass the format_flag value as the `format` parameter to sanitize or scan when auto-detection is insufficient.",
+        }, null, 2),
+      }],
+    };
+  },
+);
+
+server.tool(
+  "list_templates",
+  "List the built-in LLM prompt templates available via the llm_template parameter of the sanitize tool. Each template formats the sanitized output for a different analysis task.",
+  {},
+  async () => {
+    const templates = [
+      {
+        name: "troubleshoot",
+        description: "Incident triage: asks the LLM to identify root cause, event sequence, and remediation steps from sanitized logs.",
+      },
+      {
+        name: "review-config",
+        description: "Configuration audit: asks the LLM to flag misconfigurations, security concerns, and best-practice violations.",
+      },
+      {
+        name: "review-security",
+        description: "Security posture review: asks the LLM to assess authentication, network exposure, TLS settings, hardcoded secrets, and known CVEs.",
+      },
+    ];
+    return {
+      content: [{
+        type: "text" as const,
+        text: JSON.stringify({
+          templates,
+          note: "Pass the template name as llm_template to the sanitize tool, e.g. { llm_template: 'troubleshoot' }.",
+        }, null, 2),
+      }],
+    };
   },
 );
 

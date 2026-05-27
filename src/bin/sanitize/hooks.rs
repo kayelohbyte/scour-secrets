@@ -128,7 +128,7 @@ pub(crate) fn build_hook_flags(args: &InstallHookArgs) -> String {
     if let Some(ref app) = args.app {
         flags.push(format!("--app {}", sh_quote(app)));
     }
-    if let Some(ref s) = args.secrets {
+    if let Some(ref s) = args.secrets_file {
         flags.push(format!("-s {}", sh_quote(&s.to_string_lossy())));
     }
     flags.join(" ")
@@ -470,7 +470,7 @@ pub(crate) fn run_install_hook(args: &InstallHookArgs) -> Result<(), (String, i3
     if let Some(ref app) = args.app {
         println!("  Apps:     {app}");
     }
-    if let Some(ref s) = args.secrets {
+    if let Some(ref s) = args.secrets_file {
         println!("  Secrets:  {}", s.display());
     }
     println!();

@@ -30,6 +30,9 @@ Write a profile file describing which fields to sanitize, then pass it with `--p
 ```
 
 ```bash
+# --secrets-file is required when using --profile.
+# The file can be empty on the first run — sanitize populates it with discovered
+# literals automatically so Phase 2 can match them in logs and other files.
 sanitize config.yaml -s secrets.yaml --profile profile.yaml
 ```
 
@@ -440,7 +443,7 @@ SANITIZE_PASSWORD=secret sanitize app.log \
   --secrets-file secrets.yaml
 ```
 
-If `--secrets-file` points to a path that doesn't exist yet, `--deterministic` creates it automatically on the first run.
+A secrets file is always required when using `--profile`. The file can be empty on the first run — `--deterministic` will create it if it does not yet exist.
 
 The replacement value for any given input is determined solely by the password and the original string — not by the secrets file contents. This means:
 

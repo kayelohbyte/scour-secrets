@@ -386,9 +386,9 @@ fn run_apps_list() -> Result<(), (String, i32)> {
 fn run_apps_add(args: &AppsAddArgs) -> Result<(), (String, i32)> {
     validate_app_name(&args.name).map_err(|e| (e, 1))?;
 
-    if args.profile.is_none() && args.secrets.is_none() {
+    if args.profile.is_none() && args.secrets_file.is_none() {
         return Err((
-            "at least one of --profile or --secrets must be provided".into(),
+            "at least one of --profile or --secrets-file must be provided".into(),
             1,
         ));
     }
@@ -418,9 +418,9 @@ fn run_apps_add(args: &AppsAddArgs) -> Result<(), (String, i32)> {
         let _profiles: Vec<FileTypeProfile> =
             parse_yaml_file(path).map_err(|e| (format!("--profile: {e}"), 1))?;
     }
-    if let Some(ref path) = args.secrets {
+    if let Some(ref path) = args.secrets_file {
         let _secrets: Vec<SecretEntry> =
-            parse_yaml_file(path).map_err(|e| (format!("--secrets: {e}"), 1))?;
+            parse_yaml_file(path).map_err(|e| (format!("--secrets-file: {e}"), 1))?;
     }
 
     fs::create_dir_all(&target_dir)
@@ -435,7 +435,7 @@ fn run_apps_add(args: &AppsAddArgs) -> Result<(), (String, i32)> {
             )
         })?;
     }
-    if let Some(ref src) = args.secrets {
+    if let Some(ref src) = args.secrets_file {
         let dst = target_dir.join("secrets.yaml");
         fs::copy(src, &dst).map_err(|e| {
             (
@@ -449,7 +449,7 @@ fn run_apps_add(args: &AppsAddArgs) -> Result<(), (String, i32)> {
     if args.profile.is_some() {
         println!("  profile.yaml  ✓");
     }
-    if args.secrets.is_some() {
+    if args.secrets_file.is_some() {
         println!("  secrets.yaml  ✓");
     }
     println!("\nUse it with:  sanitize <file> --app {}", args.name);

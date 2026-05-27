@@ -155,7 +155,7 @@ fn llm_troubleshoot_template_explicit() {
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("Root cause") && stdout.contains("remediation"),
+        stdout.contains("Root cause") && stdout.contains("Remediation"),
         "got:\n{stdout}"
     );
 }

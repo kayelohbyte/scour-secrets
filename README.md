@@ -64,12 +64,17 @@ cat > profile.yaml <<'EOF'
       category: ipv4
 EOF
 
-# 2. Sanitize a config file — only matched fields are replaced:
-sanitize config.yaml --profile profile.yaml
+# 2. Create a secrets file (can be empty — sanitize populates it on the first run):
+touch secrets.yaml
+
+# 3. Sanitize a config file — only matched fields are replaced:
+sanitize config.yaml --profile profile.yaml -s secrets.yaml
 # Comments, indentation, and unmatched values are preserved exactly.
 # NDJSON/log files are processed line-by-line in bounded memory (streaming).
+# --secrets-file is required with --profile: values discovered in Phase 1 are
+# written into it so the Phase 2 scanner can match them in logs and other files.
 
-# 3. Combine with a secrets file to also catch those values in logs:
+# 4. Second run (and beyond) — Phase 2 now catches those values everywhere:
 sanitize config.yaml app.log --profile profile.yaml -s secrets.yaml
 # Values found in config.yaml are replaced in app.log with the same substitutes.
 ```
@@ -255,8 +260,10 @@ For project-stable allowlist entries, add them directly to your secrets file usi
 ### Quick Start — Stdin Pipes
 
 When reading from stdin (no file arguments, or explicit `-` marker), sanitized
-output goes to **stdout** automatically. File inputs always produce a
-`<stem>-sanitized.<ext>` sibling file unless `-o` overrides the destination.
+output goes to **stdout** automatically. File inputs produce a
+`<stem>-sanitized.<ext>` sibling file. Directory inputs produce a
+`<dirname>-sanitized/` peer directory with the tree structure preserved. Use
+`-o` to override any of these defaults.
 
 ```bash
 # Pipe from grep → sanitized output on stdout:
@@ -345,6 +352,33 @@ sanitize data.log -s secrets.enc --encrypted-secrets -p
 sanitize data.log -s secrets.enc --encrypted-secrets -P /run/secrets/pw
 ```
 
+### Redaction Summary
+
+After every successful run, `sanitize` prints a one-line summary to `stderr` showing what was redacted:
+
+```
+Redacted: 4 email, 2 ipv4, 1 auth_token
+```
+
+If nothing matched: `Redacted: nothing`. Counts are sorted by frequency. In `sanitize scan` (dry-run) mode the label reads `Matched:` instead. The summary appears in all contexts — TTY, CI, and non-TTY pipelines alike. Suppress it with `--quiet` when only the exit code matters.
+
+### Entropy Calibration Histogram
+
+When `--entropy-threshold` is active in dry-run / `sanitize scan` mode, `sanitize` also prints a calibration histogram to stderr showing how many candidate tokens fall at each entropy level. This helps tune the threshold before a full run:
+
+```
+Entropy calibration — alphanumeric (20–200 chars):
+  ≥3.0 bits      45
+  ≥3.5 bits      23
+  ≥4.0 bits      12
+  ≥4.5 bits       3  ← threshold
+  ≥5.0 bits       1
+  ≥5.5 bits       0
+  3 candidates examined
+```
+
+Only counts are printed — no token values are ever shown.
+
 ### Startup Config Summary
 
 When running interactively (TTY or `--progress on`), `sanitize` prints a one-line-per-setting summary of the resolved configuration to stderr before processing begins:
@@ -377,6 +411,8 @@ cargo build --release
 ```
 
 Binaries are placed at `target/release/sanitize`.
+
+> **Windows:** Building from source requires the MSVC linker. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and select the **Desktop development with C++** workload before running `cargo build`.
 
 ### As a library
 
@@ -457,7 +493,7 @@ SANITIZE_BIN=/usr/local/bin/sanitize \
 
 | Tool | Description |
 |------|-------------|
-| `sanitize` | Sanitize inline text or files. Set `llm_template: 'troubleshoot'` or `'review-config'` for a fully-formatted LLM prompt. |
+| `sanitize` | Sanitize inline text or files. Set `llm_template: 'troubleshoot'`, `'review-config'`, or `'review-security'` for a fully-formatted LLM prompt. |
 | `scan` | Scan for secrets and return a report without modifying content. |
 | `strip_config_values` | Strip values from key=value config files, preserving keys and structure. |
 | `test_allowlist` | Test which values match a set of allowlist patterns. |
@@ -513,7 +549,9 @@ Set `llm_template` to skip raw sanitized text and get a structured prompt ready 
 }
 ```
 
-Returns a pre-structured incident-triage prompt with the sanitized content embedded. Use `"review-config"` for configuration audit:
+Returns a pre-structured incident-triage prompt with the sanitized content embedded. All built-in templates instruct the LLM to ask clarifying questions rather than guessing at redacted values.
+
+Use `"review-config"` for configuration review:
 
 ```json
 {
@@ -521,6 +559,17 @@ Returns a pre-structured incident-triage prompt with the sanitized content embed
   "files": ["/etc/gitlab/gitlab.rb"],
   "app": ["gitlab"],
   "llm_template": "review-config"
+}
+```
+
+Use `"review-security"` for a security posture assessment covering auth, network exposure, TLS/crypto, CVEs, and hardcoded secret placement:
+
+```json
+{
+  "tool": "sanitize",
+  "files": ["/etc/nginx/nginx.conf"],
+  "app": ["nginx"],
+  "llm_template": "review-security"
 }
 ```
 
@@ -874,12 +923,12 @@ Tokens of 20–200 alphanumeric characters whose Shannon entropy exceeds the thr
   "tool": "sanitize",
   "files": ["/repo/logs/"],
   "use_default": true,
-  "ignore_path": ["tests/fixtures/", "vendor/", "**/*.generated.*"],
+  "exclude_path": ["tests/fixtures/", "vendor/", "**/*.generated.*"],
   "hidden": true
 }
 ```
 
-`ignore_path` excludes paths matching glob patterns (trailing `/` prunes entire subtrees). `hidden` walks dot-files and dot-directories that would otherwise be skipped.
+`exclude_path` excludes paths matching glob patterns (trailing `/` prunes entire subtrees). `include_path` restricts the walk to only files matching those patterns — when both match, exclusion wins. `hidden` walks dot-files and dot-directories that would otherwise be skipped.
 
 ##### Create a starter secrets file
 
@@ -1023,6 +1072,7 @@ Use `{env:VAR}` syntax to forward existing shell variables into the server proce
 ### Requirements
 
 - Rust 1.74 or later (stable toolchain)
+- **Windows only:** [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **Desktop development with C++** workload (provides the MSVC linker required by the default `x86_64-pc-windows-msvc` target). VS Code alone is not sufficient. Alternatively, use the GNU toolchain target (`x86_64-pc-windows-gnu`) via MSYS2/MinGW-w64.
 
 ---
 
@@ -1151,18 +1201,36 @@ sanitize app.log -s secrets.yaml --entropy-threshold 4.5
 sanitize ./configs/ -s secrets.yaml --entropy-threshold 4.0 --report report.json
 ```
 
-**Exclude paths from scanning:**
+**Exclude paths from a directory walk:**
 
 ```bash
-sanitize ./logs/ -s secrets.yaml --ignore-path "tests/fixtures/"
-sanitize . --app gitlab --ignore-path "vendor/" --ignore-path "**/*.generated.*"
+sanitize ./logs/ -s secrets.yaml --exclude-path "tests/fixtures/"
+sanitize . --app gitlab --exclude-path "vendor/" --exclude-path "**/*.generated.*"
 ```
+
+**Only process specific file types in a directory:**
+
+```bash
+sanitize ./support-bundle/ -s secrets.yaml --include-path '*.log'
+sanitize /etc/ -s secrets.yaml --include-path '**/*.conf' --include-path '**/*.yaml'
+
+# Combine include and exclude — exclusion wins when both match:
+sanitize ./logs/ -s secrets.yaml --include-path '*.log' --exclude-path "tests/"
+```
+
+**Directory expansion feedback** — before processing starts, a brief line is printed to stderr:
+
+```
+  14 files in /etc/nginx/ (3 excluded)
+```
+
+Suppressed in `--log-format json` mode (structured log event is emitted instead).
 
 **Walk hidden files when scanning a directory:**
 
 ```bash
 sanitize . -s secrets.yaml --hidden
-sanitize . --app gitlab --hidden --ignore-path ".git/"
+sanitize . --app gitlab --hidden --exclude-path ".git/"
 ```
 
 **Extract context from sanitized output (error/warning snippets for LLM sharing):**
@@ -1177,11 +1245,14 @@ sanitize app.log -s secrets.yaml --report report.json --extract-context --contex
 **Generate an LLM-ready prompt (sanitized content + structured summary):**
 
 ```bash
-# Built-in troubleshoot template (default):
+# Built-in troubleshoot template (default — incident triage):
 sanitize app.log -s secrets.yaml --llm
 
-# Built-in review-config template:
+# Configuration review:
 sanitize app.log -s secrets.yaml --llm review-config
+
+# Security posture review:
+sanitize nginx.conf --app nginx --llm review-security
 
 # Custom template file:
 sanitize app.log -s secrets.yaml --llm /path/to/prompt-template.txt
@@ -1189,6 +1260,8 @@ sanitize app.log -s secrets.yaml --llm /path/to/prompt-template.txt
 # Combine with --extract-context to include notable events:
 sanitize app.log -s secrets.yaml --report /tmp/r.json --extract-context --llm troubleshoot
 ```
+
+Built-in template text uses [caveman compression](https://github.com/wilpel/caveman-compression) to minimise instruction tokens (~45% reduction vs. natural prose) while preserving all semantic content.
 
 **Strip values from a config file (reveal structure without exposing secrets):**
 
@@ -1211,7 +1284,7 @@ See [docs/cli-reference.md](docs/cli-reference.md) for the complete set of examp
 
 ## Limitations
 
-- **Structured-to-scanner handoff.** When a field-level profile is active and a `--secrets-file` is provided, values discovered in typed fields are automatically appended to that secrets file as `kind: literal` entries so the scanner pass can catch those same values in logs, comments, and unstructured text. This is intentional — disabling it weakens coverage. Pass `--no-structured-handoff` to suppress the write if needed. In CI pipelines, consider setting `no_structured_handoff: true` in `settings.yaml` or `.sanitize.toml`.
+- **Structured-to-scanner handoff.** When `--profile` is active (which requires `--secrets-file`), values discovered in typed fields are automatically appended to that secrets file as `kind: literal` entries so the scanner pass can catch those same values in logs, comments, and unstructured text. This is intentional — disabling it weakens coverage. Pass `--no-structured-handoff` to suppress the write if needed. In CI pipelines, consider setting `no_structured_handoff: true` in `settings.yaml` or `.sanitize.toml`. For `--app` bundles that include a profile, the handoff only runs when `--secrets-file` is also provided explicitly.
 
 - **No restore.** Replacements are one-way by design. There is no undo, decrypt-output, or reverse-mapping capability.
 - **Deterministic mode caveats.** Deterministic replacements require the same secrets key and the same secret values to produce identical output. Changing the secrets file or key produces entirely different replacements.

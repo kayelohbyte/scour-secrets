@@ -90,9 +90,11 @@ fn auto_progress_is_silent_in_non_tty_mode() {
 
     assert!(stdout.trim().is_empty());
     assert!(!file_output.contains("SUPERSECRET"));
+    // Progress animations ("Scanning", "done") must not appear; the one-line
+    // redaction summary ("Redacted: …") is always emitted and is expected.
     assert!(
-        stderr.trim().is_empty(),
-        "expected no progress output in auto/non-TTY mode, got: {stderr}"
+        !stderr.contains("Scanning") && !stderr.contains("done"),
+        "expected no progress animation in auto/non-TTY mode, got: {stderr}"
     );
 }
 

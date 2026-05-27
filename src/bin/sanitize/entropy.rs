@@ -1,5 +1,6 @@
 use sanitize_engine::secrets::{parse_category, SecretEntry};
 use sanitize_engine::{Category, MappingStore, ScanStats, StreamScanner};
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
@@ -18,6 +19,15 @@ impl EntropyCharset {
             "hex" => Self::Hex,
             "any" => Self::Any,
             _ => Self::Alphanumeric,
+        }
+    }
+
+    pub(crate) fn describe(&self) -> &'static str {
+        match self {
+            Self::Alphanumeric => "alphanumeric",
+            Self::Base64 => "base64",
+            Self::Hex => "hex",
+            Self::Any => "any printable",
         }
     }
 
@@ -54,6 +64,97 @@ impl Default for EntropyConfig {
             category: Category::AuthToken,
         }
     }
+}
+
+/// Standard entropy thresholds used for calibration histograms.
+pub(crate) const HISTOGRAM_THRESHOLDS: [f64; 6] = [3.0, 3.5, 4.0, 4.5, 5.0, 5.5];
+
+/// Candidate token counts bucketed by entropy level, for calibration output.
+/// Token values are never stored — only counts.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct EntropyBuckets {
+    /// Count of candidates with entropy >= HISTOGRAM_THRESHOLDS[i].
+    pub(crate) counts: [u64; 6],
+    /// Total tokens examined that met the charset/length constraints.
+    pub(crate) total_candidates: u64,
+    pub(crate) label: String,
+    pub(crate) configured_threshold: f64,
+    pub(crate) min_length: usize,
+    pub(crate) max_length: usize,
+    pub(crate) charset_desc: &'static str,
+}
+
+impl EntropyBuckets {
+    pub(crate) fn merge(&mut self, other: &Self) {
+        for (a, b) in self.counts.iter_mut().zip(other.counts.iter()) {
+            *a += b;
+        }
+        self.total_candidates += other.total_candidates;
+    }
+}
+
+/// Scan `input` for candidate tokens and bucket them by entropy level.
+///
+/// Produces one `EntropyBuckets` per config. Token values are never stored
+/// or returned — only per-threshold counts and the total candidate tally.
+/// Intended for calibration output in dry-run mode.
+pub(crate) fn entropy_histogram_bytes(
+    input: &[u8],
+    configs: &[EntropyConfig],
+) -> Vec<EntropyBuckets> {
+    let mut results: Vec<EntropyBuckets> = configs
+        .iter()
+        .map(|cfg| EntropyBuckets {
+            counts: [0u64; 6],
+            total_candidates: 0,
+            label: cfg.label.clone(),
+            configured_threshold: cfg.threshold,
+            min_length: cfg.min_length,
+            max_length: cfg.max_length,
+            charset_desc: cfg.charset.describe(),
+        })
+        .collect();
+
+    if results.is_empty() || input.is_empty() {
+        return results;
+    }
+
+    let mut pos = 0;
+    while pos < input.len() {
+        let token_end = input[pos..]
+            .iter()
+            .position(|b| ENTROPY_DELIMITERS.contains(b))
+            .map(|p| pos + p)
+            .unwrap_or(input.len());
+
+        let token = &input[pos..token_end];
+
+        if !token.is_empty() {
+            let mut bits_opt: Option<f64> = None;
+            for (cfg, bucket) in configs.iter().zip(results.iter_mut()) {
+                if token.len() >= cfg.min_length
+                    && token.len() <= cfg.max_length
+                    && cfg.charset.matches_all(token)
+                {
+                    let bits = *bits_opt.get_or_insert_with(|| shannon_entropy(token));
+                    bucket.total_candidates += 1;
+                    for (j, &thresh) in HISTOGRAM_THRESHOLDS.iter().enumerate() {
+                        if bits >= thresh {
+                            bucket.counts[j] += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        if token_end < input.len() {
+            pos = token_end + 1;
+        } else {
+            pos = token_end;
+        }
+    }
+
+    results
 }
 
 fn shannon_entropy(data: &[u8]) -> f64 {
@@ -98,7 +199,7 @@ pub(crate) fn entropy_configs_from_entries(entries: &[SecretEntry]) -> Vec<Entro
 const ENTROPY_DELIMITERS: &[u8] = b" \t\n\r\"'`=:,;()[]{}|<>@#\\/^~!?&%$*";
 
 /// Scan `input` for high-entropy tokens and replace them using `store`.
-/// Returns `(output_bytes, match_count)`.
+/// Returns `(output_bytes, per_label_counts)`.
 ///
 /// Runs AFTER the main scanner so tokens already replaced (now placeholders)
 /// won't double-fire — placeholders have low entropy by design.
@@ -106,13 +207,13 @@ pub(crate) fn entropy_scan_bytes(
     input: &[u8],
     configs: &[EntropyConfig],
     store: &Arc<MappingStore>,
-) -> (Vec<u8>, u64) {
+) -> (Vec<u8>, HashMap<String, u64>) {
     if configs.is_empty() || input.is_empty() {
-        return (input.to_vec(), 0);
+        return (input.to_vec(), HashMap::new());
     }
 
     let mut output = Vec::with_capacity(input.len());
-    let mut matches: u64 = 0;
+    let mut label_counts: HashMap<String, u64> = HashMap::new();
     let mut pos = 0;
 
     while pos < input.len() {
@@ -140,7 +241,7 @@ pub(crate) fn entropy_scan_bytes(
                     } else {
                         output.extend_from_slice(token);
                     }
-                    matches += 1;
+                    *label_counts.entry(cfg.label.clone()).or_insert(0) += 1;
                     true
                 } else {
                     false
@@ -164,7 +265,7 @@ pub(crate) fn entropy_scan_bytes(
         }
     }
 
-    (output, matches)
+    (output, label_counts)
 }
 
 pub(crate) fn scanner_fallback(

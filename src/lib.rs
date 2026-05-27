@@ -150,7 +150,7 @@ pub use error::{Result, SanitizeError};
 pub use generator::{HmacGenerator, RandomGenerator, ReplacementGenerator};
 pub use llm::{
     format_llm_prompt, resolve_llm_template, LlmEntry, PROMPT_PREAMBLE, TEMPLATE_REVIEW_CONFIG,
-    TEMPLATE_TROUBLESHOOT,
+    TEMPLATE_REVIEW_SECURITY, TEMPLATE_TROUBLESHOOT,
 };
 pub use log_context::{
     extract_context, extract_context_reader, LogContextConfig, LogContextMatch, LogContextResult,

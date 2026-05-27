@@ -253,7 +253,7 @@ impl ProgressReporter {
         self.rendered_line_len = 0;
     }
 
-    fn clear_live_line(&mut self) {
+    pub(crate) fn clear_live_line(&mut self) {
         if self.rendered_line_len == 0 {
             return;
         }

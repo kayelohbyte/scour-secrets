@@ -34,6 +34,9 @@ pub(crate) struct Settings {
     /// --log-format: "human" or "json".
     #[serde(default)]
     pub(crate) log_format: Option<String>,
+    /// --log-level: "off", "error", "warn", "info", "debug", or "trace".
+    #[serde(default)]
+    pub(crate) log_level: Option<String>,
     /// --no-progress: disable progress output.
     #[serde(default)]
     pub(crate) no_progress: Option<bool>,
@@ -210,6 +213,10 @@ const SETTINGS_TEMPLATE: &str = "\
 # Log format: \"human\" (default) or \"json\" for SIEM ingestion (--log-format).
 # log_format: human
 
+# Log level: off, error, warn (default), info, debug, trace (--log-level).
+# Override with SANITIZE_LOG env var.
+# log_level: warn
+
 # Disable progress output (--no-progress).
 # no_progress: false
 ";
@@ -277,6 +284,12 @@ pub(crate) fn run_show_config() -> Result<(), (String, i32)> {
             "log_format:",
             settings.log_format.as_deref().map(|s| s.to_string()),
             "human",
+            "from settings",
+        );
+        show(
+            "log_level:",
+            settings.log_level.as_deref().map(|s| s.to_string()),
+            "warn",
             "from settings",
         );
         show(
@@ -390,7 +403,7 @@ pub(crate) fn run_init(args: &InitArgs) -> Result<(), (String, i32)> {
                 force: args.force,
                 remove: false,
                 app: None,
-                secrets: None,
+                secrets_file: None,
                 dry_run: true,
             };
             run_install_hook(&hook_args)?;
@@ -455,7 +468,7 @@ pub(crate) fn run_init(args: &InitArgs) -> Result<(), (String, i32)> {
             force: args.force,
             remove: false,
             app: None,
-            secrets: None,
+            secrets_file: None,
             dry_run: false,
         };
         run_install_hook(&hook_args)?;

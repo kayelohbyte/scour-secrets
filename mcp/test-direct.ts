@@ -722,7 +722,7 @@ test("test_allowlist", "exact pattern matches exactly", async (s) => {
   const miss1 = entries.find((e) => e.value === "Localhost");
   const miss2 = entries.find((e) => e.value === "localhost2");
   ok(hit?.allowed === true, "localhost must be allowed");
-  ok(miss1?.allowed === false, "Localhost must not match (case-sensitive)");
+  ok(miss1?.allowed === true, "Localhost matches case-insensitively (allowlist is case-insensitive by default)");
   ok(miss2?.allowed === false, "localhost2 must not match (not exact)");
 });
 
@@ -849,10 +849,11 @@ test("list_processors", "each processor has a non-empty description", async (s) 
 test("list_templates", "returns troubleshoot and review-config templates", async (s) => {
   const r = JSON.parse(toolText(await s.send("tools/call", { name: "list_templates", arguments: {} })));
   ok(Array.isArray(r.templates), "must have templates array");
-  ok(r.templates.length === 2, `expected 2 templates, got ${r.templates.length}`);
+  ok(r.templates.length === 3, `expected 3 templates, got ${r.templates.length}`);
   const names = r.templates.map((t: { name: string }) => t.name);
   ok(names.includes("troubleshoot"), "must include troubleshoot");
   ok(names.includes("review-config"), "must include review-config");
+  ok(names.includes("review-security"), "must include review-security");
 });
 
 test("list_templates", "each template has a non-empty description", async (s) => {
@@ -941,6 +942,136 @@ test("namespace", "namespace not found returns clear error", async (_s) => {
       ok(toolIsError(r), "must be isError:true");
     } finally { await ns.close(); }
   } finally { await Deno.remove(secretsDir, { recursive: true }); }
+});
+
+// ===========================================================================
+// files path guards
+// ===========================================================================
+
+test("files path guard", ".password rejected in sanitize files", async (s) => {
+  const r = await s.send("tools/call", { name: "sanitize", arguments: { files: [".password"] } });
+  ok(toolIsError(r), "must be isError:true");
+  has(toolText(r), ".password");
+});
+
+test("files path guard", ".password rejected in scan files", async (s) => {
+  const r = await s.send("tools/call", { name: "scan", arguments: { files: [".password"] } });
+  ok(toolIsError(r), "must be isError:true");
+  has(toolText(r), ".password");
+});
+
+test("files path guard", ".password rejected in strip_config_values files", async (s) => {
+  const r = await s.send("tools/call", { name: "strip_config_values", arguments: { files: [".password"] } });
+  ok(toolIsError(r), "must be isError:true");
+  has(toolText(r), ".password");
+});
+
+test("files path guard", "SANITIZE_SECRETS_DIR blocks path inside it in sanitize", async (_s) => {
+  const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-guard-" });
+  try {
+    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    try {
+      const r = await ns.send("tools/call", {
+        name: "sanitize",
+        arguments: { files: [join(secretsDir, "acme", "secrets.yaml")] },
+      });
+      ok(toolIsError(r), "must be isError:true");
+      has(toolText(r), "SANITIZE_SECRETS_DIR");
+    } finally { await ns.close(); }
+  } finally { await Deno.remove(secretsDir, { recursive: true }); }
+});
+
+test("files path guard", "SANITIZE_SECRETS_DIR blocks path inside it in scan", async (_s) => {
+  const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-guard-" });
+  try {
+    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    try {
+      const r = await ns.send("tools/call", {
+        name: "scan",
+        arguments: { files: [join(secretsDir, "acme", "secrets.yaml")] },
+      });
+      ok(toolIsError(r), "must be isError:true");
+      has(toolText(r), "SANITIZE_SECRETS_DIR");
+    } finally { await ns.close(); }
+  } finally { await Deno.remove(secretsDir, { recursive: true }); }
+});
+
+test("files path guard", "SANITIZE_SECRETS_DIR blocks path inside it in strip_config_values", async (_s) => {
+  const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-guard-" });
+  try {
+    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    try {
+      const r = await ns.send("tools/call", {
+        name: "strip_config_values",
+        arguments: { files: [join(secretsDir, "acme", "secrets.yaml")] },
+      });
+      ok(toolIsError(r), "must be isError:true");
+      has(toolText(r), "SANITIZE_SECRETS_DIR");
+    } finally { await ns.close(); }
+  } finally { await Deno.remove(secretsDir, { recursive: true }); }
+});
+
+test("files path guard", "SANITIZE_MCP_FILES_DENYLIST blocks basename glob in sanitize", async (_s) => {
+  const ns = await startSession({ SANITIZE_MCP_FILES_DENYLIST: "*.key" });
+  try {
+    const r = await ns.send("tools/call", {
+      name: "sanitize",
+      arguments: { files: ["certs/prod.key"] },
+    });
+    ok(toolIsError(r), "must be isError:true");
+    has(toolText(r), "denylist");
+  } finally { await ns.close(); }
+});
+
+test("files path guard", "SANITIZE_MCP_FILES_DENYLIST blocks globstar path in scan", async (_s) => {
+  const ns = await startSession({ SANITIZE_MCP_FILES_DENYLIST: "secrets/**" });
+  try {
+    const r = await ns.send("tools/call", {
+      name: "scan",
+      arguments: { files: ["secrets/prod/api.yaml"] },
+    });
+    ok(toolIsError(r), "must be isError:true");
+    has(toolText(r), "denylist");
+  } finally { await ns.close(); }
+});
+
+test("files path guard", "SANITIZE_MCP_FILES_DENYLIST blocks in strip_config_values, comma-separated patterns parsed", async (_s) => {
+  const ns = await startSession({ SANITIZE_MCP_FILES_DENYLIST: "*.log,secrets/**,*.pem" });
+  try {
+    const r = await ns.send("tools/call", {
+      name: "strip_config_values",
+      arguments: { files: ["logs/app.pem"] },
+    });
+    ok(toolIsError(r), "must be isError:true");
+    has(toolText(r), "denylist");
+  } finally { await ns.close(); }
+});
+
+test("files path guard", "SANITIZE_MCP_FILES_DENYLIST basename-only pattern matches full path", async (_s) => {
+  const ns = await startSession({ SANITIZE_MCP_FILES_DENYLIST: "*.pem" });
+  try {
+    const r = await ns.send("tools/call", {
+      name: "sanitize",
+      arguments: { files: ["/some/deep/path/server.pem"] },
+    });
+    ok(toolIsError(r), "must be isError:true");
+    has(toolText(r), "denylist");
+  } finally { await ns.close(); }
+});
+
+test("files path guard", "SANITIZE_MCP_FILES_DENYLIST does not block non-matching path", async (_s) => {
+  const ns = await startSession({ SANITIZE_MCP_FILES_DENYLIST: "*.key" });
+  try {
+    const tmpFile = await Deno.makeTempFile({ suffix: ".txt" });
+    try {
+      await Deno.writeTextFile(tmpFile, "safe content");
+      const r = await ns.send("tools/call", {
+        name: "sanitize",
+        arguments: { files: [tmpFile] },
+      });
+      not(toolText(r), "denylist");
+    } finally { await Deno.remove(tmpFile).catch(() => {}); }
+  } finally { await ns.close(); }
 });
 
 // ===========================================================================

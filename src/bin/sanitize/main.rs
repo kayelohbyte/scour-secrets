@@ -77,7 +77,8 @@ use hooks::{global_default_secrets_path, run_install_hook};
 
 mod entropy;
 use entropy::{
-    entropy_configs_from_entries, entropy_scan_bytes, scanner_fallback, EntropyConfig,
+    entropy_configs_from_entries, entropy_histogram_bytes, entropy_scan_bytes, scanner_fallback,
+    EntropyBuckets, EntropyConfig, HISTOGRAM_THRESHOLDS,
     NullSeekWriter,
 };
 
@@ -239,6 +240,7 @@ EXAMPLES:\n  \
   # Format sanitized output as an LLM prompt (print to stdout for piping):\n  \
   sanitize app.log -s secrets.yaml --llm | pbcopy\n  \
   sanitize config.yaml -s s.enc --encrypted-secrets -p --llm review-config\n  \
+  sanitize nginx.conf --app nginx --llm review-security\n  \
   sanitize app.log -s s.yaml --llm --extract-context --context-lines 15\n  \
   sanitize app.log -s s.yaml --llm /path/to/custom-template.txt"
 )]
@@ -267,10 +269,11 @@ struct Cli {
     /// fields to sanitize. Each profile entry names a processor, file
     /// extensions, and field-path rules (e.g. `*.password`, `database.host`).
     ///
-    /// When combined with --secrets-file the tool runs a structured pass
-    /// (replacing named fields) followed by a scanner pass (catching any
-    /// remaining secrets). Without --secrets-file only the structured pass
-    /// runs.
+    /// Requires --secrets-file. The tool runs a structured pass (replacing
+    /// named fields) followed by a scanner pass (catching any remaining
+    /// secrets). The secrets file may be empty on the first run — discovered
+    /// field values are appended to it automatically so subsequent runs can
+    /// catch those same values everywhere.
     #[arg(long = "profile", value_name = "FILE")]
     profile: Option<PathBuf>,
 
@@ -378,9 +381,19 @@ struct Cli {
     /// A trailing `/` excludes the entire subtree.
     /// Merged with `exclude` entries in `.sanitize.toml`; CLI patterns are
     /// applied in addition to, not instead of, project config patterns.
-    /// Example: --ignore-path "tests/fixtures/" --ignore-path "**/*.generated.*"
+    /// Example: --exclude-path "tests/fixtures/" --exclude-path "**/*.generated.*"
     #[arg(long, value_name = "GLOB", num_args = 1)]
-    ignore_path: Vec<String>,
+    exclude_path: Vec<String>,
+
+    /// Only process files matching these glob patterns during directory walks.
+    /// Patterns are matched against the path relative to the input root
+    /// (or against the filename alone when no `/` is present in the pattern).
+    /// A trailing `/` includes the entire subtree.
+    /// When both --include-path and --exclude-path match a file, exclusion wins.
+    /// Has no effect on explicitly named file arguments or archive entries.
+    /// Example: --include-path "**/*.log" --include-path "**/*.conf"
+    #[arg(long, value_name = "GLOB", num_args = 1)]
+    include_path: Vec<String>,
 
     /// Bypass all structured processors (JSON, YAML, XML, TOML, etc.) and
     /// run only the streaming scanner on every file.
@@ -438,6 +451,11 @@ struct Cli {
     #[arg(long, value_name = "FMT")]
     log_format: Option<String>,
 
+    /// Log level: off, error, warn (default), info, debug, or trace.
+    /// Overrides SANITIZE_LOG when both are set.
+    #[arg(long, value_name = "LEVEL")]
+    log_level: Option<String>,
+
     /// Progress display mode: auto (default), on, or off.
     #[arg(long, value_enum, value_name = "MODE")]
     progress: Option<ProgressMode>,
@@ -445,6 +463,12 @@ struct Cli {
     /// Disable live progress output. Deprecated: use `--progress off` instead.
     #[arg(long, hide = true)]
     no_progress: bool,
+
+    /// Suppress the post-run redaction summary and all decorative stderr output.
+    /// Implies --progress off. Use in scripts or pipelines where only the exit
+    /// code matters.
+    #[arg(long)]
+    quiet: bool,
 
     /// Minimum interval between live progress refreshes.
     #[arg(long, value_name = "MS", default_value_t = DEFAULT_PROGRESS_INTERVAL_MS, hide = true)]
@@ -497,6 +521,14 @@ struct Cli {
     #[arg(long, value_name = "N", default_value_t = 50)]
     max_context_matches: usize,
 
+    /// Maximum number of per-match line numbers to record in the report when
+    /// `--report` is active. Each entry stores the 1-based line number, byte
+    /// offset, and pattern label for one scanner match. Set to 0 to disable
+    /// line-number tracking entirely (useful for very large files where even
+    /// the cap overhead is undesirable). Default: 500.
+    #[arg(long, value_name = "N", default_value_t = 500)]
+    max_match_locations: usize,
+
     /// Use case-sensitive keyword matching when `--extract-context` is set.
     /// By default matching is case-insensitive (`ERROR`, `error`, and `Error`
     /// all match the keyword `error`).
@@ -531,8 +563,9 @@ struct Cli {
     /// Format sanitized output as an LLM-ready prompt on stdout instead of
     /// writing raw sanitized bytes. TEMPLATE chooses the instruction set:
     ///
-    /// - `troubleshoot` (default) — root cause analysis of logs/errors
-    /// - `review-config`          — configuration review and security audit
+    /// - `troubleshoot`    (default) — incident triage: root cause, event sequence, remediation
+    /// - `review-config`             — config review: misconfigurations, best practices
+    /// - `review-security`           — security posture: auth, exposure, TLS, CVEs, hardcoded secrets
     ///
     /// TEMPLATE may also be a path to a custom template file.
     /// Combine with `--extract-context` to include notable log events.
@@ -597,8 +630,10 @@ impl Default for Cli {
             max_structured_size: DEFAULT_MAX_STRUCTURED_FILE_SIZE,
             max_archive_depth: DEFAULT_ARCHIVE_DEPTH,
             log_format: None,
+            log_level: None,
             progress: None,
             no_progress: false,
+            quiet: false,
             progress_interval_ms: DEFAULT_PROGRESS_INTERVAL_MS,
             findings: None,
             extract_context: false,
@@ -607,13 +642,15 @@ impl Default for Cli {
             context_keywords_replace: false,
             max_context_matches: DEFAULT_MAX_MATCHES,
             context_case_sensitive: false,
+            max_match_locations: 500,
             strip_values: false,
             strip_delimiter: "=".to_string(),
             strip_comment_prefix: "#".to_string(),
             llm: None,
             app: vec![],
             allow: vec![],
-            ignore_path: vec![],
+            exclude_path: vec![],
+            include_path: vec![],
             entropy_threshold: None,
         }
     }
@@ -621,7 +658,9 @@ impl Default for Cli {
 
 impl Cli {
     fn effective_progress_mode(&self) -> ProgressMode {
-        if let Some(mode) = self.progress {
+        if self.quiet {
+            ProgressMode::Off
+        } else if let Some(mode) = self.progress {
             mode
         } else if self.no_progress {
             ProgressMode::Off
@@ -632,6 +671,10 @@ impl Cli {
 
     fn effective_log_format(&self) -> &str {
         self.log_format.as_deref().unwrap_or("human")
+    }
+
+    fn effective_log_level(&self) -> &str {
+        self.log_level.as_deref().unwrap_or("warn")
     }
 }
 
@@ -771,7 +814,7 @@ EXAMPLES:\n  \
   sanitize scan app.log -s secrets.yaml              # scan a log file\n  \
   sanitize scan ./logs/ -s secrets.yaml              # scan a directory\n  \
   sanitize scan app.log --app gitlab                 # scan using an app bundle\n  \
-  sanitize scan . --ignore-path tests/fixtures/      # skip test fixtures\n  \
+  sanitize scan . --exclude-path tests/fixtures/      # skip test fixtures\n  \
   git diff HEAD | sanitize scan                      # scan a patch from stdin\n  \
   sanitize scan app.log -s s.enc --encrypted-secrets -p  # encrypted secrets")]
     Scan(ScanArgs),
@@ -816,10 +859,10 @@ struct EncryptArgs {
     #[arg(long = "password-file", value_name = "FILE")]
     password_file: Option<PathBuf>,
 
-    /// Force input format (json, yaml, toml). Default: auto-detect from
+    /// Force secrets file format (json, yaml, toml). Default: auto-detect from
     /// file extension.
     #[arg(long, value_parser = parse_format)]
-    format: Option<SecretsFormat>,
+    secrets_format: Option<SecretsFormat>,
 
     /// Parse the plaintext before encrypting and report any errors.
     /// Enabled by default; use --no-validate to skip.
@@ -854,7 +897,7 @@ struct DecryptArgs {
     /// Validate decrypted content as secrets in this format (json, yaml,
     /// toml). If omitted, the raw decrypted bytes are written as-is.
     #[arg(long, value_parser = parse_format)]
-    format: Option<SecretsFormat>,
+    secrets_format: Option<SecretsFormat>,
 }
 
 fn parse_format(s: &str) -> Result<SecretsFormat, String> {
@@ -947,7 +990,13 @@ struct ScanArgs {
     /// Exclude paths matching these glob patterns. A trailing `/` prunes the
     /// whole subtree. Merged with `exclude` in `.sanitize.toml`.
     #[arg(long, value_name = "GLOB", num_args = 1)]
-    ignore_path: Vec<String>,
+    exclude_path: Vec<String>,
+
+    /// Only scan files matching these glob patterns during directory walks.
+    /// When both --include-path and --exclude-path match, exclusion wins.
+    /// Has no effect on explicitly named file arguments.
+    #[arg(long, value_name = "GLOB", num_args = 1)]
+    include_path: Vec<String>,
 
     /// Write a report to this path (or stderr when no path given).
     #[arg(short = 'r', long, value_name = "PATH")]
@@ -965,6 +1014,10 @@ struct ScanArgs {
     #[arg(long, value_name = "FMT")]
     log_format: Option<String>,
 
+    /// Log level: off, error, warn (default), info, debug, or trace.
+    #[arg(long, value_name = "LEVEL")]
+    log_level: Option<String>,
+
     /// Disable progress output. Deprecated: use `--progress off` instead.
     #[arg(long, hide = true)]
     no_progress: bool,
@@ -973,7 +1026,7 @@ struct ScanArgs {
     /// One JSON object per file, plus a summary line. Implies --progress off.
     /// Pipe into `jq`, `wc -l`, SIEM tools, etc.
     #[arg(long)]
-    json: bool,
+    findings: bool,
 
     /// Enable Shannon entropy detection with this threshold (bits/char, e.g. 4.5).
     #[arg(long, value_name = "THRESHOLD")]
@@ -1026,9 +1079,9 @@ pub(crate) enum AppsSubCommand {
     /// directory so the bundle is available via `--app <name>`.
     #[command(after_help = "\
 EXAMPLES:\n  \
-  sanitize apps add elastic --profile elastic.profile.yaml --secrets elastic.secrets.yaml\n  \
+  sanitize apps add elastic --profile elastic.profile.yaml --secrets-file elastic.secrets.yaml\n  \
   sanitize apps add myapp --profile myapp.profile.yaml\n  \
-  sanitize apps add myapp --secrets myapp.secrets.yaml --overwrite")]
+  sanitize apps add myapp --secrets-file myapp.secrets.yaml --overwrite")]
     Add(AppsAddArgs),
 
     /// Remove a custom app bundle from the user apps directory.
@@ -1076,7 +1129,7 @@ pub(crate) struct AppsAddArgs {
 
     /// Path to a secrets YAML file (`Vec<SecretEntry>`).
     #[arg(long, value_name = "FILE")]
-    secrets: Option<PathBuf>,
+    secrets_file: Option<PathBuf>,
 
     /// Overwrite an existing custom app bundle with the same name.
     #[arg(long)]
@@ -1173,7 +1226,7 @@ pub(crate) struct InstallHookArgs {
 
     /// Path to a secrets file to bake into the hook invocation.
     #[arg(short = 's', long, value_name = "FILE")]
-    pub(crate) secrets: Option<PathBuf>,
+    pub(crate) secrets_file: Option<PathBuf>,
 
     /// Print the hook script that would be installed without writing any files.
     #[arg(long)]
@@ -1263,7 +1316,8 @@ fn run_scan(args: &ScanArgs) -> Result<(), (String, i32)> {
         no_field_signal: false,
         include_binary: false,
         hidden: args.hidden,
-        ignore_path: args.ignore_path.clone(),
+        exclude_path: args.exclude_path.clone(),
+        include_path: args.include_path.clone(),
         force_text: false,
         threads: args.threads,
         chunk_size: 1_048_576,
@@ -1271,13 +1325,15 @@ fn run_scan(args: &ScanArgs) -> Result<(), (String, i32)> {
         max_structured_size: DEFAULT_MAX_STRUCTURED_FILE_SIZE,
         max_archive_depth: DEFAULT_ARCHIVE_DEPTH,
         log_format: args.log_format.clone(),
-        // --json suppresses progress so stdout stays clean for piping.
-        progress: if args.json || args.no_progress {
+        log_level: args.log_level.clone(),
+        // --findings suppresses progress so stdout stays clean for piping.
+        progress: if args.findings || args.no_progress {
             Some(ProgressMode::Off)
         } else {
             None
         },
         no_progress: false,
+        quiet: false,
         progress_interval_ms: DEFAULT_PROGRESS_INTERVAL_MS,
         extract_context: false,
         context_lines: DEFAULT_CONTEXT_LINES,
@@ -1285,13 +1341,14 @@ fn run_scan(args: &ScanArgs) -> Result<(), (String, i32)> {
         context_keywords_replace: false,
         max_context_matches: DEFAULT_MAX_MATCHES,
         context_case_sensitive: false,
+        max_match_locations: 0,
         strip_values: false,
         strip_delimiter: "=".to_string(),
         strip_comment_prefix: "#".to_string(),
         llm: None,
         app: args.app.clone(),
         allow: args.allow.clone(),
-        findings: if args.json {
+        findings: if args.findings {
             Some(PathBuf::from("-"))
         } else {
             None
@@ -2410,11 +2467,12 @@ fn default_archive_output(input: &Path, fmt: ArchiveFormat) -> PathBuf {
 ///
 /// **Security**: no secret values are ever passed to tracing macros —
 /// only opaque identifiers, counts, paths, and durations are logged.
-fn init_logging(log_format: &str) {
+fn init_logging(log_format: &str, log_level: &str) {
     use tracing_subscriber::fmt;
     use tracing_subscriber::EnvFilter;
 
-    let filter = EnvFilter::try_from_env("SANITIZE_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_env("SANITIZE_LOG")
+        .unwrap_or_else(|_| EnvFilter::new(log_level));
 
     match log_format {
         "json" => {
@@ -2695,6 +2753,77 @@ impl IgnoreList {
     }
 }
 
+/// Compiled glob patterns used to restrict directory walks to matching files.
+///
+/// An empty `IncludeList` is a no-op — all files are included.  When patterns
+/// are present a file must match at least one to pass.  Matching uses the same
+/// rules as `IgnoreList`: relative path first, then bare filename for patterns
+/// without a path separator.  A trailing `/` includes the entire subtree.
+///
+/// When a file matches both an `IncludeList` pattern and an `IgnoreList`
+/// pattern, exclusion wins.
+struct IncludeList {
+    patterns: Vec<(glob::Pattern, bool)>,
+}
+
+impl IncludeList {
+    fn new(raw: &[String]) -> Self {
+        let mut patterns = Vec::with_capacity(raw.len());
+        for p in raw {
+            let is_subtree = p.ends_with('/');
+            let trimmed = p.trim_end_matches('/');
+            if trimmed.is_empty() {
+                continue;
+            }
+            match glob::Pattern::new(trimmed) {
+                Ok(compiled) => patterns.push((compiled, is_subtree)),
+                Err(e) => eprintln!("warning: invalid include-path pattern '{p}': {e} — skipping"),
+            }
+        }
+        Self { patterns }
+    }
+
+    /// Returns `true` if `path` should be included (or no patterns are set).
+    fn is_included(&self, path: &Path, root: &Path) -> bool {
+        if self.patterns.is_empty() {
+            return true;
+        }
+        let opts = glob::MatchOptions {
+            case_sensitive: true,
+            require_literal_separator: true,
+            require_literal_leading_dot: false,
+        };
+        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let rel = canon_path.strip_prefix(&canon_root).unwrap_or(&canon_path);
+        let rel_str = rel.to_string_lossy();
+        let filename = path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
+
+        for (pat, is_subtree) in &self.patterns {
+            if *is_subtree {
+                let prefix = pat.as_str();
+                if rel_str.starts_with(prefix)
+                    && (rel_str.len() == prefix.len()
+                        || rel_str.as_bytes().get(prefix.len()) == Some(&b'/'))
+                {
+                    return true;
+                }
+            } else {
+                if pat.matches_with(&rel_str, opts) {
+                    return true;
+                }
+                if !pat.as_str().contains('/') && pat.matches_with(&filename, opts) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
 fn plan_input_targets(cli: &Cli) -> Result<Vec<InputTarget>, String> {
     let explicit_stdin_count = cli.input.iter().filter(|p| p.as_os_str() == "-").count();
 
@@ -2711,10 +2840,11 @@ fn plan_input_targets(cli: &Cli) -> Result<Vec<InputTarget>, String> {
         }]);
     }
 
-    // ── build ignore list ─────────────────────────────────────────────────────
-    // Patterns come from two sources, merged in precedence order:
+    // ── build ignore / include lists ──────────────────────────────────────────
+    // Ignore patterns come from two sources, merged in precedence order:
     //   1. `.sanitize.toml` `exclude` field (project config)
-    //   2. `--exclude` CLI flags (override / supplement project config)
+    //   2. `--exclude-path` CLI flags (extend, not replace)
+    // Include patterns come from `--include-path` CLI flags only.
     // The anchor root for relative-path matching is the `.sanitize.toml`
     // directory when a project config was found, otherwise CWD.
     let (ignore_patterns, ignore_root): (Vec<String>, PathBuf) = {
@@ -2726,11 +2856,11 @@ fn plan_input_targets(cli: &Cli) -> Result<Vec<InputTarget>, String> {
         } else {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         };
-        // CLI --ignore-path patterns are appended last (they extend, not replace).
-        patterns.extend(cli.ignore_path.iter().cloned());
+        patterns.extend(cli.exclude_path.iter().cloned());
         (patterns, root)
     };
     let ignore_list = IgnoreList::new(&ignore_patterns);
+    let include_list = IncludeList::new(&cli.include_path);
 
     // ── expand directory inputs ───────────────────────────────────────────────
     // Each CLI argument is either a `-` (stdin), a plain file, or a directory.
@@ -2749,22 +2879,44 @@ fn plan_input_targets(cli: &Cli) -> Result<Vec<InputTarget>, String> {
                 continue;
             }
             let before = files.len();
+            // Use the input directory as the anchor for --exclude-path /
+            // --include-path so that patterns like "skip/" are matched against
+            // paths relative to the walked root, not the project config dir.
+            let walk_root = input
+                .canonicalize()
+                .unwrap_or_else(|_| input.to_path_buf());
             let files: Vec<PathBuf> = files
                 .into_iter()
                 .filter(|f| {
-                    if ignore_list.is_excluded(f, &ignore_root) {
+                    if ignore_list.is_excluded(f, &walk_root) {
                         info!(path = %f.display(), "excluded by ignore pattern");
-                        false
-                    } else {
-                        true
+                        return false;
                     }
+                    if !include_list.is_included(f, &walk_root) {
+                        info!(path = %f.display(), "excluded by include-path filter");
+                        return false;
+                    }
+                    true
                 })
                 .collect();
             if files.is_empty() {
-                warn!(dir = %input.display(), excluded = before, "all files in directory excluded by ignore patterns");
+                warn!(dir = %input.display(), excluded = before, "all files in directory excluded by path filters");
                 continue;
             }
-            info!(dir = %input.display(), files = files.len(), excluded = before - files.len(), "expanding directory input");
+            let excluded = before - files.len();
+            info!(dir = %input.display(), files = files.len(), excluded, "expanding directory input");
+            if cli.effective_log_format() != "json" {
+                if excluded > 0 {
+                    eprintln!(
+                        "  {} files in {} ({} excluded)",
+                        files.len(),
+                        input.display(),
+                        excluded
+                    );
+                } else {
+                    eprintln!("  {} files in {}", files.len(), input.display());
+                }
+            }
             for f in files {
                 expanded.push(ExpandedInput {
                     path: f,
@@ -2826,8 +2978,24 @@ fn plan_input_targets(cli: &Cli) -> Result<Vec<InputTarget>, String> {
                 }
                 uniquify_output_path(dest, &mut used_outputs)
             } else {
-                // No --output: place .sanitized. sibling next to the original.
-                uniquify_output_path(default_plain_output(&ei.path), &mut used_outputs)
+                // No --output: mirror the tree into a peer directory named
+                // <dirname>-sanitized/ next to the input directory.
+                // Falls back to a "sanitized/" peer when the directory has no
+                // usable name (e.g. the input was `.` or `/`).
+                let dir_name = root
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("sanitized");
+                let peer_dir = root
+                    .parent()
+                    .unwrap_or_else(|| Path::new("."))
+                    .join(format!("{dir_name}-sanitized"));
+                let dest = peer_dir.join(rel);
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)
+                        .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+                }
+                uniquify_output_path(dest, &mut used_outputs)
             }
         } else if multi_input {
             // Explicit file in a multi-file invocation.
@@ -3105,6 +3273,16 @@ fn validate_args(cli: &Cli) -> Result<(), String> {
         ));
     }
 
+    if !matches!(
+        cli.effective_log_level(),
+        "off" | "error" | "warn" | "info" | "debug" | "trace"
+    ) {
+        return Err(format!(
+            "invalid --log-level '{}': must be one of off, error, warn, info, debug, trace",
+            cli.effective_log_level()
+        ));
+    }
+
     if cli.progress_interval_ms == 0 {
         return Err("--progress-interval-ms must be greater than 0".into());
     }
@@ -3162,14 +3340,17 @@ fn validate_args(cli: &Cli) -> Result<(), String> {
         }
 
         // Validate custom template path early so the error surfaces before processing.
-        let known = matches!(template.as_str(), "troubleshoot" | "review-config");
+        let known = matches!(
+            template.as_str(),
+            "troubleshoot" | "review-config" | "review-security"
+        );
         if !known {
             let path = Path::new(template);
             if !path.exists() {
                 return Err(format!(
                     "--llm template '{}' is not a known template name and the path \
                      does not exist.\n\
-                     Built-in templates: troubleshoot, review-config\n\
+                     Built-in templates: troubleshoot, review-config, review-security\n\
                      To use a custom template, provide a path to an existing file.",
                     template
                 ));
@@ -3338,6 +3519,78 @@ fn print_run_header(cli: &Cli, snap: &CliConfigSnapshot, json_logs: bool) {
 // Processing helpers
 // ---------------------------------------------------------------------------
 
+/// Merge entropy per-label counts into an existing `ScanStats`.
+fn merge_entropy_counts(stats: &mut ScanStats, label_counts: HashMap<String, u64>) {
+    let total: u64 = label_counts.values().sum();
+    stats.matches_found += total;
+    stats.replacements_applied += total;
+    for (label, count) in label_counts {
+        *stats.pattern_counts.entry(label).or_insert(0) += count;
+    }
+}
+
+/// Merge per-buffer entropy histogram data into the shared accumulator.
+fn accumulate_entropy_histogram(
+    acc: &Arc<Mutex<Vec<EntropyBuckets>>>,
+    buf: &[u8],
+    configs: &[EntropyConfig],
+) {
+    let local = entropy_histogram_bytes(buf, configs);
+    let mut guard = acc.lock().expect("entropy histogram lock");
+    if guard.is_empty() {
+        *guard = local;
+    } else {
+        for (dst, src) in guard.iter_mut().zip(local.iter()) {
+            dst.merge(src);
+        }
+    }
+}
+
+/// Print the entropy calibration histogram to stderr.
+///
+/// Shows candidate token counts by entropy level so users can tune
+/// `--entropy-threshold` before committing to a full sanitization run.
+/// No token values are printed.
+fn print_entropy_histogram(buckets: &[EntropyBuckets]) {
+    for b in buckets {
+        let label_suffix = if b.label != "high_entropy_token" {
+            format!(" [{}]", b.label)
+        } else {
+            String::new()
+        };
+        if b.total_candidates == 0 {
+            eprintln!(
+                "Entropy calibration{} — {} ({}–{} chars): no candidates found",
+                label_suffix, b.charset_desc, b.min_length, b.max_length
+            );
+            continue;
+        }
+        eprintln!(
+            "Entropy calibration{} — {} ({}–{} chars):",
+            label_suffix, b.charset_desc, b.min_length, b.max_length
+        );
+        for (i, &thresh) in HISTOGRAM_THRESHOLDS.iter().enumerate() {
+            let count = b.counts[i];
+            let marker = if (thresh - b.configured_threshold).abs() < 1e-9 {
+                "  ← threshold"
+            } else {
+                ""
+            };
+            eprintln!("  ≥{:.1} bits  {:>6}{}", thresh, count, marker);
+        }
+        if !HISTOGRAM_THRESHOLDS
+            .iter()
+            .any(|&t| (t - b.configured_threshold).abs() < 1e-9)
+        {
+            eprintln!(
+                "  (configured threshold {:.2} bits falls between standard levels above)",
+                b.configured_threshold
+            );
+        }
+        eprintln!("  {} candidates examined", b.total_candidates);
+    }
+}
+
 /// Build a scan progress callback that forwards updates to the shared reporter.
 ///
 /// Eliminates the boilerplate of cloning the `SharedProgressReporter` and
@@ -3358,6 +3611,42 @@ fn make_scan_callback(
     }
 }
 
+/// Scan a reader while collecting per-match line numbers up to `max_locations`.
+///
+/// Returns `(stats, locations, truncated)`. When `max_locations` is 0 the
+/// location Vec is always empty and `truncated` is always false — use this
+/// to disable line-number tracking with zero overhead from the collection
+/// side (the scanner still tracks newlines internally; set
+/// `--max-match-locations 0` when that overhead is unacceptable).
+fn scan_with_locations<R, W>(
+    scanner: &StreamScanner,
+    reader: R,
+    writer: W,
+    total_bytes: Option<u64>,
+    progress_cb: impl FnMut(&sanitize_engine::ScanProgress),
+    max_locations: usize,
+) -> Result<(ScanStats, Vec<sanitize_engine::scanner::MatchLocation>, bool), String>
+where
+    R: std::io::Read,
+    W: std::io::Write,
+{
+    let mut locations: Vec<sanitize_engine::scanner::MatchLocation> = Vec::new();
+    let mut truncated = false;
+    let stats = scanner
+        .scan_reader_with_callbacks(reader, writer, total_bytes, progress_cb, |loc| {
+            if max_locations == 0 {
+                return;
+            }
+            if locations.len() < max_locations {
+                locations.push(loc);
+            } else {
+                truncated = true;
+            }
+        })
+        .map_err(|e| format!("scanner error: {e}"))?;
+    Ok((stats, locations, truncated))
+}
+
 // ---------------------------------------------------------------------------
 // Processing
 // ---------------------------------------------------------------------------
@@ -3375,6 +3664,7 @@ fn process_stdin(
     progress: Option<&SharedProgressReporter>,
     llm_collector: Option<&LlmCollector>,
     entropy_configs: &Arc<Vec<EntropyConfig>>,
+    entropy_histogram_acc: Option<&Arc<Mutex<Vec<EntropyBuckets>>>>,
 ) -> Result<bool, String> {
     // Determine whether structured processing should be attempted.
     // Skipped entirely when --force-text is set.
@@ -3414,6 +3704,8 @@ fn process_stdin(
                 progress,
                 llm_collector,
                 entropy_configs,
+                cli.max_match_locations,
+                entropy_histogram_acc,
             );
         }
 
@@ -3443,22 +3735,28 @@ fn process_stdin(
                             .map_err(|e| format!("failed to build content scanner: {e}"))?;
                     let (mut output_bytes, scan_stats) =
                         scanner_fallback(&per_content_scanner, &input_bytes)?;
-                    let (ent_out, ent_matches) =
+                    let (ent_out, ent_lc) =
                         entropy_scan_bytes(&output_bytes, entropy_configs, store);
                     output_bytes = ent_out;
+                    let ent_total: u64 = ent_lc.values().sum();
                     let method = format!("structured+scan:{ext}");
                     let structured_reps = store.len().saturating_sub(store_len_before) as u64;
                     let total_replacements =
-                        structured_reps + scan_stats.replacements_applied + ent_matches;
+                        structured_reps + scan_stats.replacements_applied + ent_total;
                     if total_replacements > 0 {
                         had_matches = true;
                     }
                     if let Some(rb) = report_builder {
+                        let mut pattern_counts = scan_stats.pattern_counts.clone();
+                        for (label, count) in &ent_lc {
+                            *pattern_counts.entry(label.clone()).or_insert(0) += count;
+                        }
                         let stats = ScanStats {
                             matches_found: total_replacements,
                             replacements_applied: total_replacements,
                             bytes_processed: input_bytes.len() as u64,
                             bytes_output: output_bytes.len() as u64,
+                            pattern_counts,
                             ..Default::default()
                         };
                         rb.record_file(FileReport::from_scan_stats(
@@ -3483,10 +3781,9 @@ fn process_stdin(
             }
 
             let (mut output_bytes, mut stats) = scanner_fallback(scanner, &input_bytes)?;
-            let (ent_out, ent_matches) = entropy_scan_bytes(&output_bytes, entropy_configs, store);
+            let (ent_out, ent_lc) = entropy_scan_bytes(&output_bytes, entropy_configs, store);
             output_bytes = ent_out;
-            stats.matches_found += ent_matches;
-            stats.replacements_applied += ent_matches;
+            merge_entropy_counts(&mut stats, ent_lc);
             if stats.matches_found > 0 {
                 had_matches = true;
             }
@@ -3517,6 +3814,8 @@ fn process_stdin(
         progress,
         llm_collector,
         entropy_configs,
+        cli.max_match_locations,
+        entropy_histogram_acc,
     )
 }
 
@@ -3532,6 +3831,8 @@ fn process_stdin_streaming<R: io::Read>(
     progress: Option<&SharedProgressReporter>,
     llm_collector: Option<&LlmCollector>,
     entropy_configs: &Arc<Vec<EntropyConfig>>,
+    max_match_locations: usize,
+    entropy_histogram_acc: Option<&Arc<Mutex<Vec<EntropyBuckets>>>>,
 ) -> Result<bool, String> {
     let label = if cli.dry_run {
         "Scanning stdin (dry-run)"
@@ -3545,39 +3846,42 @@ fn process_stdin_streaming<R: io::Read>(
 
         if cli.dry_run {
             // For dry-run with entropy, buffer so we can count entropy matches.
-            let stats = if entropy_active {
+            // Dry-run doesn't write output so location tracking has no extra cost.
+            let (stats, locs, locs_truncated) = if entropy_active {
                 let mut buf: Vec<u8> = Vec::new();
-                let mut s = scanner
-                    .scan_reader_with_progress(
-                        reader,
-                        &mut buf,
-                        None,
-                        make_scan_callback(progress.clone(), label),
-                    )
-                    .map_err(|e| format!("scanner error: {e}"))?;
-                let (_ent_out, ent_matches) = entropy_scan_bytes(&buf, entropy_configs, store);
-                s.matches_found += ent_matches;
-                s.replacements_applied += ent_matches;
-                s
+                let (mut s, locs, tr) = scan_with_locations(
+                    scanner,
+                    reader,
+                    &mut buf,
+                    None,
+                    make_scan_callback(progress.clone(), label),
+                    max_match_locations,
+                )?;
+                let (_ent_out, ent_lc) = entropy_scan_bytes(&buf, entropy_configs, store);
+                merge_entropy_counts(&mut s, ent_lc);
+                if let Some(acc) = entropy_histogram_acc {
+                    accumulate_entropy_histogram(acc, &buf, entropy_configs);
+                }
+                (s, locs, tr)
             } else {
-                scanner
-                    .scan_reader_with_progress(
-                        reader,
-                        io::sink(),
-                        None,
-                        make_scan_callback(progress.clone(), label),
-                    )
-                    .map_err(|e| format!("scanner error: {e}"))?
+                let (s, locs, tr) = scan_with_locations(
+                    scanner,
+                    reader,
+                    io::sink(),
+                    None,
+                    make_scan_callback(progress.clone(), label),
+                    max_match_locations,
+                )?;
+                (s, locs, tr)
             };
             if stats.matches_found > 0 {
                 had_matches = true;
             }
             if let Some(rb) = report_builder {
-                rb.record_file(FileReport::from_scan_stats(
-                    "<stdin>".to_string(),
-                    &stats,
-                    "scanner",
-                ));
+                rb.record_file(
+                    FileReport::from_scan_stats("<stdin>".to_string(), &stats, "scanner")
+                        .with_match_locations(locs, locs_truncated),
+                );
             }
             info!(
                 matches = stats.matches_found,
@@ -3595,32 +3899,30 @@ fn process_stdin_streaming<R: io::Read>(
         if let Some(out_path) = output_path {
             if needs_buffer {
                 let mut buf: Vec<u8> = Vec::new();
-                let mut stats = scanner
-                    .scan_reader_with_progress(
-                        reader,
-                        &mut buf,
-                        None,
-                        make_scan_callback(progress.clone(), label),
-                    )
-                    .map_err(|e| format!("scanner error: {e}"))?;
+                let (mut stats, locs, locs_truncated) = scan_with_locations(
+                    scanner,
+                    reader,
+                    &mut buf,
+                    None,
+                    make_scan_callback(progress.clone(), label),
+                    max_match_locations,
+                )?;
                 if is_interrupted() {
                     return Err("interrupted — partial output discarded".into());
                 }
                 if entropy_active {
-                    let (ent_out, ent_matches) = entropy_scan_bytes(&buf, entropy_configs, store);
+                    let (ent_out, ent_lc) = entropy_scan_bytes(&buf, entropy_configs, store);
                     buf = ent_out;
-                    stats.matches_found += ent_matches;
-                    stats.replacements_applied += ent_matches;
+                    merge_entropy_counts(&mut stats, ent_lc);
                 }
                 if stats.matches_found > 0 {
                     had_matches = true;
                 }
                 if let Some(rb) = report_builder {
-                    rb.record_file(FileReport::from_scan_stats(
-                        "<stdin>".to_string(),
-                        &stats,
-                        "scanner",
-                    ));
+                    rb.record_file(
+                        FileReport::from_scan_stats("<stdin>".to_string(), &stats, "scanner")
+                            .with_match_locations(locs, locs_truncated),
+                    );
                 }
                 maybe_extract_context(&buf, "<stdin>", cli, report_builder);
                 if let Some(c) = llm_collector {
@@ -3634,14 +3936,14 @@ fn process_stdin_streaming<R: io::Read>(
                 let mut atomic_writer = AtomicFileWriter::new(out_path)
                     .map_err(|e| format!("failed to create output: {e}"))?;
 
-                let stats = scanner
-                    .scan_reader_with_progress(
-                        reader,
-                        &mut atomic_writer,
-                        None,
-                        make_scan_callback(progress.clone(), label),
-                    )
-                    .map_err(|e| format!("scanner error: {e}"))?;
+                let (stats, locs, locs_truncated) = scan_with_locations(
+                    scanner,
+                    reader,
+                    &mut atomic_writer,
+                    None,
+                    make_scan_callback(progress.clone(), label),
+                    max_match_locations,
+                )?;
 
                 if is_interrupted() {
                     return Err("interrupted — partial output discarded".into());
@@ -3655,43 +3957,43 @@ fn process_stdin_streaming<R: io::Read>(
                     had_matches = true;
                 }
                 if let Some(rb) = report_builder {
-                    rb.record_file(FileReport::from_scan_stats(
-                        "<stdin>".to_string(),
-                        &stats,
-                        "scanner",
-                    ));
+                    rb.record_file(
+                        FileReport::from_scan_stats("<stdin>".to_string(), &stats, "scanner")
+                            .with_match_locations(locs, locs_truncated),
+                    );
                 }
             }
         } else if needs_buffer {
             let mut buf: Vec<u8> = Vec::new();
-            let mut stats = scanner
-                .scan_reader_with_progress(
-                    reader,
-                    &mut buf,
-                    None,
-                    make_scan_callback(progress.clone(), label),
-                )
-                .map_err(|e| format!("scanner error: {e}"))?;
+            let (mut stats, locs, locs_truncated) = scan_with_locations(
+                scanner,
+                reader,
+                &mut buf,
+                None,
+                make_scan_callback(progress.clone(), label),
+                max_match_locations,
+            )?;
             if entropy_active {
-                let (ent_out, ent_matches) = entropy_scan_bytes(&buf, entropy_configs, store);
+                let (ent_out, ent_lc) = entropy_scan_bytes(&buf, entropy_configs, store);
                 buf = ent_out;
-                stats.matches_found += ent_matches;
-                stats.replacements_applied += ent_matches;
+                merge_entropy_counts(&mut stats, ent_lc);
             }
             if stats.matches_found > 0 {
                 had_matches = true;
             }
             if let Some(rb) = report_builder {
-                rb.record_file(FileReport::from_scan_stats(
-                    "<stdin>".to_string(),
-                    &stats,
-                    "scanner",
-                ));
+                rb.record_file(
+                    FileReport::from_scan_stats("<stdin>".to_string(), &stats, "scanner")
+                        .with_match_locations(locs, locs_truncated),
+                );
             }
             maybe_extract_context(&buf, "<stdin>", cli, report_builder);
             if let Some(c) = llm_collector {
                 maybe_collect_for_llm(&buf, "<stdin>", Some(c));
             } else {
+                if let Some(p) = progress {
+                    p.lock().expect("progress reporter lock").clear_live_line();
+                }
                 let stdout = io::stdout();
                 stdout
                     .lock()
@@ -3700,25 +4002,27 @@ fn process_stdin_streaming<R: io::Read>(
             }
         } else {
             // Direct streaming to stdout — entropy skipped (stdin is unbounded).
+            if let Some(ref p) = progress {
+                p.lock().expect("progress reporter lock").clear_live_line();
+            }
             let stdout = io::stdout();
             let writer = BufWriter::new(stdout.lock());
-            let stats = scanner
-                .scan_reader_with_progress(
-                    reader,
-                    writer,
-                    None,
-                    make_scan_callback(progress.clone(), label),
-                )
-                .map_err(|e| format!("scanner error: {e}"))?;
+            let (stats, locs, locs_truncated) = scan_with_locations(
+                scanner,
+                reader,
+                writer,
+                None,
+                make_scan_callback(progress.clone(), label),
+                max_match_locations,
+            )?;
             if stats.matches_found > 0 {
                 had_matches = true;
             }
             if let Some(rb) = report_builder {
-                rb.record_file(FileReport::from_scan_stats(
-                    "<stdin>".to_string(),
-                    &stats,
-                    "scanner",
-                ));
+                rb.record_file(
+                    FileReport::from_scan_stats("<stdin>".to_string(), &stats, "scanner")
+                        .with_match_locations(locs, locs_truncated),
+                );
             }
         }
 
@@ -3740,6 +4044,8 @@ fn process_plain_file(
     progress: Option<&SharedProgressReporter>,
     llm_collector: Option<&LlmCollector>,
     entropy_configs: &Arc<Vec<EntropyConfig>>,
+    max_match_locations: usize,
+    entropy_histogram_acc: Option<&Arc<Mutex<Vec<EntropyBuckets>>>>,
 ) -> Result<bool, String> {
     // --- binary detection ---
     let mut sample = [0u8; 512];
@@ -3858,23 +4164,26 @@ fn process_plain_file(
                         fs::File::open(input)
                             .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
                     );
-                    let stats = per_file_scanner
-                        .scan_reader_with_progress(
-                            reader,
-                            io::sink(),
-                            Some(sz),
-                            make_scan_callback(progress.clone(), &progress_label),
-                        )
-                        .map_err(|e| format!("scan error: {e}"))?;
+                    let (stats, locs, locs_truncated) = scan_with_locations(
+                        &per_file_scanner,
+                        reader,
+                        io::sink(),
+                        Some(sz),
+                        make_scan_callback(progress.clone(), &progress_label),
+                        max_match_locations,
+                    )?;
                     if stats.matches_found > 0 {
                         had_matches = true;
                     }
                     if let Some(rb) = report_builder {
-                        rb.record_file(FileReport::from_scan_stats(
-                            input.display().to_string(),
-                            &stats,
-                            &method,
-                        ));
+                        rb.record_file(
+                            FileReport::from_scan_stats(
+                                input.display().to_string(),
+                                &stats,
+                                &method,
+                            )
+                            .with_match_locations(locs, locs_truncated),
+                        );
                     }
                     info!(
                         matches = stats.matches_found,
@@ -3895,14 +4204,14 @@ fn process_plain_file(
                                 .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
                         );
                         let mut buf: Vec<u8> = Vec::new();
-                        let stats = per_file_scanner
-                            .scan_reader_with_progress(
-                                reader,
-                                &mut buf,
-                                Some(sz),
-                                make_scan_callback(progress.clone(), &progress_label),
-                            )
-                            .map_err(|e| format!("scanner error: {e}"))?;
+                        let (stats, locs, locs_truncated) = scan_with_locations(
+                            &per_file_scanner,
+                            reader,
+                            &mut buf,
+                            Some(sz),
+                            make_scan_callback(progress.clone(), &progress_label),
+                            max_match_locations,
+                        )?;
                         if is_interrupted() {
                             return Err("interrupted — partial output discarded".into());
                         }
@@ -3910,11 +4219,14 @@ fn process_plain_file(
                             had_matches = true;
                         }
                         if let Some(rb) = report_builder {
-                            rb.record_file(FileReport::from_scan_stats(
-                                input.display().to_string(),
-                                &stats,
-                                &method,
-                            ));
+                            rb.record_file(
+                                FileReport::from_scan_stats(
+                                    input.display().to_string(),
+                                    &stats,
+                                    &method,
+                                )
+                                .with_match_locations(locs, locs_truncated),
+                            );
                         }
                         maybe_extract_context(
                             &buf,
@@ -3930,14 +4242,14 @@ fn process_plain_file(
                         );
                         let mut atomic_writer = AtomicFileWriter::new(out_path)
                             .map_err(|e| format!("failed to create output: {e}"))?;
-                        let stats = per_file_scanner
-                            .scan_reader_with_progress(
-                                reader,
-                                &mut atomic_writer,
-                                Some(sz),
-                                make_scan_callback(progress.clone(), &progress_label),
-                            )
-                            .map_err(|e| format!("scanner error: {e}"))?;
+                        let (stats, locs, locs_truncated) = scan_with_locations(
+                            &per_file_scanner,
+                            reader,
+                            &mut atomic_writer,
+                            Some(sz),
+                            make_scan_callback(progress.clone(), &progress_label),
+                            max_match_locations,
+                        )?;
                         if is_interrupted() {
                             return Err("interrupted — partial output discarded".into());
                         }
@@ -3948,11 +4260,14 @@ fn process_plain_file(
                             had_matches = true;
                         }
                         if let Some(rb) = report_builder {
-                            rb.record_file(FileReport::from_scan_stats(
-                                input.display().to_string(),
-                                &stats,
-                                &method,
-                            ));
+                            rb.record_file(
+                                FileReport::from_scan_stats(
+                                    input.display().to_string(),
+                                    &stats,
+                                    &method,
+                                )
+                                .with_match_locations(locs, locs_truncated),
+                            );
                         }
                         maybe_extract_context_reader(
                             out_path,
@@ -3976,23 +4291,26 @@ fn process_plain_file(
                                 .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
                         );
                         let mut buf: Vec<u8> = Vec::new();
-                        let stats = per_file_scanner
-                            .scan_reader_with_progress(
-                                reader,
-                                &mut buf,
-                                Some(sz),
-                                make_scan_callback(progress.clone(), &progress_label),
-                            )
-                            .map_err(|e| format!("scanner error: {e}"))?;
+                        let (stats, locs, locs_truncated) = scan_with_locations(
+                            &per_file_scanner,
+                            reader,
+                            &mut buf,
+                            Some(sz),
+                            make_scan_callback(progress.clone(), &progress_label),
+                            max_match_locations,
+                        )?;
                         if stats.matches_found > 0 {
                             had_matches = true;
                         }
                         if let Some(rb) = report_builder {
-                            rb.record_file(FileReport::from_scan_stats(
-                                input.display().to_string(),
-                                &stats,
-                                &method,
-                            ));
+                            rb.record_file(
+                                FileReport::from_scan_stats(
+                                    input.display().to_string(),
+                                    &stats,
+                                    &method,
+                                )
+                                .with_match_locations(locs, locs_truncated),
+                            );
                         }
                         maybe_extract_context(
                             &buf,
@@ -4029,23 +4347,26 @@ fn process_plain_file(
                         );
                         let stdout = io::stdout();
                         let writer = BufWriter::new(stdout.lock());
-                        let stats = per_file_scanner
-                            .scan_reader_with_progress(
-                                reader,
-                                writer,
-                                Some(sz),
-                                make_scan_callback(progress.clone(), &progress_label),
-                            )
-                            .map_err(|e| format!("scanner error: {e}"))?;
+                        let (stats, locs, locs_truncated) = scan_with_locations(
+                            &per_file_scanner,
+                            reader,
+                            writer,
+                            Some(sz),
+                            make_scan_callback(progress.clone(), &progress_label),
+                            max_match_locations,
+                        )?;
                         if stats.matches_found > 0 {
                             had_matches = true;
                         }
                         if let Some(rb) = report_builder {
-                            rb.record_file(FileReport::from_scan_stats(
-                                input.display().to_string(),
-                                &stats,
-                                &method,
-                            ));
+                            rb.record_file(
+                                FileReport::from_scan_stats(
+                                    input.display().to_string(),
+                                    &stats,
+                                    &method,
+                                )
+                                .with_match_locations(locs, locs_truncated),
+                            );
                         }
                     }
                     Ok(had_matches)
@@ -4118,11 +4439,10 @@ fn process_plain_file(
 
                 // Apply entropy detection on top of the scanner output.
                 let (output_bytes, fallback_stats) = {
-                    let (ent_out, ent_matches) =
+                    let (ent_out, ent_lc) =
                         entropy_scan_bytes(&output_bytes, entropy_configs, store);
                     let stats = fallback_stats.map(|mut s| {
-                        s.matches_found += ent_matches;
-                        s.replacements_applied += ent_matches;
+                        merge_entropy_counts(&mut s, ent_lc);
                         s
                     });
                     (ent_out, stats)
@@ -4140,13 +4460,21 @@ fn process_plain_file(
                         had_matches = true;
                     }
                     if let Some(rb) = report_builder {
-                        let stats = ScanStats {
-                            matches_found: replacements,
-                            replacements_applied: replacements,
-                            bytes_processed: input_bytes.len() as u64,
-                            bytes_output: output_bytes.len() as u64,
-                            ..Default::default()
-                        };
+                        let stats = fallback_stats
+                            .map(|mut s| {
+                                s.matches_found = replacements;
+                                s.replacements_applied = replacements;
+                                s.bytes_processed = input_bytes.len() as u64;
+                                s.bytes_output = output_bytes.len() as u64;
+                                s
+                            })
+                            .unwrap_or_else(|| ScanStats {
+                                matches_found: replacements,
+                                replacements_applied: replacements,
+                                bytes_processed: input_bytes.len() as u64,
+                                bytes_output: output_bytes.len() as u64,
+                                ..Default::default()
+                            });
                         rb.record_file(FileReport::from_scan_stats(
                             input.display().to_string(),
                             &stats,
@@ -4196,39 +4524,44 @@ fn process_plain_file(
             let progress_for_scan = progress.clone();
             let sz = file_size(input)?;
             // Buffer when entropy is active so we can count entropy matches.
-            let stats = if entropy_active {
+            let (stats, locs, locs_truncated) = if entropy_active {
                 let mut buf: Vec<u8> = Vec::new();
-                let mut s = scanner
-                    .scan_reader_with_progress(
-                        reader,
-                        &mut buf,
-                        Some(sz),
-                        make_scan_callback(progress_for_scan, &progress_label),
-                    )
-                    .map_err(|e| format!("scan error: {e}"))?;
-                let (_ent_out, ent_matches) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
-                s.matches_found += ent_matches;
-                s.replacements_applied += ent_matches;
-                s
+                let (mut s, locs, tr) = scan_with_locations(
+                    scanner,
+                    reader,
+                    &mut buf,
+                    Some(sz),
+                    make_scan_callback(progress_for_scan, &progress_label),
+                    max_match_locations,
+                )?;
+                let (_ent_out, ent_lc) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
+                merge_entropy_counts(&mut s, ent_lc);
+                if let Some(acc) = entropy_histogram_acc {
+                    accumulate_entropy_histogram(acc, &buf, &ent_cfgs);
+                }
+                (s, locs, tr)
             } else {
-                scanner
-                    .scan_reader_with_progress(
-                        reader,
-                        io::sink(),
-                        Some(sz),
-                        make_scan_callback(progress_for_scan, &progress_label),
-                    )
-                    .map_err(|e| format!("scan error: {e}"))?
+                scan_with_locations(
+                    scanner,
+                    reader,
+                    io::sink(),
+                    Some(sz),
+                    make_scan_callback(progress_for_scan, &progress_label),
+                    max_match_locations,
+                )?
             };
             if stats.matches_found > 0 {
                 had_matches = true;
             }
             if let Some(rb) = report_builder {
-                rb.record_file(FileReport::from_scan_stats(
-                    input.display().to_string(),
-                    &stats,
-                    method,
-                ));
+                rb.record_file(
+                    FileReport::from_scan_stats(
+                        input.display().to_string(),
+                        &stats,
+                        method,
+                    )
+                    .with_match_locations(locs, locs_truncated),
+                );
             }
             info!(
                 matches = stats.matches_found,
@@ -4253,32 +4586,34 @@ fn process_plain_file(
                 );
                 let mut buf: Vec<u8> = Vec::new();
                 let progress_for_scan = progress.clone();
-                let mut stats = scanner
-                    .scan_reader_with_progress(
-                        reader,
-                        &mut buf,
-                        Some(file_size(input)?),
-                        make_scan_callback(progress_for_scan, &progress_label),
-                    )
-                    .map_err(|e| format!("scanner error: {e}"))?;
+                let (mut stats, locs, locs_truncated) = scan_with_locations(
+                    scanner,
+                    reader,
+                    &mut buf,
+                    Some(file_size(input)?),
+                    make_scan_callback(progress_for_scan, &progress_label),
+                    max_match_locations,
+                )?;
                 if is_interrupted() {
                     return Err("interrupted — partial output discarded".into());
                 }
                 if entropy_active {
-                    let (ent_out, ent_matches) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
+                    let (ent_out, ent_lc) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
                     buf = ent_out;
-                    stats.matches_found += ent_matches;
-                    stats.replacements_applied += ent_matches;
+                    merge_entropy_counts(&mut stats, ent_lc);
                 }
                 if stats.matches_found > 0 {
                     had_matches = true;
                 }
                 if let Some(rb) = report_builder {
-                    rb.record_file(FileReport::from_scan_stats(
-                        input.display().to_string(),
-                        &stats,
-                        method,
-                    ));
+                    rb.record_file(
+                        FileReport::from_scan_stats(
+                            input.display().to_string(),
+                            &stats,
+                            method,
+                        )
+                        .with_match_locations(locs, locs_truncated),
+                    );
                 }
                 maybe_extract_context(&buf, &input.display().to_string(), cli, report_builder);
                 if llm_opt.is_some() {
@@ -4296,14 +4631,14 @@ fn process_plain_file(
                     .map_err(|e| format!("failed to create output: {e}"))?;
 
                 let progress_for_scan = progress.clone();
-                let stats = scanner
-                    .scan_reader_with_progress(
-                        reader,
-                        &mut atomic_writer,
-                        Some(file_size(input)?),
-                        make_scan_callback(progress_for_scan, &progress_label),
-                    )
-                    .map_err(|e| format!("scanner error: {e}"))?;
+                let (stats, locs, locs_truncated) = scan_with_locations(
+                    scanner,
+                    reader,
+                    &mut atomic_writer,
+                    Some(file_size(input)?),
+                    make_scan_callback(progress_for_scan, &progress_label),
+                    max_match_locations,
+                )?;
 
                 if is_interrupted() {
                     return Err("interrupted — partial output discarded".into());
@@ -4317,11 +4652,14 @@ fn process_plain_file(
                     had_matches = true;
                 }
                 if let Some(rb) = report_builder {
-                    rb.record_file(FileReport::from_scan_stats(
-                        input.display().to_string(),
-                        &stats,
-                        method,
-                    ));
+                    rb.record_file(
+                        FileReport::from_scan_stats(
+                            input.display().to_string(),
+                            &stats,
+                            method,
+                        )
+                        .with_match_locations(locs, locs_truncated),
+                    );
                 }
                 maybe_extract_context_reader(
                     out_path,
@@ -4349,29 +4687,31 @@ fn process_plain_file(
                 );
                 let mut buf: Vec<u8> = Vec::new();
                 let progress_for_scan = progress.clone();
-                let mut stats = scanner
-                    .scan_reader_with_progress(
-                        reader,
-                        &mut buf,
-                        Some(sz),
-                        make_scan_callback(progress_for_scan, &progress_label),
-                    )
-                    .map_err(|e| format!("scanner error: {e}"))?;
+                let (mut stats, locs, locs_truncated) = scan_with_locations(
+                    scanner,
+                    reader,
+                    &mut buf,
+                    Some(sz),
+                    make_scan_callback(progress_for_scan, &progress_label),
+                    max_match_locations,
+                )?;
                 if entropy_active {
-                    let (ent_out, ent_matches) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
+                    let (ent_out, ent_lc) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
                     buf = ent_out;
-                    stats.matches_found += ent_matches;
-                    stats.replacements_applied += ent_matches;
+                    merge_entropy_counts(&mut stats, ent_lc);
                 }
                 if stats.matches_found > 0 {
                     had_matches = true;
                 }
                 if let Some(rb) = report_builder {
-                    rb.record_file(FileReport::from_scan_stats(
-                        input.display().to_string(),
-                        &stats,
-                        method,
-                    ));
+                    rb.record_file(
+                        FileReport::from_scan_stats(
+                            input.display().to_string(),
+                            &stats,
+                            method,
+                        )
+                        .with_match_locations(locs, locs_truncated),
+                    );
                 }
                 maybe_extract_context(&buf, &input.display().to_string(), cli, report_builder);
                 if llm_opt.is_some() {
@@ -4400,23 +4740,26 @@ fn process_plain_file(
                 let stdout = io::stdout();
                 let writer = BufWriter::new(stdout.lock());
                 let progress_for_scan = progress.clone();
-                let stats = scanner
-                    .scan_reader_with_progress(
-                        reader,
-                        writer,
-                        Some(sz),
-                        make_scan_callback(progress_for_scan, &progress_label),
-                    )
-                    .map_err(|e| format!("scanner error: {e}"))?;
+                let (stats, locs, locs_truncated) = scan_with_locations(
+                    scanner,
+                    reader,
+                    writer,
+                    Some(sz),
+                    make_scan_callback(progress_for_scan, &progress_label),
+                    max_match_locations,
+                )?;
                 if stats.matches_found > 0 {
                     had_matches = true;
                 }
                 if let Some(rb) = report_builder {
-                    rb.record_file(FileReport::from_scan_stats(
-                        input.display().to_string(),
-                        &stats,
-                        method,
-                    ));
+                    rb.record_file(
+                        FileReport::from_scan_stats(
+                            input.display().to_string(),
+                            &stats,
+                            method,
+                        )
+                        .with_match_locations(locs, locs_truncated),
+                    );
                 }
             }
             Ok(had_matches)
@@ -4597,6 +4940,7 @@ fn process_archive(
     report_builder: Option<&ReportBuilder>,
     progress: Option<&SharedProgressReporter>,
     suppress_inner_parallelism: bool,
+    _max_match_locations: usize,
 ) -> Result<bool, String> {
     let label = format!("Processing archive {}", input.display());
 
@@ -4767,6 +5111,7 @@ fn record_archive_stats(rb: &ReportBuilder, stats: &sanitize_engine::ArchiveStat
                 pattern_counts: std::collections::HashMap::new(),
                 method: method.clone(),
                 log_context: None,
+                match_locations: None,
             });
         }
     }
@@ -4784,6 +5129,7 @@ fn record_archive_stats(rb: &ReportBuilder, stats: &sanitize_engine::ArchiveStat
                 stats.files_processed, stats.structured_hits, stats.scanner_fallback
             ),
             log_context: None,
+            match_locations: None,
         });
     }
 }
@@ -4933,7 +5279,7 @@ fn run_encrypt(args: &EncryptArgs) -> Result<(), (String, i32)> {
 
     // Determine format.
     let format = args
-        .format
+        .secrets_format
         .or_else(|| SecretsFormat::from_extension(args.input.to_string_lossy().as_ref()));
 
     // Validate (parse) before encrypting.
@@ -4998,7 +5344,7 @@ fn run_decrypt(args: &DecryptArgs) -> Result<(), (String, i32)> {
     })?;
 
     // Optionally validate the decrypted content.
-    if let Some(fmt) = args.format {
+    if let Some(fmt) = args.secrets_format {
         eprint!("Validating... ");
         match parse_secrets(&plaintext, Some(fmt)) {
             Ok(entries) => {
@@ -5056,7 +5402,7 @@ fn run() -> Result<(), (String, i32)> {
     let cli = Cli::parse_from(std::iter::once(OsString::from("sanitize")).chain(cleaned_args));
 
     // --- initialise logging -------------------------------------------------
-    init_logging(cli.effective_log_format());
+    init_logging(cli.effective_log_format(), cli.effective_log_level());
 
     // --- dispatch subcommands -----------------------------------------------
     match &cli.command {
@@ -5125,6 +5471,9 @@ fn run_sanitize(
     }
     if cli.log_format.is_none() {
         cli.log_format = settings.log_format;
+    }
+    if cli.log_level.is_none() {
+        cli.log_level = settings.log_level;
     }
     if !cli.no_progress {
         if let Some(v) = settings.no_progress {
@@ -5222,6 +5571,29 @@ fn run_sanitize(
         if default_path.exists() {
             cli.secrets_file = Some(default_path);
         }
+    }
+
+    // --- validate profile requires a secrets file --------------------------------
+    // A profile-only run would complete Phase 1 but have no patterns for Phase 2,
+    // producing half-sanitized output with no indication of what was missed.
+    // The secrets file can be blank — it will be populated by the handoff on the
+    // first run and used by the scanner on all subsequent runs.
+    if cli.profile.is_some() && cli.secrets_file.is_none() && !cli.no_structured_handoff {
+        return Err((
+            "a secrets file is required when using --profile\n\
+             \n\
+             Without one, discovered values from the profile pass have nowhere to go\n\
+             and the scanner pass runs blind — sensitive data in logs that the profile\n\
+             would catch from config will be missed.\n\
+             \n\
+             The file can be empty on the first run; sanitize will populate it with\n\
+             discovered literals automatically:\n\
+             \n\
+             touch secrets.yaml\n\
+             sanitize --profile my.profile.yaml --secrets-file secrets.yaml [paths...]"
+                .into(),
+            1,
+        ));
     }
 
     // --- print run configuration header to stderr ----------------------------
@@ -5389,14 +5761,28 @@ fn run_sanitize(
     }
     let entropy_configs = Arc::new(entropy_configs);
 
-    // 2. Implicit baseline when --app is used without a secrets file, or when a
-    //    profile is active. --app is zero-setup: users get email, IP, JWT, and
-    //    common token patterns automatically even without a secrets file.
+    // Accumulator for entropy calibration histogram (dry-run only).
+    // Token values are never stored — only per-threshold counts.
+    let entropy_histogram_acc: Option<Arc<Mutex<Vec<EntropyBuckets>>>> =
+        if cli.dry_run && !entropy_configs.is_empty() {
+            Some(Arc::new(Mutex::new(Vec::new())))
+        } else {
+            None
+        };
+
+    // 2. Implicit baseline: load built-in patterns when no explicit detection
+    //    source is provided (zero-config), when --app is used without a secrets
+    //    file, or when a profile is active. Passing --secrets-file is the signal
+    //    that the caller knows exactly what they want, so defaults are skipped.
     //    Common allow patterns are added here — before the allowlist is built —
     //    so the store is aware of them from the first matched value.
+    let nothing_specified = cli.secrets_file.is_none()
+        && cli.app.is_empty()
+        && cli.profile.is_none()
+        && !cli.use_default;
     let load_defaults = cli.use_default
-        || (!cli.app.is_empty() && cli.secrets_file.is_none())
-        || cli.profile.is_some();
+        || nothing_specified
+        || (!cli.app.is_empty() && cli.secrets_file.is_none());
     if load_defaults {
         all_allow_patterns.extend(common_allow_patterns());
     }
@@ -5537,8 +5923,10 @@ fn run_sanitize(
 
     // --- build report builder -----------------------------------------------
     // Force report building when --llm or --findings is active so we have
-    // per-file stats available for those output paths.
-    let report_enabled = cli.report.is_some() || cli.llm.is_some() || cli.findings.is_some();
+    // per-file stats available for those output paths. Also enabled by default
+    // so the post-run redaction summary can be printed (suppressed by --quiet).
+    let report_enabled =
+        cli.report.is_some() || cli.llm.is_some() || cli.findings.is_some() || !cli.quiet;
     let report_builder = if report_enabled {
         let timestamp = SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)
@@ -5637,6 +6025,7 @@ fn run_sanitize(
                 progress_reporter.as_ref(),
                 llm_collector.as_ref(),
                 &entropy_configs,
+                entropy_histogram_acc.as_ref(),
             )
             .map_err(|e| (e, 1))?;
             had_matches |= result;
@@ -5687,6 +6076,8 @@ fn run_sanitize(
             progress_reporter.as_ref(),
             llm_collector.as_ref(),
             &entropy_configs,
+            cli.max_match_locations,
+            entropy_histogram_acc.as_ref(),
         )
         .map_err(|e| (e, 1))?;
         had_matches |= result;
@@ -5759,6 +6150,7 @@ fn run_sanitize(
                 progress_reporter.as_ref(),
                 llm_collector.as_ref(),
                 &entropy_configs,
+                entropy_histogram_acc.as_ref(),
             )
             .map_err(|e| (e, 1))?;
             had_matches |= result;
@@ -5798,6 +6190,7 @@ fn run_sanitize(
                         // suppress per-entry parallelism: file-level parallelism
                         // is already consuming the thread budget.
                         true,
+                        cli.max_match_locations,
                     )
                     .map_err(|e| (e, 1))
                 } else {
@@ -5813,6 +6206,8 @@ fn run_sanitize(
                         progress_reporter.as_ref(),
                         llm_collector.as_ref(),
                         &entropy_configs,
+                        cli.max_match_locations,
+                        entropy_histogram_acc.as_ref(),
                     )
                     .map_err(|e| (e, 1))
                 }
@@ -5845,6 +6240,7 @@ fn run_sanitize(
                         progress_reporter.as_ref(),
                         // single file target: archive entry parallelism is enabled.
                         false,
+                        cli.max_match_locations,
                     )
                     .map_err(|e| (e, 1))
                 } else {
@@ -5860,6 +6256,8 @@ fn run_sanitize(
                         progress_reporter.as_ref(),
                         llm_collector.as_ref(),
                         &entropy_configs,
+                        cli.max_match_locations,
+                        entropy_histogram_acc.as_ref(),
                     )
                     .map_err(|e| (e, 1))
                 }
@@ -6012,6 +6410,37 @@ fn run_sanitize(
                     )
                 })?;
                 info!(findings = %findings_path.display(), files = report.files.len(), "findings written");
+            }
+        }
+
+        // --- human-readable redaction summary (default on, suppressed by --quiet) ---
+        if !cli.quiet {
+            let verb = if cli.dry_run { "Matched" } else { "Redacted" };
+            if report.summary.total_matches == 0 {
+                eprintln!("{verb}: nothing");
+            } else {
+                let mut parts: Vec<(u64, &str)> = report
+                    .summary
+                    .pattern_counts
+                    .iter()
+                    .map(|(k, &v)| (v, k.as_str()))
+                    .collect();
+                parts.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)));
+                let line = parts
+                    .iter()
+                    .map(|(count, name)| format!("{count} {name}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                eprintln!("{verb}: {line}");
+            }
+        }
+    }
+
+    // --- entropy calibration histogram (dry-run with entropy active) ---------
+    if let Some(acc) = entropy_histogram_acc {
+        if let Ok(buckets) = acc.lock() {
+            if !buckets.is_empty() {
+                print_entropy_histogram(&buckets);
             }
         }
     }
@@ -6687,7 +7116,7 @@ mod tests {
 
     #[test]
     fn validate_args_accepts_known_llm_templates() {
-        for name in ["troubleshoot", "review-config"] {
+        for name in ["troubleshoot", "review-config", "review-security"] {
             let mut cli = real_file_cli();
             cli.llm = Some(name.into());
             assert!(
@@ -6729,7 +7158,7 @@ mod tests {
             force: false,
             remove: false,
             app: None,
-            secrets: None,
+            secrets_file: None,
             dry_run: false,
         };
         let script = build_hook_script(&args);
@@ -6757,7 +7186,7 @@ mod tests {
             force: false,
             remove: false,
             app: None,
-            secrets: None,
+            secrets_file: None,
             dry_run: false,
         };
         let script = build_hook_script(&args);
@@ -6784,7 +7213,7 @@ mod tests {
             force: false,
             remove: false,
             app: Some("gitlab".into()),
-            secrets: None,
+            secrets_file: None,
             dry_run: false,
         };
         let script = build_hook_script(&args);
@@ -6807,7 +7236,7 @@ mod tests {
             force: false,
             remove: false,
             app: None,
-            secrets: Some(PathBuf::from("my secrets/file.yaml")),
+            secrets_file: Some(PathBuf::from("my secrets/file.yaml")),
             dry_run: false,
         };
         let flags = build_hook_flags(&args);

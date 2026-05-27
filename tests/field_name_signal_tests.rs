@@ -54,6 +54,7 @@ fn high_entropy_password_field_is_replaced() {
             "--profile",
             profile.to_str().unwrap(),
             "--use-default",
+            "--no-structured-handoff",
             "-o",
             output.to_str().unwrap(),
         ])
@@ -88,6 +89,7 @@ fn low_entropy_password_field_is_not_replaced() {
             "--profile",
             profile.to_str().unwrap(),
             "--use-default",
+            "--no-structured-handoff",
             "-o",
             output.to_str().unwrap(),
         ])
@@ -122,6 +124,7 @@ fn enum_token_type_is_not_replaced() {
             "--profile",
             profile.to_str().unwrap(),
             "--use-default",
+            "--no-structured-handoff",
             "-o",
             output.to_str().unwrap(),
         ])
@@ -166,6 +169,7 @@ fn explicit_field_rule_takes_precedence() {
             "--profile",
             profile.to_str().unwrap(),
             "--use-default",
+            "--no-structured-handoff",
             "-o",
             output.to_str().unwrap(),
         ])
@@ -205,6 +209,7 @@ fn no_field_signal_disables_heuristic() {
             "--profile",
             profile.to_str().unwrap(),
             "--use-default",
+            "--no-structured-handoff",
             "--no-field-signal",
             "-o",
             output.to_str().unwrap(),
@@ -294,6 +299,7 @@ fn compound_field_name_password_hash_is_replaced() {
             "--profile",
             profile.to_str().unwrap(),
             "--use-default",
+            "--no-structured-handoff",
             "-o",
             output.to_str().unwrap(),
         ])
@@ -327,6 +333,7 @@ fn compound_field_name_db_password_is_replaced() {
             "--profile",
             profile.to_str().unwrap(),
             "--use-default",
+            "--no-structured-handoff",
             "-o",
             output.to_str().unwrap(),
         ])
@@ -362,6 +369,7 @@ fn compound_field_access_token_is_replaced() {
             "--profile",
             profile.to_str().unwrap(),
             "--use-default",
+            "--no-structured-handoff",
             "-o",
             output.to_str().unwrap(),
         ])
@@ -405,6 +413,7 @@ fn kv_field_signal_replaces_high_entropy_env_var() {
             "--profile",
             profile.to_str().unwrap(),
             "--use-default",
+            "--no-structured-handoff",
             "-o",
             output.to_str().unwrap(),
         ])
@@ -440,6 +449,7 @@ fn kv_field_signal_low_entropy_not_replaced() {
             "--profile",
             profile.to_str().unwrap(),
             "--use-default",
+            "--no-structured-handoff",
             "-o",
             output.to_str().unwrap(),
         ])
@@ -474,6 +484,7 @@ fn kv_api_key_replaced_in_quoted_value() {
             "--profile",
             profile.to_str().unwrap(),
             "--use-default",
+            "--no-structured-handoff",
             "-o",
             output.to_str().unwrap(),
         ])
@@ -516,6 +527,7 @@ fn api_key_high_entropy_is_replaced() {
             "--profile",
             profile.to_str().unwrap(),
             "--use-default",
+            "--no-structured-handoff",
             "-o",
             output.to_str().unwrap(),
         ])

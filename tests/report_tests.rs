@@ -255,6 +255,7 @@ fn report_json_structure_complete() {
         pattern_counts: HashMap::from([("email".into(), 3u64), ("hostname".into(), 2)]),
         method: "structured:yaml".into(),
         log_context: None,
+        match_locations: None,
     });
     let report = builder.finish();
     let json = report.to_json_pretty().unwrap();

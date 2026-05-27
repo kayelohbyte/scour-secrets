@@ -1,9 +1,9 @@
-//! Integration tests for the `--ignore-path` and `--hidden` CLI flags when
+//! Integration tests for the `--exclude-path` and `--hidden` CLI flags when
 //! sanitizing a directory tree.
 //!
 //! Covers:
-//! - `--ignore-path` skips the named file entirely
-//! - `--ignore-path` with a trailing `/` excludes an entire subtree
+//! - `--exclude-path` skips the named file entirely
+//! - `--exclude-path` with a trailing `/` excludes an entire subtree
 //! - `--hidden` is required to walk dot-files; without it they are skipped
 //! - Hidden files are silently omitted from output by default
 
@@ -55,7 +55,7 @@ fn ignore_path_excludes_matched_file() {
             dir.path().to_str().unwrap(),
             "-s",
             secrets.to_str().unwrap(),
-            "--ignore-path",
+            "--exclude-path",
             "skip.log",
             "-o",
             out_dir.to_str().unwrap(),
@@ -90,7 +90,7 @@ fn ignore_path_excludes_matched_file() {
     let skip_out = out_dir.join("skip.log");
     assert!(
         !skip_out.exists(),
-        "skip.log should be absent from outdir (ignored by --ignore-path)"
+        "skip.log should be absent from outdir (ignored by --exclude-path)"
     );
 }
 
@@ -126,7 +126,7 @@ fn ignore_path_glob_excludes_subtree() {
             dir.path().to_str().unwrap(),
             "-s",
             secrets.to_str().unwrap(),
-            "--ignore-path",
+            "--exclude-path",
             "**/fixtures/**",
             "-o",
             out_dir.to_str().unwrap(),
@@ -154,7 +154,7 @@ fn ignore_path_glob_excludes_subtree() {
     let fixture_out = out_dir.join("fixtures").join("test.log");
     assert!(
         !fixture_out.exists(),
-        "fixtures/test.log should be absent from outdir (subtree excluded by --ignore-path **/fixtures/**)"
+        "fixtures/test.log should be absent from outdir (subtree excluded by --exclude-path **/fixtures/**)"
     );
 }
 

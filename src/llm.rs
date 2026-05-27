@@ -10,6 +10,7 @@
 //! |------|----------|
 //! | `"troubleshoot"` | Incident triage — root cause, event sequence, remediation |
 //! | `"review-config"` | Config review — misconfigurations, security concerns, best practices |
+//! | `"review-security"` | Security posture — auth, exposure, TLS, CVEs, hardcoded secrets |
 //!
 //! A filesystem path can be supplied instead of a name; the file's raw content
 //! is used as-is (no substitution is applied to custom templates).
@@ -37,46 +38,66 @@ pub type LlmEntry = (String, Vec<u8>);
 /// Preamble injected into every built-in template, explaining the sanitization
 /// model to the LLM so it does not attempt to recover original values.
 pub const PROMPT_PREAMBLE: &str = "\
-Sensitive values in the content below have been sanitized:
-- Structured fields (passwords, tokens, API keys) appear as __SANITIZED-<hash>__
-- Typed values (emails, IPs, hostnames, etc.) are replaced with realistic-looking
-  substitutes of the same format and length
+Content sanitized:
+- Structured fields (passwords, tokens, API keys) → __SANITIZED-<hash>__
+- Typed values (emails, IPs, hostnames, UUIDs) → same-format/length substitute
 
-In all cases the same original value always maps to the same replacement within
-a run, so relationships and patterns in the data are preserved. Do not attempt
-to recover original values. When referencing specific values in your response,
-use the sanitized forms as shown.
+Same original = same replacement per run. Repeated values safe to correlate.
+
+No inferring originals. Critical value missing? Ask specific clarifying question. Use sanitized forms only.
 ";
 
 /// Built-in template for incident troubleshooting.
 pub const TEMPLATE_TROUBLESHOOT: &str = "\
-You are troubleshooting an incident based on sanitized output.
+SRE troubleshooting incident. Logs/output sanitized.
 
 {preamble}
-Analyze the following and provide:
-1. Root cause of any errors or failures
-2. The sequence of events that led to the issue
-3. Specific remediation steps
+Provide:
+1. Root cause — specific triggering failure
+2. Event sequence — timeline to failure
+3. Remediation — concrete fix + prevent recurrence
+
+Data insufficient? State what info needed and why. No speculating on sanitized values.
 
 ";
 
 /// Built-in template for configuration review.
 pub const TEMPLATE_REVIEW_CONFIG: &str = "\
-You are reviewing a sanitized configuration file.
+Systems engineer reviewing sanitized config.
 
 {preamble}
-Review the following and identify:
-1. Misconfigurations or invalid settings
-2. Security concerns (exposed services, weak settings, overly permissive rules)
-3. Best practice violations or missing required fields
+Identify:
+1. Misconfigurations — invalid/inconsistent settings causing failures
+2. Security concerns — exposed services, permissive rules, weak/default settings
+3. Best practice violations — deprecated options, missing fields, non-standard patterns
+4. Credential placement — flag secret locations; presence/placement = hardcoding risk
+
+Cannot assess redacted credential strength. Risk depends on actual value? Flag + ask.
+
+";
+
+/// Built-in template for security posture review.
+pub const TEMPLATE_REVIEW_SECURITY: &str = "\
+Security engineer: posture review of sanitized config/logs.
+
+{preamble}
+Assess and report:
+1. Authentication/authz — weak configs, missing enforcement, privilege issues
+2. Network exposure — ports/services/interfaces needing restriction
+3. Encryption/TLS — weak ciphers, outdated protocols, insecure defaults
+4. Hardcoded secrets — flag credential locations; presence/placement = finding
+5. Known CVEs — tie visible version strings to known weaknesses
+6. Cannot assess — list findings needing original values (e.g. password strength, token format)
+
+Cite field/file/line per finding. No guessing sanitized values. Need actual value? Ask specifically.
 
 ";
 
 /// Resolve a template name or path to its instruction text.
 ///
-/// Accepts `"troubleshoot"`, `"review-config"` (built-in templates with the
-/// preamble embedded), or an arbitrary filesystem path whose raw content is
-/// returned unchanged.
+/// Accepts `"troubleshoot"`, `"review-config"`, `"review-security"` (built-in
+/// templates with the preamble embedded), or an arbitrary filesystem path whose
+/// raw content is returned unchanged.
 ///
 /// # Errors
 ///
@@ -85,6 +106,7 @@ pub fn resolve_llm_template(template_name: &str) -> Result<String, String> {
     match template_name {
         "troubleshoot" => Ok(TEMPLATE_TROUBLESHOOT.replace("{preamble}", PROMPT_PREAMBLE)),
         "review-config" => Ok(TEMPLATE_REVIEW_CONFIG.replace("{preamble}", PROMPT_PREAMBLE)),
+        "review-security" => Ok(TEMPLATE_REVIEW_SECURITY.replace("{preamble}", PROMPT_PREAMBLE)),
         path => fs::read_to_string(path)
             .map_err(|e| format!("failed to read LLM template '{}': {e}", path)),
     }
@@ -211,13 +233,11 @@ mod tests {
     fn troubleshoot_embeds_preamble_and_instructions() {
         let t = resolve_llm_template("troubleshoot").unwrap();
         assert!(t.contains("sanitized"), "preamble should be embedded");
+        assert!(t.contains("Root cause"), "should request root cause analysis");
+        assert!(t.contains("Remediation"), "should request remediation steps");
         assert!(
-            t.contains("Root cause"),
-            "should request root cause analysis"
-        );
-        assert!(
-            t.contains("remediation"),
-            "should request remediation steps"
+            t.contains("clarifying question"),
+            "should instruct LLM to ask rather than guess"
         );
     }
 
@@ -232,6 +252,32 @@ mod tests {
         assert!(
             t.contains("Security concerns"),
             "should request security review"
+        );
+        assert!(
+            t.contains("clarifying question"),
+            "should instruct LLM to ask rather than guess"
+        );
+    }
+
+    #[test]
+    fn review_security_embeds_preamble_and_instructions() {
+        let t = resolve_llm_template("review-security").unwrap();
+        assert!(t.contains("sanitized"), "preamble should be embedded");
+        assert!(
+            t.contains("Authentication"),
+            "should cover auth review"
+        );
+        assert!(
+            t.contains("Encryption"),
+            "should cover TLS/crypto review"
+        );
+        assert!(
+            t.contains("Hardcoded"),
+            "should flag hardcoded credential placement"
+        );
+        assert!(
+            t.contains("clarifying question"),
+            "should instruct LLM to ask rather than guess"
         );
     }
 
