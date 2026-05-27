@@ -15,6 +15,15 @@
 //! A filesystem path can be supplied instead of a name; the file's raw content
 //! is used as-is (no substitution is applied to custom templates).
 //!
+//! # Prompt modes
+//!
+//! **Inline** ([`format_llm_prompt`]) — sanitized bytes are embedded directly in
+//! `<content>` blocks. Use when piping output to an LLM without writing files.
+//!
+//! **Reference** ([`format_llm_prompt_reference`]) — sanitized files are written
+//! to disk and the prompt lists their absolute paths. Use with `--output` so an
+//! agentic LLM can read the files via its own tools.
+//!
 //! # Example
 //!
 //! ```rust
@@ -31,9 +40,17 @@
 use crate::report::SanitizeReport;
 use std::fmt::Write as FmtWrite;
 use std::fs;
+use std::path::PathBuf;
 
 /// A single content entry for the LLM prompt: `(label, sanitized_bytes)`.
 pub type LlmEntry = (String, Vec<u8>);
+
+/// A reference entry for the LLM prompt: `(input_label, sanitized_output_path)`.
+///
+/// Used by [`format_llm_prompt_reference`] when sanitized files are written to
+/// disk and the prompt should reference them by absolute path instead of
+/// inlining their content.
+pub type LlmPathEntry = (String, PathBuf);
 
 /// Preamble injected into every built-in template, explaining the sanitization
 /// model to the LLM so it does not attempt to recover original values.
@@ -144,6 +161,14 @@ pub fn format_llm_prompt(
         .unwrap();
     }
 
+    if !entries.is_empty() {
+        out.push_str("## Files Analyzed\n");
+        for (label, _) in entries {
+            writeln!(out, "- {label}").unwrap();
+        }
+        out.push('\n');
+    }
+
     for (label, bytes) in entries {
         let content = String::from_utf8_lossy(bytes);
         write!(
@@ -155,42 +180,94 @@ pub fn format_llm_prompt(
     }
 
     if let Some(r) = report {
-        let notable: Vec<_> = r
-            .files
-            .iter()
-            .filter_map(|f| f.log_context.as_ref().map(|ctx| (&f.path, ctx)))
-            .filter(|(_, ctx)| ctx.match_count > 0)
-            .collect();
-
-        if !notable.is_empty() {
-            out.push_str("<notable_events>\n");
-            let mut any_truncated = false;
-            for (path, ctx) in &notable {
-                writeln!(out, "# {path}").unwrap();
-                for m in &ctx.matches {
-                    for line in &m.before {
-                        writeln!(out, "  {line}").unwrap();
-                    }
-                    writeln!(out, ">>> [{}] {}", m.keyword, m.line).unwrap();
-                    for line in &m.after {
-                        writeln!(out, "  {line}").unwrap();
-                    }
-                    out.push('\n');
-                }
-                if ctx.truncated {
-                    any_truncated = true;
-                }
-            }
-            if any_truncated {
-                out.push_str(
-                    "(notable events truncated — use --context-lines or --report for full context)\n",
-                );
-            }
-            out.push_str("</notable_events>\n");
-        }
+        append_notable_events(&mut out, r);
     }
 
     Ok(out)
+}
+
+/// Build a reference-mode LLM prompt: sanitized files are written to disk and
+/// the prompt lists their absolute paths for an agentic LLM to read directly.
+///
+/// Use this instead of [`format_llm_prompt`] when `--output` is specified so
+/// that large file sets are not inlined into the prompt.
+///
+/// # Errors
+///
+/// Returns an error string if the template cannot be resolved.
+pub fn format_llm_prompt_reference(
+    template_name: &str,
+    entries: &[LlmPathEntry],
+    report: Option<&SanitizeReport>,
+) -> Result<String, String> {
+    let mut out = resolve_llm_template(template_name)?;
+
+    if let Some(r) = report {
+        let total_replacements: u64 = r.files.iter().map(|f| f.replacements).sum();
+        write!(
+            out,
+            "## Sanitization Summary\n\
+             - Files processed: {}\n\
+             - Total replacements: {total_replacements}\n\n",
+            r.files.len()
+        )
+        .unwrap();
+    }
+
+    if !entries.is_empty() {
+        out.push_str("## Sanitized Files\n");
+        out.push_str("Read each path below to review the sanitized content:\n\n");
+        for (label, out_path) in entries {
+            writeln!(out, "- {} → {}", label, out_path.display()).unwrap();
+        }
+        out.push('\n');
+    }
+
+    if let Some(r) = report {
+        append_notable_events(&mut out, r);
+    }
+
+    Ok(out)
+}
+
+/// Append the `<notable_events>` block to `out` when the report contains
+/// keyword-matched log lines.
+fn append_notable_events(out: &mut String, report: &SanitizeReport) {
+    let notable: Vec<_> = report
+        .files
+        .iter()
+        .filter_map(|f| f.log_context.as_ref().map(|ctx| (&f.path, ctx)))
+        .filter(|(_, ctx)| ctx.match_count > 0)
+        .collect();
+
+    if notable.is_empty() {
+        return;
+    }
+
+    out.push_str("<notable_events>\n");
+    let mut any_truncated = false;
+    for (path, ctx) in &notable {
+        writeln!(out, "# {path}").unwrap();
+        for m in &ctx.matches {
+            for line in &m.before {
+                writeln!(out, "  {line}").unwrap();
+            }
+            writeln!(out, ">>> [{}] {}", m.keyword, m.line).unwrap();
+            for line in &m.after {
+                writeln!(out, "  {line}").unwrap();
+            }
+            out.push('\n');
+        }
+        if ctx.truncated {
+            any_truncated = true;
+        }
+    }
+    if any_truncated {
+        out.push_str(
+            "(notable events truncated — use --context-lines or --report for full context)\n",
+        );
+    }
+    out.push_str("</notable_events>\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -375,5 +452,74 @@ mod tests {
             first_pos < second_pos,
             "entries should appear in insertion order"
         );
+    }
+
+    #[test]
+    fn prompt_includes_files_analyzed_manifest() {
+        let entries = vec![
+            (
+                "/abs/app.log".to_string(),
+                b"sanitized line\n".to_vec(),
+            ),
+            (
+                "/abs/config.yaml".to_string(),
+                b"key: __SANITIZED__\n".to_vec(),
+            ),
+        ];
+        let prompt = format_llm_prompt("troubleshoot", &entries, None).unwrap();
+        assert!(prompt.contains("## Files Analyzed"), "got:\n{prompt}");
+        assert!(prompt.contains("- /abs/app.log"), "got:\n{prompt}");
+        assert!(prompt.contains("- /abs/config.yaml"), "got:\n{prompt}");
+        let manifest_pos = prompt.find("## Files Analyzed").unwrap();
+        let content_pos = prompt.find("<content name=").unwrap();
+        assert!(
+            manifest_pos < content_pos,
+            "manifest should precede content blocks"
+        );
+    }
+
+    #[test]
+    fn prompt_omits_files_analyzed_when_no_entries() {
+        let entries: Vec<LlmEntry> = vec![];
+        let prompt = format_llm_prompt("troubleshoot", &entries, None).unwrap();
+        assert!(
+            !prompt.contains("## Files Analyzed"),
+            "should omit manifest when no entries"
+        );
+    }
+
+    #[test]
+    fn reference_prompt_lists_output_paths() {
+        let dir = tempdir().unwrap();
+        let out1 = dir.path().join("app.log.sanitized");
+        let out2 = dir.path().join("config.yaml.sanitized");
+        let entries: Vec<LlmPathEntry> = vec![
+            ("/abs/input/app.log".to_string(), out1.clone()),
+            ("/abs/input/config.yaml".to_string(), out2.clone()),
+        ];
+        let prompt = format_llm_prompt_reference("troubleshoot", &entries, None).unwrap();
+        assert!(prompt.contains("## Sanitized Files"), "got:\n{prompt}");
+        assert!(
+            prompt.contains("/abs/input/app.log"),
+            "should include input label; got:\n{prompt}"
+        );
+        assert!(
+            prompt.contains(&out1.display().to_string()),
+            "should include output path; got:\n{prompt}"
+        );
+        assert!(
+            !prompt.contains("<content"),
+            "reference mode must not inline content"
+        );
+    }
+
+    #[test]
+    fn reference_prompt_includes_sanitization_summary() {
+        let report = make_test_report(12);
+        let entries: Vec<LlmPathEntry> = vec![];
+        let prompt =
+            format_llm_prompt_reference("troubleshoot", &entries, Some(&report)).unwrap();
+        assert!(prompt.contains("## Sanitization Summary"), "got:\n{prompt}");
+        assert!(prompt.contains("Total replacements: 12"), "got:\n{prompt}");
     }
 }

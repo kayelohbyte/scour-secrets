@@ -59,7 +59,7 @@
 //! same secrets will produce identical replacements.
 
 mod apps;
-use apps::{builtin_app_names, load_app_bundle, run_apps, user_apps_dir, BUILTIN_APPS};
+use apps::{builtin_app_names, ensure_user_app_copy, load_app_bundle, run_apps, user_apps_dir, BUILTIN_APPS};
 
 mod config;
 mod guided;
@@ -95,12 +95,12 @@ use sanitize_engine::secrets::{
 };
 use sanitize_engine::{
     atomic_write, extract_context, extract_context_reader, format_llm_prompt,
-    strip_values_from_text, ArchiveFilter, ArchiveFormat, ArchiveProcessor, ArchiveProgress,
-    AtomicFileWriter, FieldNameSignal, FileReport, FileTypeProfile, HmacGenerator, LlmEntry,
-    LogContextConfig, MappingStore, ProcessorRegistry, RandomGenerator, ReplacementGenerator,
-    ReportBuilder, ReportMetadata, ScanConfig, ScanPattern, ScanStats, StreamScanner,
-    DEFAULT_ARCHIVE_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_FIELD_SIGNAL_THRESHOLD,
-    DEFAULT_MAX_MATCHES,
+    format_llm_prompt_reference, strip_values_from_text, ArchiveFilter, ArchiveFormat,
+    ArchiveProcessor, ArchiveProgress, AtomicFileWriter, FieldNameSignal, FileReport,
+    FileTypeProfile, HmacGenerator, LlmEntry, LlmPathEntry, LogContextConfig, MappingStore,
+    ProcessorRegistry, RandomGenerator, ReplacementGenerator, ReportBuilder, ReportMetadata,
+    ScanConfig, ScanPattern, ScanStats, StreamScanner, DEFAULT_ARCHIVE_DEPTH,
+    DEFAULT_CONTEXT_LINES, DEFAULT_FIELD_SIGNAL_THRESHOLD, DEFAULT_MAX_MATCHES,
 };
 use std::collections::{HashMap, HashSet};
 use std::env;
@@ -236,12 +236,15 @@ EXAMPLES:\n  \
   # Strip values to generate a profile template (no secrets file needed):\n  \
   sanitize gitlab.rb --strip-values -o gitlab.rb.template\n  \
   cat config.rb | sanitize --strip-values\n\n  \
-  # Format sanitized output as an LLM prompt (print to stdout for piping):\n  \
+  # Inline mode: embed sanitized content in the prompt (pipe to clipboard, LLM, etc.):\n  \
   sanitize app.log -s secrets.yaml --llm | pbcopy\n  \
   sanitize config.yaml -s s.enc --encrypted-secrets -p --llm review-config\n  \
   sanitize nginx.conf --app nginx --llm review-security\n  \
   sanitize app.log -s s.yaml --llm --extract-context --context-lines 15\n  \
-  sanitize app.log -s s.yaml --llm /path/to/custom-template.txt"
+  sanitize app.log -s s.yaml --llm /path/to/custom-template.txt\n\n  \
+  # Reference mode: write sanitized files to disk, prompt lists absolute paths:\n  \
+  sanitize app.log -s s.yaml --llm --output /tmp/sanitized/app.log\n  \
+  sanitize logs/ -s s.yaml --llm review-security --output /tmp/sanitized/"
 )]
 struct Cli {
     /// Subcommand: encrypt, decrypt, or omit for default sanitize mode.
@@ -559,8 +562,8 @@ struct Cli {
     )]
     strip_comment_prefix: String,
 
-    /// Format sanitized output as an LLM-ready prompt on stdout instead of
-    /// writing raw sanitized bytes. TEMPLATE chooses the instruction set:
+    /// Format sanitized output as an LLM-ready prompt on stdout.
+    /// TEMPLATE chooses the instruction set:
     ///
     /// - `troubleshoot`    (default) — incident triage: root cause, event sequence, remediation
     /// - `review-config`             — config review: misconfigurations, best practices
@@ -568,6 +571,13 @@ struct Cli {
     ///
     /// TEMPLATE may also be a path to a custom template file.
     /// Combine with `--extract-context` to include notable log events.
+    ///
+    /// Without `--output` (inline mode): sanitized content is embedded directly
+    /// in `<content>` blocks in the prompt.
+    ///
+    /// With `--output` (reference mode): sanitized files are written to disk and
+    /// the prompt lists their absolute paths — for large file sets or agentic
+    /// LLMs that can read files with their own tools.
     #[arg(long, value_name = "TEMPLATE", default_missing_value = "troubleshoot", num_args = 0..=1)]
     llm: Option<String>,
 
@@ -3317,16 +3327,6 @@ fn validate_args(cli: &Cli) -> Result<(), String> {
 
     // --llm validations.
     if let Some(ref template) = cli.llm {
-        // --llm writes the prompt to stdout; --output would be silently ignored.
-        if cli.output.is_some() {
-            return Err(
-                "--llm and --output cannot be combined: --llm writes the formatted \
-                 prompt to stdout and the sanitized bytes are not written to a file.\n\
-                 Remove --output, or omit --llm to write sanitized output normally."
-                    .into(),
-            );
-        }
-
         // --dry-run produces no output, so the prompt content would be empty.
         if cli.dry_run {
             return Err(
@@ -4237,7 +4237,7 @@ fn process_plain_file(
                             cli,
                             report_builder,
                         );
-                        maybe_collect_for_llm(&buf, &input.display().to_string(), llm_opt.as_ref());
+                        maybe_collect_for_llm(&buf, &abs_label(&input), llm_opt.as_ref());
                     } else {
                         let reader = BufReader::new(
                             fs::File::open(input)
@@ -4322,11 +4322,7 @@ fn process_plain_file(
                             report_builder,
                         );
                         if llm_opt.is_some() {
-                            maybe_collect_for_llm(
-                                &buf,
-                                &input.display().to_string(),
-                                llm_opt.as_ref(),
-                            );
+                            maybe_collect_for_llm(&buf, &abs_label(&input), llm_opt.as_ref());
                         } else {
                             let stdout = io::stdout();
                             stdout
@@ -4612,7 +4608,7 @@ fn process_plain_file(
                 }
                 maybe_extract_context(&buf, &input.display().to_string(), cli, report_builder);
                 if llm_opt.is_some() {
-                    maybe_collect_for_llm(&buf, &input.display().to_string(), llm_opt.as_ref());
+                    maybe_collect_for_llm(&buf, &abs_label(&input), llm_opt.as_ref());
                 } else {
                     atomic_write(out_path, &buf)
                         .map_err(|e| format!("failed to write output: {e}"))?;
@@ -4702,7 +4698,7 @@ fn process_plain_file(
                 }
                 maybe_extract_context(&buf, &input.display().to_string(), cli, report_builder);
                 if llm_opt.is_some() {
-                    maybe_collect_for_llm(&buf, &input.display().to_string(), llm_opt.as_ref());
+                    maybe_collect_for_llm(&buf, &abs_label(&input), llm_opt.as_ref());
                 } else {
                     let stdout = io::stdout();
                     stdout
@@ -5220,6 +5216,19 @@ fn maybe_extract_context_reader(
 // strip_values_from_text, resolve_llm_template, and format_llm_prompt live in
 // sanitize_engine::strip_values / sanitize_engine::llm and are imported above.
 
+/// Return an absolute path string for `path`, resolving symlinks when the path
+/// already exists or falling back to `cwd.join(path)` for planned output paths.
+fn abs_label(path: &Path) -> String {
+    fs::canonicalize(path)
+        .unwrap_or_else(|_| {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join(path)
+        })
+        .display()
+        .to_string()
+}
+
 /// Push `(label, bytes)` onto the collector when `--llm` is active.
 fn maybe_collect_for_llm(bytes: &[u8], label: &str, collector: Option<&LlmCollector>) {
     if let Some(c) = collector {
@@ -5556,6 +5565,27 @@ fn run_sanitize(
         }
     }
 
+    // --- auto-provision local app bundle copies and set write-back target --------
+    // On first use of --app <name>, copy the built-in bundle into the user apps
+    // directory so profile.yaml and secrets.yaml are both on disk and editable.
+    // For single-app runs without an explicit --secrets-file, also point
+    // cli.secrets_file at the local secrets.yaml so save_discovered_secrets can
+    // persist the literals found by the profile pass for future runs.
+    if !cli.app.is_empty() && !cli.no_structured_handoff {
+        for app_name in &cli.app {
+            if let Some(secrets_path) = ensure_user_app_copy(app_name) {
+                if cli.app.len() == 1 && cli.secrets_file.is_none() {
+                    info!(
+                        app = %app_name,
+                        path = %secrets_path.display(),
+                        "using local app secrets as write-back target"
+                    );
+                    cli.secrets_file = Some(secrets_path);
+                }
+            }
+        }
+    }
+
     // --- validate profile requires a secrets file --------------------------------
     // A profile-only run would complete Phase 1 but have no patterns for Phase 2,
     // producing half-sanitized output with no indication of what was missed.
@@ -5672,11 +5702,15 @@ fn run_sanitize(
 
     let mut was_encrypted_secrets = false;
     if let Some(ref raw_bytes) = secrets_raw_bytes {
+        let secrets_format = cli
+            .secrets_file
+            .as_ref()
+            .and_then(|p| SecretsFormat::from_extension(p.to_string_lossy().as_ref()));
         let (((patterns, warnings), allow_from_secrets), was_encrypted) =
             sanitize_engine::secrets::load_secrets_auto(
                 raw_bytes,
                 effective_password.as_ref().map(|s| s.as_str()),
-                None,
+                secrets_format,
                 !cli.encrypted_secrets,
             )
             .map_err(|e| (format!("failed to load secrets: {e}"), 1))?;
@@ -5934,8 +5968,14 @@ fn run_sanitize(
         None
     };
 
-    // --- LLM collector (only allocated when --llm is active) ----------------
-    let llm_collector: Option<LlmCollector> = if cli.llm.is_some() {
+    // Reference mode: --llm + --output → write sanitized files to disk and emit
+    // a prompt listing their absolute paths instead of inlining content.
+    // Inline mode (default): --llm alone → bytes are collected and embedded in
+    // <content> blocks in the prompt (no files written to disk).
+    let reference_mode = cli.llm.is_some() && cli.output.is_some();
+
+    // --- LLM collector (only allocated for inline mode) ----------------------
+    let llm_collector: Option<LlmCollector> = if cli.llm.is_some() && !reference_mode {
         Some(Arc::new(Mutex::new(Vec::new())))
     } else {
         None
@@ -5986,6 +6026,31 @@ fn run_sanitize(
     let (stdin_targets, file_targets): (Vec<_>, Vec<_>) = input_targets
         .into_iter()
         .partition(|t| matches!(t, InputTarget::Stdin { .. }));
+
+    // Capture (input_label, planned_output_path) pairs for reference-mode prompt
+    // before the targets are consumed by processing.
+    let llm_ref_entries: Vec<LlmPathEntry> = if reference_mode {
+        stdin_targets
+            .iter()
+            .filter_map(|t| {
+                if let InputTarget::Stdin { output: Some(out) } = t {
+                    Some(("<stdin>".to_string(), abs_label(out)))
+                } else {
+                    None
+                }
+            })
+            .chain(file_targets.iter().filter_map(|t| {
+                if let InputTarget::File { input, output } = t {
+                    Some((abs_label(input), abs_label(output)))
+                } else {
+                    None
+                }
+            }))
+            .map(|(label, abs_out)| (label, PathBuf::from(abs_out)))
+            .collect()
+    } else {
+        vec![]
+    };
 
     let mut had_matches = false;
 
@@ -6283,13 +6348,17 @@ fn run_sanitize(
 
         // --- LLM prompt (--llm) ---
         if let Some(ref template_name) = cli.llm {
-            let entries = llm_collector
-                .as_ref()
-                .and_then(|c| c.lock().ok())
-                .map(|g| g.clone())
-                .unwrap_or_default();
-            let prompt =
-                format_llm_prompt(template_name, &entries, Some(&report)).map_err(|e| (e, 1))?;
+            let prompt = if reference_mode {
+                format_llm_prompt_reference(template_name, &llm_ref_entries, Some(&report))
+                    .map_err(|e| (e, 1))?
+            } else {
+                let entries = llm_collector
+                    .as_ref()
+                    .and_then(|c| c.lock().ok())
+                    .map(|g| g.clone())
+                    .unwrap_or_default();
+                format_llm_prompt(template_name, &entries, Some(&report)).map_err(|e| (e, 1))?
+            };
             let stdout = io::stdout();
             stdout
                 .lock()
@@ -7065,14 +7134,15 @@ mod tests {
     }
 
     #[test]
-    fn validate_args_rejects_llm_with_output() {
+    fn validate_args_allows_llm_with_output() {
+        // --llm + --output is now valid: reference mode writes sanitized files to
+        // disk and the prompt lists their paths instead of inlining content.
         let mut cli = real_file_cli();
         cli.llm = Some("troubleshoot".into());
         cli.output = Some(PathBuf::from("/tmp/out.txt"));
-        let err = validate_args(&cli).unwrap_err();
         assert!(
-            err.contains("--llm and --output cannot be combined"),
-            "got: {err}"
+            validate_args(&cli).is_ok(),
+            "--llm + --output should be allowed for reference mode"
         );
     }
 

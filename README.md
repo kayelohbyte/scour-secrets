@@ -272,6 +272,12 @@ sanitize nginx.conf --app nginx --llm review-config         # configuration revi
 sanitize nginx.conf --app nginx --llm review-security       # security posture review
 ```
 
+The prompt includes a `## Files Analyzed` manifest and embeds sanitized content inline (`<content>` blocks). For large file sets or agentic LLMs that can read files with their own tools, add `--output` to switch to **reference mode** — files are written to disk and the prompt lists their absolute paths instead:
+
+```bash
+sanitize logs/ -s patterns.yaml --llm review-security --output /tmp/sanitized/
+```
+
 ---
 
 ## Supported Formats

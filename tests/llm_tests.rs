@@ -45,11 +45,14 @@ fn run_stdin(args: &[&str], input: &[u8]) -> std::process::Output {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn llm_rejects_output_flag_combination() {
+fn llm_reference_mode_with_output_writes_file_and_lists_path() {
+    // --llm + --output is reference mode: sanitized file is written to disk and
+    // the prompt lists its absolute path instead of inlining content.
     let dir = tempdir().unwrap();
     let s = secrets_file(dir.path());
     let input = dir.path().join("in.log");
-    fs::write(&input, "data\n").unwrap();
+    let output = dir.path().join("out.log");
+    fs::write(&input, "value MYSECRET end\n").unwrap();
 
     let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
         .args([
@@ -58,17 +61,37 @@ fn llm_rejects_output_flag_combination() {
             s.to_str().unwrap(),
             "--llm",
             "--output",
-            dir.path().join("out.log").to_str().unwrap(),
+            output.to_str().unwrap(),
         ])
         .env("SANITIZE_LOG", "error")
         .output()
         .unwrap();
 
-    assert!(!out.status.success(), "should exit non-zero");
-    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("--llm and --output cannot be combined"),
-        "got: {stderr}"
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // The sanitized file must be written to disk.
+    assert!(output.exists(), "reference mode must write the sanitized file");
+    let sanitized = fs::read_to_string(&output).unwrap();
+    assert!(
+        !sanitized.contains("MYSECRET"),
+        "output file must be sanitized"
+    );
+    // The prompt on stdout must reference the output path, not inline content.
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("## Sanitized Files"),
+        "reference prompt must list sanitized files, got:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(output.to_str().unwrap()),
+        "prompt must include the output path, got:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("<content name="),
+        "reference mode must not inline content blocks, got:\n{stdout}"
     );
 }
 

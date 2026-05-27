@@ -836,7 +836,7 @@ When neither `-s`/`--secrets-file` nor `--app` is provided, the built-in pattern
 | `--strip-values` | | Strip all values from structured output, emitting only keys and structure. Useful for generating a profile template from a real config file without exposing any values. Bypasses the sanitization pipeline — no secrets file is required. |
 | `--strip-delimiter <DELIM>` | | Delimiter string used to split key/value lines when `--strip-values` is set. Default: `=`. Use `--strip-delimiter :` for YAML-style or nginx-style config files. Requires `--strip-values`. |
 | `--strip-comment-prefix <PREFIX>` | | Line prefix that marks a comment when `--strip-values` is set. Comment lines are preserved verbatim. Default: `#`. Use `--strip-comment-prefix //` for C-style or nginx-style comment lines. Requires `--strip-values`. |
-| `--llm [TEMPLATE]` | | Format the sanitized output as an LLM-ready prompt written to stdout instead of writing raw sanitized bytes. `TEMPLATE` selects the instruction set: `troubleshoot` (default — incident triage: root cause, event sequence, remediation), `review-config` (configuration review: misconfigurations and best practices), `review-security` (security posture: auth, network exposure, TLS, CVEs, hardcoded secrets), or a path to a custom template file. All built-in templates include a preamble explaining the sanitization model and instructing the LLM to ask clarifying questions rather than guessing at redacted values. Template text uses [caveman compression](https://github.com/wilpel/caveman-compression) to minimise instruction tokens (~45% reduction vs. natural prose) while preserving all semantic content. Combine with `--extract-context` to include notable log events. When this flag is set, `--output` / `-o` is ignored for the main payload (the prompt goes to stdout); `--report` still writes its JSON file normally. |
+| `--llm [TEMPLATE]` | | Format the sanitized output as an LLM-ready prompt written to stdout. `TEMPLATE` selects the instruction set: `troubleshoot` (default — incident triage: root cause, event sequence, remediation), `review-config` (configuration review: misconfigurations and best practices), `review-security` (security posture: auth, network exposure, TLS, CVEs, hardcoded secrets), or a path to a custom template file. All built-in templates include a preamble explaining the sanitization model and instructing the LLM to ask clarifying questions rather than guessing at redacted values. Template text uses [caveman compression](https://github.com/wilpel/caveman-compression) to minimise instruction tokens (~45% reduction vs. natural prose) while preserving all semantic content. Combine with `--extract-context` to include notable log events. **Two modes:** without `--output` (inline mode) sanitized content is embedded directly in `<content>` blocks; with `--output` (reference mode) sanitized files are written to disk and the prompt lists their absolute paths — useful for large file sets or agentic LLMs that can read files with their own tools. The prompt is always written to stdout; `--report` still writes its JSON file normally. |
 | `-h, --help` | `-h` | Print help. |
 | `-V, --version` | `-V` | Print version. |
 
@@ -1240,6 +1240,11 @@ sanitize kubeconfig --app kubernetes --llm review-security
 
 # Use a custom template file:
 sanitize server.log -s patterns.yaml --llm /path/to/my-template.txt
+
+# Reference mode: write sanitized files to disk, prompt lists absolute paths
+# (useful for large file sets or agentic LLMs that read files with their tools):
+sanitize server.log -s patterns.yaml --llm --output /tmp/sanitized/server.log
+sanitize logs/ -s patterns.yaml --llm review-security --output /tmp/sanitized/
 
 # Combine LLM output with context extraction for notable events:
 sanitize server.log -s patterns.yaml --report /tmp/report.json --extract-context --llm troubleshoot
