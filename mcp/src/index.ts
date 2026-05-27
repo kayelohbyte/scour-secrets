@@ -66,7 +66,7 @@ const FILES_DENYLIST: RegExp[] = (() => {
 })();
 
 // Keep in sync with version field in Cargo.toml.
-const SERVER_VERSION = "0.9.0";
+const SERVER_VERSION = "0.10.0";
 
 const NO_STRUCTURED_HANDOFF_ARG = "--no-structured-handoff";
 const TEMP_PREFIX = "sanitize-mcp-";
