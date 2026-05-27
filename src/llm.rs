@@ -457,10 +457,7 @@ mod tests {
     #[test]
     fn prompt_includes_files_analyzed_manifest() {
         let entries = vec![
-            (
-                "/abs/app.log".to_string(),
-                b"sanitized line\n".to_vec(),
-            ),
+            ("/abs/app.log".to_string(), b"sanitized line\n".to_vec()),
             (
                 "/abs/config.yaml".to_string(),
                 b"key: __SANITIZED__\n".to_vec(),
@@ -517,8 +514,7 @@ mod tests {
     fn reference_prompt_includes_sanitization_summary() {
         let report = make_test_report(12);
         let entries: Vec<LlmPathEntry> = vec![];
-        let prompt =
-            format_llm_prompt_reference("troubleshoot", &entries, Some(&report)).unwrap();
+        let prompt = format_llm_prompt_reference("troubleshoot", &entries, Some(&report)).unwrap();
         assert!(prompt.contains("## Sanitization Summary"), "got:\n{prompt}");
         assert!(prompt.contains("Total replacements: 12"), "got:\n{prompt}");
     }

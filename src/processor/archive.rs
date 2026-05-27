@@ -943,9 +943,9 @@ impl ArchiveProcessor {
 
                 let mut new_header = entry.header.clone();
                 let safe_path = sanitize_tar_entry_name(&entry.path);
-                new_header
-                    .set_path(&safe_path)
-                    .map_err(|e| SanitizeError::ArchiveError(format!("set path '{safe_path}': {e}")))?;
+                new_header.set_path(&safe_path).map_err(|e| {
+                    SanitizeError::ArchiveError(format!("set path '{safe_path}': {e}"))
+                })?;
                 new_header.set_size(sanitized_buf.len() as u64);
                 new_header.set_cksum();
                 builder
@@ -987,9 +987,9 @@ impl ArchiveProcessor {
                 stats.merge(&entry_stats);
                 let mut new_header = entry.header.clone();
                 let safe_path = sanitize_tar_entry_name(&entry.path);
-                new_header
-                    .set_path(&safe_path)
-                    .map_err(|e| SanitizeError::ArchiveError(format!("set path '{safe_path}': {e}")))?;
+                new_header.set_path(&safe_path).map_err(|e| {
+                    SanitizeError::ArchiveError(format!("set path '{safe_path}': {e}"))
+                })?;
                 new_header.set_size(sanitized_buf.len() as u64);
                 new_header.set_cksum();
                 builder
@@ -1055,9 +1055,9 @@ impl ArchiveProcessor {
 
                     let mut new_header = header.clone();
                     let safe_path = sanitize_tar_entry_name(&path);
-                    new_header
-                        .set_path(&safe_path)
-                        .map_err(|e| SanitizeError::ArchiveError(format!("set path '{safe_path}': {e}")))?;
+                    new_header.set_path(&safe_path).map_err(|e| {
+                        SanitizeError::ArchiveError(format!("set path '{safe_path}': {e}"))
+                    })?;
                     new_header.set_size(sanitized_buf.len() as u64);
                     new_header.set_cksum();
                     builder
@@ -1206,8 +1206,8 @@ impl ArchiveProcessor {
 
         // Helper: build SimpleFileOptions for a metadata entry.
         let make_options = |m: &ZipMeta| {
-            let mut opts = zip::write::SimpleFileOptions::default()
-                .compression_method(m.compression);
+            let mut opts =
+                zip::write::SimpleFileOptions::default().compression_method(m.compression);
             if let Some(dt) = m.last_modified {
                 opts = opts.last_modified_time(dt);
             }

@@ -399,8 +399,8 @@ fn zip_directory_passthrough() {
         let mut zip = zip::ZipWriter::new(&mut buf);
         zip.add_directory("mydir/", zip::write::SimpleFileOptions::default())
             .unwrap();
-        let opts =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
         zip.start_file("mydir/data.txt", opts).unwrap();
         zip.write_all(b"alice@corp.com").unwrap();
         zip.finish().unwrap();

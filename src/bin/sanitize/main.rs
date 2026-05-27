@@ -59,7 +59,9 @@
 //! same secrets will produce identical replacements.
 
 mod apps;
-use apps::{builtin_app_names, ensure_user_app_copy, load_app_bundle, run_apps, user_apps_dir, BUILTIN_APPS};
+use apps::{
+    builtin_app_names, ensure_user_app_copy, load_app_bundle, run_apps, user_apps_dir, BUILTIN_APPS,
+};
 
 mod config;
 mod guided;
@@ -4228,7 +4230,7 @@ fn process_plain_file(
                             cli,
                             report_builder,
                         );
-                        maybe_collect_for_llm(&buf, &abs_label(&input), llm_opt.as_ref());
+                        maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
                     } else {
                         let reader = BufReader::new(
                             fs::File::open(input)
@@ -4313,7 +4315,7 @@ fn process_plain_file(
                             report_builder,
                         );
                         if llm_opt.is_some() {
-                            maybe_collect_for_llm(&buf, &abs_label(&input), llm_opt.as_ref());
+                            maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
                         } else {
                             let stdout = io::stdout();
                             stdout
@@ -4599,7 +4601,7 @@ fn process_plain_file(
                 }
                 maybe_extract_context(&buf, &input.display().to_string(), cli, report_builder);
                 if llm_opt.is_some() {
-                    maybe_collect_for_llm(&buf, &abs_label(&input), llm_opt.as_ref());
+                    maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
                 } else {
                     atomic_write(out_path, &buf)
                         .map_err(|e| format!("failed to write output: {e}"))?;
@@ -4689,7 +4691,7 @@ fn process_plain_file(
                 }
                 maybe_extract_context(&buf, &input.display().to_string(), cli, report_builder);
                 if llm_opt.is_some() {
-                    maybe_collect_for_llm(&buf, &abs_label(&input), llm_opt.as_ref());
+                    maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
                 } else {
                     let stdout = io::stdout();
                     stdout
@@ -5211,11 +5213,7 @@ fn maybe_extract_context_reader(
 /// already exists or falling back to `cwd.join(path)` for planned output paths.
 fn abs_label(path: &Path) -> String {
     fs::canonicalize(path)
-        .unwrap_or_else(|_| {
-            std::env::current_dir()
-                .unwrap_or_default()
-                .join(path)
-        })
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(path))
         .display()
         .to_string()
 }

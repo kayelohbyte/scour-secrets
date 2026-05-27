@@ -73,7 +73,10 @@ fn llm_reference_mode_with_output_writes_file_and_lists_path() {
         String::from_utf8_lossy(&out.stderr)
     );
     // The sanitized file must be written to disk.
-    assert!(output.exists(), "reference mode must write the sanitized file");
+    assert!(
+        output.exists(),
+        "reference mode must write the sanitized file"
+    );
     let sanitized = fs::read_to_string(&output).unwrap();
     assert!(
         !sanitized.contains("MYSECRET"),
