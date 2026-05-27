@@ -1501,12 +1501,12 @@ server.tool(
 
 server.tool(
   "test_pattern",
-  "Test which values are matched and replaced by a given secrets file, app bundle, or inline pattern set — without modifying any files. Returns a per-value result showing which pattern matched and what replacement category was applied. Use this when authoring a secrets file to verify coverage before running a full sanitization.",
+  "Test which values are matched and replaced by a given secrets file, app bundle, or inline pattern set — without modifying any files. Returns a per-value result showing which pattern matched and what replacement category was applied. Use this when authoring a secrets file to verify coverage before running a full sanitization. WARNING: test values are echoed back verbatim in the response (including matched text) and will enter the LLM context window. Use synthetic or anonymised examples only — never pass real production secrets as test values.",
   {
     values: z
       .array(z.string())
       .min(1)
-      .describe("Values to test. Each value is checked against all active patterns."),
+      .describe("Values to test against the active patterns. Use synthetic examples — these values are returned verbatim in the response and will enter the LLM context window."),
     secrets_file: z
       .string()
       .optional()
