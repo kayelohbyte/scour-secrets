@@ -9,7 +9,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-sanitize-engine = { path = ".." }
+sanitize-engine = { path = "..", package = "rust-sanitize" }
 
 [[bin]]
 name = "fuzz_regex"
