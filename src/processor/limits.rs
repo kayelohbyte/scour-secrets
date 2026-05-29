@@ -70,7 +70,7 @@ pub(crate) const PARALLEL_TAR_DATA_SIZE: u64 = 256 * 1024 * 1024;
 /// Depth 0 is the top-level archive. Nested archives at depths 1 through
 /// `DEFAULT_ARCHIVE_DEPTH` are recursively extracted and sanitized. Exceeding
 /// this limit returns [`SanitizeError::RecursionDepthExceeded`](crate::error::SanitizeError::RecursionDepthExceeded).
-pub const DEFAULT_ARCHIVE_DEPTH: u32 = 3;
+pub const DEFAULT_ARCHIVE_DEPTH: u32 = 5;
 
 /// Absolute maximum allowed value for `--max-archive-depth`.
 /// Each nesting level can buffer up to [`STRUCTURED_ENTRY_SIZE`] bytes, so

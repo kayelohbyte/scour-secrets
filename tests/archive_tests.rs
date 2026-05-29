@@ -821,10 +821,19 @@ fn nested_archive_stats_aggregated() {
 
 #[test]
 fn nested_archive_depth_limit_exceeded() {
-    // Build a deeply nested archive that exceeds the default max_depth of 3.
-    // Nesting: outer_zip(depth 0) → l1.tar.gz(depth 1) → l2.zip(depth 2) → l3.tar(depth 3) → l4.zip
-    // At depth 3, l4.zip triggers the check: depth(3) >= max_depth(3) → error.
-    let l4_zip = make_zip(&[("deep.txt", b"TOP_SECRET_KEY_12345")]);
+    // Build a deeply nested archive that exceeds the default max_depth of 5.
+    // Nesting: outer_zip(0) → l1.tar.gz(1) → l2.zip(2) → l3.tar(3) → l4.zip(4) → l5.tar.gz(5) → l6.zip
+    // At depth 5, l6.zip triggers the check: depth(5) >= max_depth(5) → error.
+    let l6_zip = make_zip(&[("deep.txt", b"TOP_SECRET_KEY_12345")]);
+    let l5_tar_gz = {
+        let l5_tar = make_tar(&[("l6.zip", &l6_zip)]);
+        let mut gz_buf = Vec::new();
+        let mut enc = flate2::write::GzEncoder::new(&mut gz_buf, flate2::Compression::fast());
+        enc.write_all(&l5_tar).unwrap();
+        enc.finish().unwrap();
+        gz_buf
+    };
+    let l4_zip = make_zip(&[("l5.tar.gz", &l5_tar_gz)]);
     let l3_tar = make_tar(&[("l4.zip", &l4_zip)]);
     let l2_zip = make_zip(&[("l3.tar", &l3_tar)]);
     let l1_tar_gz = {
@@ -837,7 +846,7 @@ fn nested_archive_depth_limit_exceeded() {
     };
     let outer_zip = make_zip(&[("l1.tar.gz", &l1_tar_gz)]);
 
-    let proc = make_processor(); // default max_depth = 3
+    let proc = make_processor(); // default max_depth = 5
     let reader = Cursor::new(outer_zip);
     let mut writer = Cursor::new(Vec::new());
     let result = proc.process_zip(reader, &mut writer);
@@ -853,8 +862,18 @@ fn nested_archive_depth_limit_exceeded() {
 
 #[test]
 fn nested_archive_custom_depth_limit() {
-    // Same deeply nested archive as above, but with max_depth=5 → should succeed.
-    let l4_zip = make_zip(&[("deep.txt", b"TOP_SECRET_KEY_12345")]);
+    // Same 6-level archive that fails with the default max_depth=5,
+    // but with max_depth=7 → should succeed.
+    let l6_zip = make_zip(&[("deep.txt", b"TOP_SECRET_KEY_12345")]);
+    let l5_tar_gz = {
+        let l5_tar = make_tar(&[("l6.zip", &l6_zip)]);
+        let mut gz_buf = Vec::new();
+        let mut enc = flate2::write::GzEncoder::new(&mut gz_buf, flate2::Compression::fast());
+        enc.write_all(&l5_tar).unwrap();
+        enc.finish().unwrap();
+        gz_buf
+    };
+    let l4_zip = make_zip(&[("l5.tar.gz", &l5_tar_gz)]);
     let l3_tar = make_tar(&[("l4.zip", &l4_zip)]);
     let l2_zip = make_zip(&[("l3.tar", &l3_tar)]);
     let l1_tar_gz = {
@@ -885,7 +904,7 @@ fn nested_archive_custom_depth_limit() {
     );
     let registry =
         Arc::new(sanitize_engine::processor::registry::ProcessorRegistry::with_builtins());
-    let proc = ArchiveProcessor::new(registry, scanner, store, vec![]).with_max_depth(5);
+    let proc = ArchiveProcessor::new(registry, scanner, store, vec![]).with_max_depth(7);
 
     let reader = Cursor::new(outer_zip);
     let mut writer = Cursor::new(Vec::new());
@@ -893,13 +912,14 @@ fn nested_archive_custom_depth_limit() {
 
     assert!(
         result.is_ok(),
-        "should succeed with depth limit 5: {:?}",
+        "should succeed with depth limit 7: {:?}",
         result.err()
     );
     let stats = result.unwrap();
     assert!(
-        stats.nested_archives >= 3,
-        "3+ nested archives processed (l1.tar.gz, l2.zip, l3.tar, l4.zip)"
+        stats.nested_archives >= 5,
+        "5+ nested archives processed (l1.tar.gz through l5.tar.gz): got {}",
+        stats.nested_archives
     );
 }
 

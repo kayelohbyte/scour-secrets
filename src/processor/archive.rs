@@ -424,7 +424,7 @@ impl ArchiveProcessor {
     /// Override the maximum nesting depth for recursive archive
     /// processing.
     ///
-    /// The default is [`DEFAULT_ARCHIVE_DEPTH`] (3). Values above
+    /// The default is [`DEFAULT_ARCHIVE_DEPTH`] (5). Values above
     /// 10 are clamped.
     #[must_use]
     pub fn with_max_depth(mut self, depth: u32) -> Self {
@@ -2382,7 +2382,7 @@ mod tests {
     #[test]
     fn nested_archive_depth_limit_returns_error() {
         // Build an archive nested max_depth + 1 levels deep.
-        // Default max_depth is DEFAULT_ARCHIVE_DEPTH (3); use a proc with depth=1.
+        // Default max_depth is DEFAULT_ARCHIVE_DEPTH (5); use a proc with depth=1.
         let proc = make_archive_processor().with_max_depth(1);
 
         let innermost = build_test_tar(&[("file.txt", b"secret")]);

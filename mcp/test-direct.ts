@@ -11,6 +11,7 @@
  */
 
 import { join } from "@std/path";
+import { predictOutputName, uniquifyName } from "./src/naming.ts";
 
 const MCP_SCRIPT = join(import.meta.dirname!, "src/index.ts");
 const SANITIZE_BIN =
@@ -133,6 +134,78 @@ const tests: Array<{ name: string; fn: Fn; group: string }> = [];
 function test(group: string, name: string, fn: Fn) {
   tests.push({ group, name, fn });
 }
+
+// ===========================================================================
+// Pure unit tests — naming functions (no MCP session required)
+// ===========================================================================
+
+{
+  const eq = (actual: string, expected: string, label: string) => {
+    if (actual !== expected) {
+      throw new Error(`predictOutputName ${label}: expected "${expected}", got "${actual}"`);
+    }
+  };
+
+  // Archives — use ".sanitized." separator and preserve the full compound extension.
+  eq(predictOutputName("archive.tar.gz"),        "archive.sanitized.tar.gz",  ".tar.gz");
+  eq(predictOutputName("archive.TGZ"),           "archive.sanitized.tar.gz",  ".TGZ (case insensitive, normalised to .tar.gz)");
+  eq(predictOutputName("archive.tgz"),           "archive.sanitized.tar.gz",  ".tgz (normalised to .tar.gz)");
+  eq(predictOutputName("archive.tar"),           "archive.sanitized.tar",     ".tar");
+  eq(predictOutputName("archive.TAR"),           "archive.sanitized.tar",     ".TAR (case insensitive)");
+  eq(predictOutputName("archive.zip"),           "archive.sanitized.zip",     ".zip");
+  eq(predictOutputName("archive.ZIP"),           "archive.sanitized.zip",     ".ZIP (case insensitive)");
+
+  // Compound stem stripping: "data.tar.gz" → stem "data", not "data.tar".
+  eq(predictOutputName("data.tar.gz"),           "data.sanitized.tar.gz",     "compound stem stripped correctly");
+  eq(predictOutputName("my.backup.tar.gz"),      "my.backup.sanitized.tar.gz","stem with interior dot");
+
+  // Path component stripped — only the basename matters.
+  eq(predictOutputName("/var/log/archive.tar.gz"), "archive.sanitized.tar.gz", "absolute path basename");
+  eq(predictOutputName("a/b/c/archive.tar"),       "archive.sanitized.tar",    "relative path basename");
+
+  // Plain files — use "-sanitized." separator (rsplit at last dot).
+  eq(predictOutputName("config.json"),           "config-sanitized.json",     ".json plain file");
+  eq(predictOutputName("report.txt"),            "report-sanitized.txt",      ".txt plain file");
+  eq(predictOutputName("app.log"),               "app-sanitized.log",         ".log plain file");
+  eq(predictOutputName("data.csv"),              "data-sanitized.csv",        ".csv plain file");
+
+  // No extension.
+  eq(predictOutputName("Makefile"),              "Makefile-sanitized",        "no extension");
+  eq(predictOutputName("noext"),                 "noext-sanitized",           "no extension (bare name)");
+
+  // Leading dot only — treated as no extension by lastIndexOf logic (dot at 0).
+  eq(predictOutputName(".hidden"),               ".hidden-sanitized",         "dot-file with no extension");
+}
+
+{
+  const eq = (actual: string, expected: string, label: string) => {
+    if (actual !== expected) {
+      throw new Error(`uniquifyName ${label}: expected "${expected}", got "${actual}"`);
+    }
+  };
+
+  // First use returns the name unchanged.
+  const u1 = new Set<string>();
+  eq(uniquifyName("archive.sanitized.tar.gz", u1), "archive.sanitized.tar.gz", "first use, no collision");
+
+  // Collision: suffix goes before the compound extension, not just ".gz".
+  const u2 = new Set(["archive.sanitized.tar.gz"]);
+  eq(uniquifyName("archive.sanitized.tar.gz", u2), "archive.sanitized_2.tar.gz", ".tar.gz collision → _2 before .tar.gz");
+
+  // Sequential collisions.
+  const u3 = new Set(["archive.sanitized.tar.gz", "archive.sanitized_2.tar.gz"]);
+  eq(uniquifyName("archive.sanitized.tar.gz", u3), "archive.sanitized_3.tar.gz", "sequential collision → _3");
+
+  // Plain files: suffix goes before the single extension.
+  const u4 = new Set(["config-sanitized.json"]);
+  eq(uniquifyName("config-sanitized.json", u4), "config-sanitized_2.json", "plain file collision → _2 before .json");
+
+  // No extension.
+  const u5 = new Set(["Makefile-sanitized"]);
+  eq(uniquifyName("Makefile-sanitized", u5), "Makefile-sanitized_2", "no-extension collision");
+}
+
+console.log("  \x1b[32m✓\x1b[0m predictOutputName / uniquifyName unit tests passed\n");
 
 // ===========================================================================
 // sanitize tool

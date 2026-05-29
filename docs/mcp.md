@@ -153,7 +153,7 @@ require("avante").setup({
 | `SANITIZE_MCP_MAX_CONTENT_BYTES` | `524288` (512 KB) | Per-call inline content size limit. |
 | `SANITIZE_MCP_TIMEOUT_MS` | `60000` (60 s) | Subprocess timeout — kills the CLI and returns an error if exceeded. |
 | `SANITIZE_MCP_THREADS` | _(unset = CLI default = logical CPUs)_ | Worker thread cap for every invocation — useful on shared hosts. |
-| `SANITIZE_MCP_MAX_ARCHIVE_DEPTH` | `2` | Default max archive nesting depth (CLI default is 3; MCP default is lower to limit zip-bomb exposure). |
+| `SANITIZE_MCP_MAX_ARCHIVE_DEPTH` | `5` | Default max archive nesting depth (matches CLI default). |
 | `SANITIZE_SECRETS_DIR` | _(unset)_ | Root directory for per-namespace secrets. Each subdirectory is a namespace and may contain `secrets.yaml[.enc]`, `profile.yaml`, and an optional `.password` file (`0600`/`0400` permissions enforced). |
 
 ---
@@ -177,9 +177,22 @@ require("avante").setup({
 
 All examples show the JSON parameters passed to the relevant tool.
 
+### Choosing between `content` and `files`
+
+**Prefer `files` whenever you have a file path.** The engine processes the file directly — raw bytes never enter the LLM context, binary and archive formats are handled correctly, and there is no inline size limit.
+
+Use `content` only when you already have the text in your context and no file path is available (e.g. text extracted by another tool call, or a short string generated in memory).
+
+| | `files` | `content` |
+|---|---|---|
+| Raw bytes in LLM context | No | Yes |
+| Binary / archive support | Yes | No |
+| Size limit | None | 512 KB default |
+| **Use when** | **You have a path** | **You only have the text** |
+
 ### Sanitize inline content
 
-Inline text is piped through the CLI via stdin — content never touches disk.
+Inline text is piped through the CLI via stdin — use this only when you have the text in context and no file path is available.
 
 ```json
 {
@@ -441,7 +454,7 @@ By default, binary entries inside archives are skipped. Set `include_binary: tru
 
 ### Archive depth limit
 
-Override the server-wide archive depth default on a per-call basis. The MCP server default is `2` (lower than the CLI's `3`). Override the server default for all calls via `SANITIZE_MCP_MAX_ARCHIVE_DEPTH`.
+Override the server-wide archive depth default on a per-call basis. The default is `5`. Override the server default for all calls via `SANITIZE_MCP_MAX_ARCHIVE_DEPTH`.
 
 ```json
 {

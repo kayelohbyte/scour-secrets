@@ -11,7 +11,7 @@
  *   SANITIZE_MCP_MAX_CONTENT_BYTES  per-call content size limit in bytes (default: 524288)
  *   SANITIZE_MCP_TIMEOUT_MS         subprocess timeout in milliseconds (default: 60000)
  *   SANITIZE_MCP_THREADS            worker thread cap for every sanitize invocation (default: unset = CLI default = logical CPUs)
- *   SANITIZE_MCP_MAX_ARCHIVE_DEPTH  default maximum archive nesting depth (default: 2; CLI default is 3)
+ *   SANITIZE_MCP_MAX_ARCHIVE_DEPTH  default maximum archive nesting depth (default: 5; matches CLI default)
  *   SANITIZE_SECRETS_DIR            base directory for namespace resolution (required for `namespace` param)
  *   SANITIZE_MCP_FILES_DENYLIST     comma-separated glob patterns for file paths that the `files` param must never match
  *                                   (e.g. "secrets/**,*.key,*.pem"). Patterns without '/' also match the basename.
@@ -29,6 +29,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio";
 import { basename, join, resolve } from "@std/path";
 import { globToRegExp } from "@std/path/glob-to-regexp";
 import { z } from "zod";
+import { predictOutputName, uniquifyName } from "./naming.ts";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -46,9 +47,8 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
 const MAX_CONTENT_BYTES = parsePositiveInt(
   Deno.env.get("SANITIZE_MCP_MAX_CONTENT_BYTES"), 524288,
 );
-// MCP default is lower than the CLI default (3) to limit zip-bomb exposure.
 const MAX_ARCHIVE_DEPTH = parsePositiveInt(
-  Deno.env.get("SANITIZE_MCP_MAX_ARCHIVE_DEPTH"), 2,
+  Deno.env.get("SANITIZE_MCP_MAX_ARCHIVE_DEPTH"), 5,
 );
 // When set, appended to every processing invocation to cap CPU usage.
 // The value is validated and re-serialised as a decimal integer to prevent flag injection.
@@ -274,29 +274,7 @@ let activeCalls = 0;
 // Output name prediction + archive detection
 // ---------------------------------------------------------------------------
 
-/**
- * Replicates the CLI's default_plain_output naming: `{stem}-sanitized.{ext}`.
- * Rust's Path::file_stem strips only the last extension, so "archive.tar.gz"
- * → stem "archive.tar", ext "gz" → "archive.tar-sanitized.gz".
- */
-function predictOutputName(inputPath: string): string {
-  const basename = inputPath.replace(/\\/g, "/").split("/").pop() ?? "output";
-  const dot = basename.lastIndexOf(".");
-  if (dot <= 0) return `${basename}-sanitized`;
-  return `${basename.slice(0, dot)}-sanitized.${basename.slice(dot + 1)}`;
-}
-
-/** Appends _2, _3 … suffixes until the name is unique, mirroring the CLI. */
-function uniquifyName(name: string, used: Set<string>): string {
-  if (!used.has(name)) { used.add(name); return name; }
-  const dot = name.lastIndexOf(".");
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : "";
-  for (let i = 2; ; i++) {
-    const candidate = `${stem}_${i}${ext}`;
-    if (!used.has(candidate)) { used.add(candidate); return candidate; }
-  }
-}
+// predictOutputName and uniquifyName are imported from ./naming.ts
 
 /** Returns true for file extensions the CLI treats as archives. */
 function isArchivePath(p: string): boolean {
@@ -1217,10 +1195,10 @@ const ArchiveFilterSchema = z.object({
 
 const SanitizeSchema = {
   content: z.string().optional().describe(
-    "Inline text content to sanitize. Mutually exclusive with `files`. Either this or `files` must be provided.",
+    "Inline text content to sanitize. Only use this when you already have the text in your context and there is no file path available. If you have a file path, use `files` instead — it is safer, handles binary and archive formats correctly, and avoids loading raw bytes into the LLM context. Mutually exclusive with `files`. Either this or `files` must be provided.",
   ),
   files: z.array(z.string()).optional().describe(
-    "One or more paths to sanitize (absolute or relative). Accepts plain files, archives (.zip, .tar.gz, etc.), or a mix. Archives are extracted and sanitized recursively. Use `archive_filters` to restrict which entries inside an archive are processed. Mutually exclusive with `content`. Raw file content never enters the LLM context — the sanitize engine processes files directly.",
+    "PREFERRED: one or more file paths to sanitize (absolute or relative). Use this whenever a file path is available instead of reading the file and passing its content inline. Accepts plain files, archives (.zip, .tar.gz, etc.), or a mix. Archives are extracted and sanitized recursively. Use `archive_filters` to restrict which entries inside an archive are processed. Mutually exclusive with `content`. Raw file content never enters the LLM context — the sanitize engine processes files directly.",
   ),
   output_file: z.string().optional().describe(
     "Write the sanitized output directly to this file path. The sanitized content is NOT returned in the response — only the output path and byte size are reported. Mirrors `sanitize <input> -o <file>`. Valid for a single `files` entry or `content` input. Mutually exclusive with `output_dir`.",
@@ -1378,10 +1356,10 @@ const SanitizeSchema = {
 
 const ScanSchema = {
   content: z.string().optional().describe(
-    "Inline text content to scan. Mutually exclusive with `files`. Either this or `files` must be provided.",
+    "Inline text content to scan. Only use this when you already have the text in your context and there is no file path available. If you have a file path, use `files` instead. Mutually exclusive with `files`. Either this or `files` must be provided.",
   ),
   files: z.array(z.string()).optional().describe(
-    "One or more paths to scan (absolute or relative). Accepts plain files, archives, or a mix. Use `archive_filters` to restrict which archive entries are scanned. Mutually exclusive with `content`.",
+    "PREFERRED: one or more file paths to scan (absolute or relative). Use this whenever a file path is available instead of reading the file and passing its content inline. Accepts plain files, archives, or a mix. Use `archive_filters` to restrict which archive entries are scanned. Mutually exclusive with `content`.",
   ),
   archive_filters: z.array(ArchiveFilterSchema).optional().describe(
     "Per-archive entry filters applied during scanning. Same semantics as on the sanitize tool.",
@@ -1499,7 +1477,7 @@ const server = new McpServer({
 
 server.tool(
   "sanitize",
-  "Sanitize sensitive values in text content or files before the LLM reads them. The primary MCP use case: pipe logs or configs through this tool, then reason over the safe output. Set `llm_template: 'troubleshoot'` to get a fully-formatted incident-triage prompt ready to paste; set `llm_template: 'review-config'` for a configuration-audit prompt — these are the two most common end-to-end workflows. Structured fields (passwords, tokens, API keys) are replaced with __SANITIZED-<hash>__ markers; typed values (emails, IPs) get realistic-looking substitutes of the same format. Use `files` to process paths directly so raw content never enters the LLM context. Archives are extracted and sanitized recursively. Supply a `seed` for consistent replacements across multiple calls in a session.",
+  "Sanitize sensitive values in text content or files before the LLM reads them. Prefer `files` (file paths) over `content` (inline text) whenever you have a path — the engine processes files directly so raw bytes never enter the LLM context, and binary/archive inputs are handled correctly. The primary MCP use case: pipe logs or configs through this tool, then reason over the safe output. Set `llm_template: 'troubleshoot'` to get a fully-formatted incident-triage prompt ready to paste; set `llm_template: 'review-config'` for a configuration-audit prompt — these are the two most common end-to-end workflows. Structured fields (passwords, tokens, API keys) are replaced with __SANITIZED-<hash>__ markers; typed values (emails, IPs) get realistic-looking substitutes of the same format. Archives are extracted and sanitized recursively. Supply a `seed` for consistent replacements across multiple calls in a session.",
   SanitizeSchema,
   async (params: SanitizeParams) => {
     try {
@@ -1521,7 +1499,7 @@ server.tool(
 
 server.tool(
   "scan",
-  "Scan text content or one or more files for sensitive values and return a structured report — without modifying anything. Accepts the same `files` and `archive_filters` inputs as the sanitize tool. Use `fail_on_match` for security-gate workflows: the response includes a `secrets_detected` boolean so callers can branch without parsing the full report. Useful for auditing what would be replaced before committing to full sanitization.",
+  "Scan text content or one or more files for sensitive values and return a structured report — without modifying anything. Prefer `files` (file paths) over `content` (inline text) whenever a path is available. Accepts the same `files` and `archive_filters` inputs as the sanitize tool. Use `fail_on_match` for security-gate workflows: the response includes a `secrets_detected` boolean so callers can branch without parsing the full report. Useful for auditing what would be replaced before committing to full sanitization.",
   ScanSchema,
   async (params: ScanParams) => {
     try {

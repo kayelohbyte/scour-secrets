@@ -64,4 +64,4 @@ For 20–100 GB plain-text files, the streaming scanner maintains constant memor
 | XML element depth | 256 | Compile-time (`MAX_XML_DEPTH`) | Stack overflow prevention. |
 | CSV input size | 256 MiB | Compile-time (`MAX_CSV_INPUT_SIZE`) | Pre-parse rejection. |
 | Key-value input size | 256 MiB | Compile-time (`MAX_KV_INPUT_SIZE`) | Pre-parse rejection. |
-| Max archive nesting depth | 3 | `--max-archive-depth` (max 10) | Prevents archive bombs and unbounded recursion. Each nesting level may buffer up to 256 MiB. |
+| Max archive nesting depth | 5 | `--max-archive-depth` (max 10) | Prevents archive bombs and unbounded recursion. Each nesting level may buffer up to 256 MiB. |
