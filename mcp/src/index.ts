@@ -330,7 +330,7 @@ async function resolveNamespace(namespace: string): Promise<ResolvedNamespace> {
     );
   }
 
-  const nsDir = join(SANITIZE_SECRETS_DIR, namespace);
+  const nsDir = join(SANITIZE_SECRETS_DIR_RESOLVED!, namespace);
 
   // Resolve secrets file — encrypted variants take priority.
   const secretsCandidates = [
@@ -414,6 +414,10 @@ interface InlinePattern {
   pattern: string;
   category?: string; // required for regex/literal; ignored (and optional) for allow
   kind?: string;
+}
+
+function yamlQuoteString(s: string): string {
+  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t') + '"';
 }
 
 function buildSecretsJson(patterns: InlinePattern[]): string {
@@ -595,15 +599,26 @@ async function toolSanitize(params: {
     }
 
     if (params.use_default) commonArgs.push("--use-default");
-    if (params.app?.length) commonArgs.push("--app", params.app.join(","));
+    if (params.app?.length) {
+      for (const a of params.app) {
+        if (a.startsWith("-")) throw new Error(`app '${a}' must not start with '-' (flag injection)`);
+      }
+      commonArgs.push("--app", params.app.join(","));
+    }
     if (params.allow?.length) {
-      for (const pattern of params.allow) commonArgs.push("--allow", pattern);
+      for (const pattern of params.allow) {
+        if (pattern.startsWith("-")) throw new Error(`allow pattern '${pattern}' must not start with '-' (flag injection)`);
+        commonArgs.push("--allow", pattern);
+      }
     }
     if (params.force_text) commonArgs.push("--force-text");
     if (params.include_binary) commonArgs.push("--include-binary");
     if (params.hidden) commonArgs.push("--hidden");
     if (params.exclude_path?.length) {
-      for (const pattern of params.exclude_path) commonArgs.push("--exclude-path", pattern);
+      for (const pattern of params.exclude_path) {
+        if (pattern.startsWith("-")) throw new Error(`exclude_path '${pattern}' must not start with '-' (flag injection)`);
+        commonArgs.push("--exclude-path", pattern);
+      }
     }
     if (params.entropy_threshold !== undefined) {
       commonArgs.push("--entropy-threshold", String(params.entropy_threshold));
@@ -863,16 +878,27 @@ async function toolScan(params: {
     }
 
     if (params.use_default) commonArgs.push("--use-default");
-    if (params.app?.length) commonArgs.push("--app", params.app.join(","));
+    if (params.app?.length) {
+      for (const a of params.app) {
+        if (a.startsWith("-")) throw new Error(`app '${a}' must not start with '-' (flag injection)`);
+      }
+      commonArgs.push("--app", params.app.join(","));
+    }
     if (params.allow?.length) {
-      for (const pattern of params.allow) commonArgs.push("--allow", pattern);
+      for (const pattern of params.allow) {
+        if (pattern.startsWith("-")) throw new Error(`allow pattern '${pattern}' must not start with '-' (flag injection)`);
+        commonArgs.push("--allow", pattern);
+      }
     }
     if (params.fail_on_match) commonArgs.push("--fail-on-match");
     if (params.force_text) commonArgs.push("--force-text");
     if (params.include_binary) commonArgs.push("--include-binary");
     if (params.hidden) commonArgs.push("--hidden");
     if (params.exclude_path?.length) {
-      for (const pattern of params.exclude_path) commonArgs.push("--exclude-path", pattern);
+      for (const pattern of params.exclude_path) {
+        if (pattern.startsWith("-")) throw new Error(`exclude_path '${pattern}' must not start with '-' (flag injection)`);
+        commonArgs.push("--exclude-path", pattern);
+      }
     }
     if (params.entropy_threshold !== undefined) {
       commonArgs.push("--entropy-threshold", String(params.entropy_threshold));
@@ -935,7 +961,11 @@ async function toolStripConfigValues(params: {
     throw new Error("'content' and 'files' are mutually exclusive — provide one or the other");
   }
   if (hasFiles) {
-    for (const f of params.files!) { validatePath(f, "files", true); validateFilesPath(f); }
+    for (const f of params.files!) {
+      if (f.startsWith("-")) throw new Error(`files entry '${f}' must not start with '-' (flag injection)`);
+      validatePath(f, "files", true);
+      validateFilesPath(f);
+    }
   } else {
     checkContentSize(params.content!);
   }
@@ -946,12 +976,16 @@ async function toolStripConfigValues(params: {
   activeCalls++;
   const tmpDir = await Deno.makeTempDir({ prefix: TEMP_PREFIX });
   try {
+    const delim = params.delimiter ?? "=";
+    const commentPfx = params.comment_prefix ?? "#";
+    if (delim.startsWith("-")) throw new Error(`delimiter '${delim}' must not start with '-' (flag injection)`);
+    if (commentPfx.startsWith("-")) throw new Error(`comment_prefix '${commentPfx}' must not start with '-' (flag injection)`);
     const stripArgs = [
       "--strip-values",
       "--strip-delimiter",
-      params.delimiter ?? "=",
+      delim,
       "--strip-comment-prefix",
-      params.comment_prefix ?? "#",
+      commentPfx,
     ];
 
     if (hasContent) {
@@ -996,27 +1030,43 @@ async function toolTestAllowlist(params: {
 
   const args: string[] = ["allow-test", "--json"];
   for (const pat of params.patterns) {
+    if (pat.startsWith("-")) throw new Error(`allow pattern '${pat}' must not start with '-' (flag injection)`);
     args.push("--allow", pat);
+  }
+  for (const val of params.values) {
+    if (val.startsWith("-")) throw new Error(`test value '${val}' must not start with '-' (flag injection)`);
   }
   args.push(...params.values);
 
-  const result = await runSanitize(args, null);
-
-  if (result.exitCode !== 0) {
-    throw new Error(
-      `sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`,
-    );
+  if (activeCalls >= MAX_CONCURRENT) {
+    throw new Error(`Too many concurrent requests (max ${MAX_CONCURRENT}). Retry after current calls complete.`);
   }
-
-  return JSON.parse(result.stdout);
+  activeCalls++;
+  try {
+    const result = await runSanitize(args, null);
+    if (result.exitCode !== 0) {
+      throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+    }
+    return JSON.parse(result.stdout);
+  } finally {
+    activeCalls--;
+  }
 }
 
 async function toolListApps(): Promise<string> {
-  const result = await runSanitize(["apps"], null);
-  if (result.exitCode !== 0) {
-    throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+  if (activeCalls >= MAX_CONCURRENT) {
+    throw new Error(`Too many concurrent requests (max ${MAX_CONCURRENT}). Retry after current calls complete.`);
   }
-  return result.stdout;
+  activeCalls++;
+  try {
+    const result = await runSanitize(["apps"], null);
+    if (result.exitCode !== 0) {
+      throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+    }
+    return result.stdout;
+  } finally {
+    activeCalls--;
+  }
 }
 
 interface BuildSecretsEntry {
@@ -1033,6 +1083,7 @@ async function toolBuildSecrets(params: {
   overwrite?: boolean;
 }): Promise<string> {
   validatePath(params.output_path, "output_path");
+  validateFilesPath(params.output_path);
 
   if (!params.overwrite && await fileExists(params.output_path)) {
     throw new Error(
@@ -1068,10 +1119,10 @@ async function toolBuildSecrets(params: {
       for (const e of params.entries) {
         const kind = e.kind ?? "literal";
         const patEscaped = e.pattern.replace(/'/g, "''");
-        content += `  - label: ${e.label}\n`;
+        content += `  - label: ${yamlQuoteString(e.label)}\n`;
         content += `    kind: ${kind}\n`;
         content += `    pattern: '${patEscaped}'\n`;
-        if (e.category) content += `    category: ${e.category}\n`;
+        if (e.category) content += `    category: ${yamlQuoteString(e.category)}\n`;
         content += "\n";
       }
     }
@@ -1130,7 +1181,15 @@ async function toolTestPattern(params: {
       }
     }
 
-    if (params.app?.length) args.push("--app", params.app.join(","));
+    if (params.app?.length) {
+      for (const a of params.app) {
+        if (a.startsWith("-")) throw new Error(`app '${a}' must not start with '-' (flag injection)`);
+      }
+      args.push("--app", params.app.join(","));
+    }
+    for (const val of params.values) {
+      if (val.startsWith("-")) throw new Error(`test value '${val}' must not start with '-' (flag injection)`);
+    }
     args.push(...params.values);
 
     const result = await runSanitize(args, null, env);
@@ -1265,7 +1324,7 @@ const SanitizeSchema = {
     .array(z.string())
     .optional()
     .describe(
-      "Additional keywords to flag. Merged with built-in defaults (error, failure, warning, warn, fatal, exception, critical) unless context_keywords_only is true. Only used when extract_context is true.",
+      "Additional keywords to flag. Merged with built-in defaults (error, failure, warning, warn, fatal, exception, critical) unless context_keywords_replace is true. Only used when extract_context is true.",
     ),
   context_keywords_replace: z
     .boolean()
@@ -1291,7 +1350,7 @@ const SanitizeSchema = {
     .string()
     .optional()
     .describe(
-      "Format the sanitized output as an LLM-ready prompt and return it instead of raw sanitized bytes. Built-in templates: 'troubleshoot' (incident triage), 'review-config' (configuration audit). Pass a filesystem path for a custom template file. Combine with extract_context to include notable log events in the prompt.",
+      "Format the sanitized output as an LLM-ready prompt and return it instead of raw sanitized bytes. Built-in templates: 'troubleshoot' (incident triage), 'review-config' (configuration audit), 'review-security' (security posture review). Pass a filesystem path for a custom template file. Combine with extract_context to include notable log events in the prompt.",
     ),
   force_text: z
     .boolean()
@@ -1598,10 +1657,20 @@ server.tool(
   }) => {
     try {
       validatePath(params.output_path, "output_path");
+      validateFilesPath(params.output_path);
       const args = ["template", "--output", params.output_path];
       if (params.preset) args.push("--preset", params.preset);
       if (params.overwrite) args.push("--overwrite");
-      const result = await runSanitize(args, null);
+      if (activeCalls >= MAX_CONCURRENT) {
+        throw new Error(`Too many concurrent requests (max ${MAX_CONCURRENT}). Retry after current calls complete.`);
+      }
+      activeCalls++;
+      let result: RunResult;
+      try {
+        result = await runSanitize(args, null);
+      } finally {
+        activeCalls--;
+      }
       if (result.exitCode !== 0) {
         throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
       }

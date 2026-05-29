@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **MCP security hardening** — several issues in the TypeScript MCP server were addressed: `test_allowlist`, `list_apps`, and `init` now respect the `MAX_CONCURRENT = 4` concurrency limit (previously they bypassed it); `build_secrets` and `init` now call `validateFilesPath` on the output path to prevent writing to `.password` files or paths inside `SANITIZE_SECRETS_DIR`; `label` and `category` fields in the YAML written by `build_secrets` are now double-quoted to prevent YAML injection; `allow`, `exclude_path`, `app`, `delimiter`, `comment_prefix`, and positional test values now reject inputs that start with `-` to prevent flag injection into the subprocess; `resolveNamespace` now uses the resolved (absolute) secrets dir path for consistent path comparison; the `llm_template` schema description was updated to include `review-security` as a valid built-in template; and the `context_keywords` description was corrected to reference `context_keywords_replace` (was `context_keywords_only`).
+
 - **MCP archive output filename prediction for `.tar.gz` and `.tgz`** — `predictOutputName` in the MCP TypeScript layer now correctly mirrors the CLI's `default_archive_output` logic: archives use `{stem}.sanitized.{full-ext}` (e.g. `archive.sanitized.tar.gz`), not `{stem}-sanitized.{last-ext}` (the plain-file convention). `.tgz` inputs are also normalised to `.tar.gz` in the output name, matching the CLI. The collision-suffix function (`uniquifyName`) was fixed to treat `.tar.gz` as a compound extension so suffixes land before `.tar.gz` rather than before `.gz` alone.
 
 - **`-o -` with file inputs now writes to stdout** — passing `-o -` (the
