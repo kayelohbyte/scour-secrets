@@ -460,7 +460,7 @@ Override the server-wide archive depth default on a per-call basis. The default 
 {
   "tool": "sanitize",
   "files": ["nested.tar.gz"],
-  "max_archive_depth": 4
+  "max_archive_depth": 8
 }
 ```
 

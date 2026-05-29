@@ -25,7 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `TOKEN`, `API_KEY`, `PRIVATE_KEY`, `ACCESS_KEY`, or `AUTH`). The structured
   profile already handled map-form env vars; this closes the remaining gap.
 
+### Changed
+
+- **Default archive nesting depth raised from 3 to 5** — `DEFAULT_ARCHIVE_DEPTH` in the Rust library and `--max-archive-depth` CLI default now allow five levels of nested archives before returning an error. The MCP server default (`SANITIZE_MCP_MAX_ARCHIVE_DEPTH`) is updated to match. Use `--max-archive-depth` / `max_archive_depth` to override per-call; the hard cap remains 10.
+
 ### Fixed
+
+- **MCP archive output filename prediction for `.tar.gz` and `.tgz`** — `predictOutputName` in the MCP TypeScript layer now correctly mirrors the CLI's `default_archive_output` logic: archives use `{stem}.sanitized.{full-ext}` (e.g. `archive.sanitized.tar.gz`), not `{stem}-sanitized.{last-ext}` (the plain-file convention). `.tgz` inputs are also normalised to `.tar.gz` in the output name, matching the CLI. The collision-suffix function (`uniquifyName`) was fixed to treat `.tar.gz` as a compound extension so suffixes land before `.tar.gz` rather than before `.gz` alone.
 
 - **`-o -` with file inputs now writes to stdout** — passing `-o -` (the
   conventional stdout sentinel) when the input was a file path caused the
