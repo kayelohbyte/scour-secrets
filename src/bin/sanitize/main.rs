@@ -2728,8 +2728,7 @@ impl IncludeList {
 /// to files. Only in that case does a stdout TTY conflict with the spinner.
 fn cli_writes_to_stdout(cli: &Cli) -> bool {
     let explicit_stdout_out = cli.output.as_deref() == Some(Path::new("-"));
-    let stdin_only = cli.input.is_empty()
-        || cli.input.iter().all(|p| p.as_os_str() == "-");
+    let stdin_only = cli.input.is_empty() || cli.input.iter().all(|p| p.as_os_str() == "-");
     explicit_stdout_out || (stdin_only && cli.output.is_none())
 }
 
