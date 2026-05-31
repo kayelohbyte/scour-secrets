@@ -423,7 +423,7 @@ function yamlQuoteString(s: string): string {
 function buildSecretsJson(patterns: InlinePattern[]): string {
   return JSON.stringify(
     patterns.map((p) => {
-      const kind = p.kind ?? "regex";
+      const kind = p.kind ?? "literal";
       if (kind !== "allow" && !p.category) {
         throw new Error(`pattern "${p.name}" requires a category when kind is "${kind}"`);
       }
@@ -477,7 +477,6 @@ async function toolSanitize(params: {
   secrets_file?: string;
   profile?: string;
   format?: string;
-  use_default?: boolean;
   app?: string[];
   allow?: string[];
   llm_template?: string;
@@ -548,15 +547,6 @@ async function toolSanitize(params: {
       validatePath(params.llm_template, "llm_template");
     }
   }
-  if (
-    params.use_default &&
-    (params.secrets_file || params.namespace || (params.patterns && params.patterns.length > 0))
-  ) {
-    throw new Error(
-      "use_default cannot be combined with secrets_file, namespace, or patterns — each supplies its own pattern set",
-    );
-  }
-
   if (activeCalls >= MAX_CONCURRENT) {
     throw new Error(`Too many concurrent requests (max ${MAX_CONCURRENT}). Retry after current calls complete.`);
   }
@@ -599,7 +589,6 @@ async function toolSanitize(params: {
       }
     }
 
-    if (params.use_default) commonArgs.push("--use-default");
     if (params.app?.length) {
       for (const a of params.app) {
         if (a.startsWith("-")) throw new Error(`app '${a}' must not start with '-' (flag injection)`);
@@ -802,7 +791,6 @@ async function toolScan(params: {
   secrets_file?: string;
   profile?: string;
   format?: string;
-  use_default?: boolean;
   app?: string[];
   allow?: string[];
   fail_on_match?: boolean;
@@ -843,14 +831,6 @@ async function toolScan(params: {
   }
   if (params.secrets_file) validatePath(params.secrets_file, "secrets_file");
   if (params.profile) validatePath(params.profile, "profile");
-  if (
-    params.use_default &&
-    (params.secrets_file || params.namespace || (params.patterns && params.patterns.length > 0))
-  ) {
-    throw new Error(
-      "use_default cannot be combined with secrets_file, namespace, or patterns — each supplies its own pattern set",
-    );
-  }
 
   if (activeCalls >= MAX_CONCURRENT) {
     throw new Error(`Too many concurrent requests (max ${MAX_CONCURRENT}). Retry after current calls complete.`);
@@ -885,7 +865,6 @@ async function toolScan(params: {
       }
     }
 
-    if (params.use_default) commonArgs.push("--use-default");
     if (params.app?.length) {
       for (const a of params.app) {
         if (a.startsWith("-")) throw new Error(`app '${a}' must not start with '-' (flag injection)`);
@@ -1237,7 +1216,7 @@ const InlinePatternSchema = z.object({
   kind: z
     .enum(["regex", "literal", "allow"])
     .optional()
-    .describe('Match kind: "literal" (default) for exact string matching, "regex" for regular expression matching, or "allow" to pass the value through unchanged (not replaced, not recorded in the mapping store).'),
+    .describe('Match kind: "literal" (default) for exact string matching, "regex" for regular expression matching, or "allow" to pass the value through unchanged without replacement or recording. Omit to get literal matching.'),
 });
 
 const FormatSchema = z
@@ -1251,7 +1230,7 @@ const NamespaceSchema = z
   .string()
   .optional()
   .describe(
-    "Customer or tenant namespace. Resolves secrets, profile, and password from $SANITIZE_SECRETS_DIR/{namespace}/. Takes priority over secrets_file and patterns. Must be alphanumeric with hyphens/underscores only.",
+    "Customer or tenant namespace for operator/multi-tenant deployments where each customer or environment has its own pre-configured secrets file. Resolves secrets, profile, and password from $SANITIZE_SECRETS_DIR/{namespace}/. Takes priority over secrets_file and patterns. Must be alphanumeric with hyphens/underscores only. Requires SANITIZE_SECRETS_DIR to be set.",
   );
 
 const ArchiveFilterSchema = z.object({
@@ -1287,7 +1266,7 @@ const SanitizeSchema = {
     .string()
     .optional()
     .describe(
-      "Optional seed string for deterministic replacements. Same seed → same replacements across calls.",
+      "Optional seed string for deterministic replacements. Same seed → same replacements across calls on the same input. Without a seed, replacements are randomised per call. Treat the seed as a secret — it makes the token mapping predictable, which could allow reconstruction of original values if the seed is leaked.",
     ),
   patterns: z
     .array(InlinePatternSchema)
@@ -1303,17 +1282,11 @@ const SanitizeSchema = {
     .describe(
       "Path to a field-level profile YAML/JSON file defining which structured fields to sanitize.",
     ),
-  use_default: z
-    .boolean()
-    .optional()
-    .describe(
-      "Use built-in balanced detection patterns without a secrets file. Covers API keys (AWS, GCP, GitHub, Stripe, Slack, OpenAI, Anthropic, HuggingFace, GitLab, SendGrid, npm), JWTs, emails, IPv4/IPv6, UUIDs, MAC addresses, PEM headers, and credential URLs. Cannot be combined with secrets_file.",
-    ),
   app: z
     .array(z.string())
     .optional()
     .describe(
-      "Built-in app bundle names to load (e.g. ['gitlab', 'nginx']). Each bundle adds app-specific secrets patterns and a structured field profile. Additive with secrets_file, use_default, and profile.",
+      "Built-in app bundle names to load (e.g. ['gitlab', 'nginx']). Each bundle adds app-specific secrets patterns and a structured field profile. Additive with secrets_file and profile.",
     ),
   allow: z
     .array(z.string())
@@ -1458,23 +1431,17 @@ const ScanSchema = {
     .describe(
       "Path to a field-level profile YAML/JSON file defining which structured fields to scan. Overrides the namespace profile when both are present.",
     ),
-  use_default: z
-    .boolean()
-    .optional()
-    .describe(
-      "Use built-in balanced detection patterns without a secrets file. Cannot be combined with secrets_file.",
-    ),
   app: z
     .array(z.string())
     .optional()
     .describe(
-      "Built-in app bundle names to load (e.g. ['gitlab', 'nginx']). Additive with secrets_file and use_default.",
+      "Built-in app bundle names to load (e.g. ['gitlab', 'nginx']). Each bundle adds app-specific secrets patterns and a structured field profile. Additive with secrets_file. Call list_apps to see all available names.",
     ),
   allow: z
     .array(z.string())
     .optional()
     .describe(
-      "Values to exclude from the scan report. Supports exact strings, * glob patterns, and regex:<pattern> for full regex matching. Useful for suppressing known-safe values that would otherwise appear as false positives.",
+      "Values to exclude from the scan report. Supports exact strings, * glob patterns, and regex:<pattern> for full regex matching. Useful for suppressing known-safe values that would otherwise appear as false positives. Use test_allowlist to verify patterns before applying them.",
     ),
   format: FormatSchema,
   fail_on_match: z
@@ -1562,7 +1529,7 @@ const server = new McpServer({
 
 server.tool(
   "sanitize",
-  "Sanitize sensitive values in text content or files before the LLM reads them. Prefer `files` (file paths) over `content` (inline text) whenever you have a path — the engine processes files directly so raw bytes never enter the LLM context, and binary/archive inputs are handled correctly. The primary MCP use case: pipe logs or configs through this tool, then reason over the safe output. Set `llm_template: 'troubleshoot'` to get a fully-formatted incident-triage prompt ready to paste; set `llm_template: 'review-config'` for a configuration-audit prompt — these are the two most common end-to-end workflows. Structured fields (passwords, tokens, API keys) are replaced with __SANITIZED-<hash>__ markers; typed values (emails, IPs) get realistic-looking substitutes of the same format. Archives are extracted and sanitized recursively. Supply a `seed` for consistent replacements across multiple calls in a session.",
+  "Replace sensitive values in text content or files with safe placeholders before the LLM reads them. This tool MODIFIES content — run scan first if you want to preview what will be replaced without committing. Prefer `files` (file paths) over `content` (inline text) whenever you have a path — the engine processes files directly so raw bytes never enter the LLM context, and binary/archive inputs are handled correctly. Zero-config start: omit secrets_file, namespace, and patterns and the engine automatically applies built-in patterns covering API keys (AWS, GCP, GitHub, Stripe, Slack, OpenAI, Anthropic), JWTs, emails, IPs, and more. The primary MCP use case: pipe logs or configs through this tool, then reason over the safe output. Set `llm_template: 'troubleshoot'` to get a fully-formatted incident-triage prompt ready to paste; set `llm_template: 'review-config'` for a configuration-audit prompt — these are the two most common end-to-end workflows. Structured fields (passwords, tokens, API keys) are replaced with __SANITIZED-<hash>__ markers; typed values (emails, IPs) get realistic-looking substitutes of the same format. Archives are extracted and sanitized recursively. Supply a `seed` for consistent replacements across multiple calls in a session.",
   SanitizeSchema,
   async (params: SanitizeParams) => {
     try {
@@ -1584,7 +1551,7 @@ server.tool(
 
 server.tool(
   "scan",
-  "Scan text content or one or more files for sensitive values and return a structured report — without modifying anything. Prefer `files` (file paths) over `content` (inline text) whenever a path is available. Accepts the same `files` and `archive_filters` inputs as the sanitize tool. Use `fail_on_match` for security-gate workflows: the response includes a `secrets_detected` boolean so callers can branch without parsing the full report. Useful for auditing what would be replaced before committing to full sanitization.",
+  "Read-only audit — detects sensitive values and returns a structured JSON report without modifying any files. Run this before sanitize to preview what will be replaced, or as a security gate in CI pipelines. Prefer `files` (file paths) over `content` (inline text) whenever a path is available. Zero-config start: omit secrets_file, namespace, and patterns and the engine automatically applies built-in detection patterns (API keys, JWTs, emails, IPs, and more). Use `fail_on_match` for binary yes/no security-gate workflows: the response includes a `secrets_detected` boolean so callers can branch without parsing the full report. Typical workflow: scan with no pattern source → observe gaps → build_secrets to add missing patterns → sanitize with the new file.",
   ScanSchema,
   async (params: ScanParams) => {
     try {
@@ -1601,7 +1568,7 @@ server.tool(
 
 server.tool(
   "strip_config_values",
-  "Strip values from key=value configuration files, preserving only keys, comments, section headers, and delimiters. Accepts inline `content` or one or more file paths via `files`. Useful for sharing config structure without exposing secrets.",
+  "Strip ALL values from key=value configuration files, preserving only keys, comments, section headers, and delimiters. Use this when you want to share configuration structure without any values — the result is not suitable for LLM reasoning (values are gone, not replaced). Use sanitize instead when you need values replaced with realistic-looking substitutes so the LLM can reason about the content. Accepts inline `content` or one or more file paths via `files`.",
   StripSchema,
   async (params: StripParams) => {
     try {
@@ -1619,7 +1586,7 @@ server.tool(
 
 server.tool(
   "test_allowlist",
-  "Test which values match a set of allowlist patterns before committing to a full sanitization run. Returns a per-value match result with the pattern that matched, plus a summary count.",
+  "Verify that allowlist patterns cover the expected values before passing them to sanitize or scan via the `allow` parameter. Returns a per-value match result showing which pattern matched (or that no pattern matched), plus a summary count. Use this when you are seeing false positives in scan output and want to confirm that your allow patterns would suppress them correctly.",
   {
     patterns: z
       .array(z.string())
@@ -1645,7 +1612,7 @@ server.tool(
 
 server.tool(
   "list_apps",
-  "List all available app bundles (built-in and user-defined) that can be passed to the `app` parameter. Shows bundle names, descriptions, and the user apps directory path.",
+  "List all available app bundles (built-in and user-defined) that can be passed to the `app` parameter of sanitize or scan. Call this before using `app` to confirm the bundle name — passing an unknown name to sanitize/scan will error. Shows bundle names, descriptions, and the user apps directory path.",
   {},
   async () => {
     try {
@@ -1662,7 +1629,7 @@ server.tool(
 
 server.tool(
   "init",
-  "Create a starter secrets file on disk at the specified path. Use this to set up sanitize-engine for a project in one step — generates a ready-to-use YAML secrets file with patterns appropriate for the chosen preset. Call this when the user wants to start using sanitize-engine or asks how to create a secrets file.",
+  "One-step project setup: create a starter secrets file on disk from a built-in preset. Use this when a user wants to start using sanitize-engine — it generates a ready-to-use YAML secrets file they can run immediately. For more control (adding patterns discovered by scan), use build_secrets instead. Call init when the user asks how to create a secrets file or wants to get started quickly.",
   {
     output_path: z
       .string()
@@ -1721,12 +1688,12 @@ server.tool(
 
 server.tool(
   "test_pattern",
-  "Test which values are matched and replaced by a given secrets file, app bundle, or inline pattern set — without modifying any files. Returns a per-value result showing which pattern matched and what replacement category was applied. Use this when authoring a secrets file to verify coverage before running a full sanitization. WARNING: test values are echoed back verbatim in the response (including matched text) and will enter the LLM context window. Use synthetic or anonymised examples only — never pass real production secrets as test values.",
+  "WARNING: test values are echoed back verbatim in the response — never pass real secrets. Use synthetic or anonymised examples only. — Test which values are matched and replaced by a given secrets file, app bundle, or inline pattern set, without modifying any files. Returns a per-value result showing which pattern matched and what replacement category was applied. Typical workflow: build_secrets → test_pattern with synthetic examples → sanitize with confidence.",
   {
     values: z
       .array(z.string())
       .min(1)
-      .describe("Values to test against the active patterns. Use synthetic examples — these values are returned verbatim in the response and will enter the LLM context window."),
+      .describe("Synthetic or anonymised values to test against the active patterns. These are returned verbatim in the response — never pass real secrets here."),
     secrets_file: z
       .string()
       .optional()
@@ -1762,7 +1729,7 @@ server.tool(
 
 server.tool(
   "build_secrets",
-  "Build a tailored secrets file from specific patterns and write it to disk. Use this after scanning content and identifying what the default patterns missed — supply the exact literals or regexes you need and optionally start from a preset template. Returns the written file content. The workflow: scan with use_default → observe gaps → build_secrets to capture the missing patterns → sanitize with the new file.",
+  "Build a tailored secrets file from specific patterns and write it to disk. Use this after scanning content and identifying what the default patterns missed — supply the exact literals or regexes you need and optionally start from a preset template. Returns the written file content. For a quick no-customisation start, use init instead. Recommended workflow: scan with no pattern source (auto-defaults) → observe gaps in the report → build_secrets with the missing patterns → test_pattern with synthetic examples → sanitize with the new file.",
   {
     output_path: z
       .string()
@@ -1820,7 +1787,7 @@ server.tool(
 
 server.tool(
   "list_processors",
-  "List all supported input format processors (json, yaml, toml, csv, jsonl, etc.) and the --format flag value to use for each. Use this to discover which format_flag to pass to the sanitize or scan tools when the file extension is ambiguous or missing.",
+  "List all supported input format processors (json, yaml, toml, csv, jsonl, etc.) and the format_flag value to pass as the `format` parameter to sanitize or scan. Most file types are auto-detected by extension — only call this when format detection fails (e.g. extensionless files, stdin input, or an unfamiliar extension).",
   {},
   async () => {
     const processors = [
@@ -1850,7 +1817,7 @@ server.tool(
 
 server.tool(
   "list_templates",
-  "List the built-in LLM prompt templates available via the llm_template parameter of the sanitize tool. Each template formats the sanitized output for a different analysis task.",
+  "List the built-in LLM prompt templates available via the `llm_template` parameter of the sanitize tool. Each template wraps the sanitized output in a ready-to-use prompt for a specific analysis task (troubleshooting, config review, security review). Call this when the user asks what templates are available or wants to know what llm_template values are valid.",
   {},
   async () => {
     const templates = [

@@ -148,7 +148,7 @@ impl SanitizeReport {
                         "Sensitive value detected".to_owned(),
                         "One or more sensitive values were detected during sanitization and \
                          replaced with safe substitutes. No original values are stored. \
-                         Run with a secrets file or --use-default for per-pattern breakdown."
+                         Run with a secrets file for per-pattern breakdown."
                             .to_owned(),
                     )
                 } else {

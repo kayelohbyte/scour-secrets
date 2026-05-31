@@ -1,4 +1,4 @@
-use crate::{HookMode, HookType, InstallHookArgs};
+use crate::cli_args::{HookMode, HookType, InstallHookArgs};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -319,7 +319,7 @@ fn detect_framework_hooks_dir(repo_root: &Path, hook_name: &str) -> Option<PathB
         eprintln!("  {hook_name}:");
         eprintln!("    commands:");
         eprintln!("      sanitize:");
-        eprintln!("        run: sanitize --dry-run --fail-on-match --use-default {{staged_files}}");
+        eprintln!("        run: sanitize --dry-run --fail-on-match {{staged_files}}");
         eprintln!("        glob: '*.{{yaml,yml,json,toml,env,conf,rb,py,go,ts,js}}'");
         eprintln!();
         eprintln!("Then re-run `sanitize install-hook` without the lefthook config to install a fallback raw hook,");
@@ -338,7 +338,7 @@ fn detect_framework_hooks_dir(repo_root: &Path, hook_name: &str) -> Option<PathB
         eprintln!("    hooks:");
         eprintln!("      - id: sanitize-scan");
         eprintln!("        name: Scan for secrets (rust-sanitize)");
-        eprintln!("        entry: sanitize --dry-run --fail-on-match --use-default");
+        eprintln!("        entry: sanitize --dry-run --fail-on-match");
         eprintln!("        language: system");
         eprintln!("        pass_filenames: true");
         eprintln!();
@@ -490,4 +490,99 @@ pub(crate) fn run_install_hook(args: &InstallHookArgs) -> Result<(), (String, i3
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli_args::{HookMode, HookType};
+
+    // ── sh_quote ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn sh_quote_plain_string() {
+        assert_eq!(sh_quote("hello"), "'hello'");
+    }
+
+    #[test]
+    fn sh_quote_string_with_spaces() {
+        assert_eq!(sh_quote("/path/to my/file.yaml"), "'/path/to my/file.yaml'");
+    }
+
+    #[test]
+    fn sh_quote_string_with_single_quote() {
+        // The standard POSIX sh escaping: ' → '\''
+        assert_eq!(sh_quote("it's"), "'it'\\''s'");
+    }
+
+    #[test]
+    fn sh_quote_multiple_single_quotes() {
+        assert_eq!(sh_quote("a'b'c"), "'a'\\''b'\\''c'");
+    }
+
+    #[test]
+    fn sh_quote_empty_string() {
+        assert_eq!(sh_quote(""), "''");
+    }
+
+    #[test]
+    fn sh_quote_special_shell_chars_do_not_escape() {
+        // Dollar signs, backticks, etc. are safe inside single quotes.
+        assert_eq!(sh_quote("$VAR`cmd`"), "'$VAR`cmd`'");
+    }
+
+    // ── build_hook_flags ─────────────────────────────────────────────────────
+
+    fn base_args() -> InstallHookArgs {
+        InstallHookArgs {
+            hook: HookType::PreCommit,
+            mode: HookMode::Scan,
+            global: false,
+            force: false,
+            remove: false,
+            app: None,
+            secrets_file: None,
+            dry_run: false,
+        }
+    }
+
+    #[test]
+    fn build_hook_flags_no_args() {
+        let args = base_args();
+        assert_eq!(build_hook_flags(&args), "");
+    }
+
+    #[test]
+    fn build_hook_flags_with_app() {
+        let args = InstallHookArgs { app: Some("gitlab".into()), ..base_args() };
+        assert_eq!(build_hook_flags(&args), "--app 'gitlab'");
+    }
+
+    #[test]
+    fn build_hook_flags_with_secrets_file() {
+        let args = InstallHookArgs {
+            secrets_file: Some(PathBuf::from("/home/user/secrets.yaml")),
+            ..base_args()
+        };
+        assert_eq!(build_hook_flags(&args), "-s '/home/user/secrets.yaml'");
+    }
+
+    #[test]
+    fn build_hook_flags_with_secrets_file_with_spaces() {
+        let args = InstallHookArgs {
+            secrets_file: Some(PathBuf::from("/my secrets/file.yaml")),
+            ..base_args()
+        };
+        assert_eq!(build_hook_flags(&args), "-s '/my secrets/file.yaml'");
+    }
+
+    #[test]
+    fn build_hook_flags_app_and_secrets_file() {
+        let args = InstallHookArgs {
+            app: Some("kubernetes".into()),
+            secrets_file: Some(PathBuf::from("secrets.yaml")),
+            ..base_args()
+        };
+        assert_eq!(build_hook_flags(&args), "--app 'kubernetes' -s 'secrets.yaml'");
+    }
 }

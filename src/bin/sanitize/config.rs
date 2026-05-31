@@ -1,7 +1,7 @@
+use crate::cli_args::{InitArgs, InstallHookArgs};
 use crate::hooks::{
     global_default_secrets_path, global_settings_path, run_install_hook, sanitize_config_dir,
 };
-use crate::{InitArgs, InstallHookArgs};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -422,4 +422,86 @@ pub(crate) fn run_init(args: &InitArgs) -> Result<(), (String, i32)> {
 
     println!();
     run_install_hook(&hook_args)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    // ── find_project_config_from ─────────────────────────────────────────────
+
+    #[test]
+    fn find_project_config_from_finds_in_same_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".sanitize.toml");
+        fs::write(&config, "").unwrap();
+        assert_eq!(find_project_config_from(dir.path()), Some(config));
+    }
+
+    #[test]
+    fn find_project_config_from_finds_in_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join(".sanitize.toml");
+        fs::write(&config, "").unwrap();
+        let child = dir.path().join("subdir/nested");
+        fs::create_dir_all(&child).unwrap();
+        assert_eq!(find_project_config_from(&child), Some(config));
+    }
+
+    #[test]
+    fn find_project_config_from_returns_none_when_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        // No .sanitize.toml anywhere in this subtree (which is in /tmp).
+        // Walk will stop at filesystem root; as long as no .sanitize.toml
+        // happens to exist in /tmp or above this returns None.
+        let child = dir.path().join("a/b/c");
+        fs::create_dir_all(&child).unwrap();
+        // Verify there is no config in the temp dir itself either.
+        let result = find_project_config_from(&child);
+        // It may find one higher up on developer machines, so only assert
+        // it doesn't find one *inside* our temp dir.
+        if let Some(ref found) = result {
+            assert!(!found.starts_with(dir.path()), "should not find config inside temp dir");
+        }
+    }
+
+    // ── load_project_config ──────────────────────────────────────────────────
+
+    #[test]
+    fn load_project_config_parses_valid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".sanitize.toml");
+        fs::write(&path, r#"
+            app = ["gitlab"]
+            allow = ["localhost"]
+            fail_on_match = true
+        "#).unwrap();
+        let (cfg, cfg_dir) = load_project_config(&path);
+        assert_eq!(cfg.app, vec!["gitlab"]);
+        assert_eq!(cfg.allow, vec!["localhost"]);
+        assert_eq!(cfg.fail_on_match, Some(true));
+        assert_eq!(cfg_dir, dir.path());
+    }
+
+    #[test]
+    fn load_project_config_returns_default_on_invalid_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".sanitize.toml");
+        fs::write(&path, "this is not valid toml ][[[").unwrap();
+        let (cfg, _) = load_project_config(&path);
+        assert!(cfg.app.is_empty());
+        assert!(cfg.allow.is_empty());
+        assert_eq!(cfg.fail_on_match, None);
+    }
+
+    #[test]
+    fn load_project_config_resolves_config_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".sanitize.toml");
+        fs::write(&path, r#"secrets_file = "secrets.yaml""#).unwrap();
+        let (cfg, cfg_dir) = load_project_config(&path);
+        assert_eq!(cfg.secrets_file, Some(PathBuf::from("secrets.yaml")));
+        assert_eq!(cfg_dir, dir.path());
+    }
 }

@@ -80,7 +80,7 @@ pub const DEFAULT_FIELD_SIGNAL_THRESHOLD: f64 = 3.5;
 ///
 /// # Built-in defaults
 ///
-/// When `--use-default` or `--app` is active, two built-in signals are
+/// When default patterns or `--app` is active, two built-in signals are
 /// injected automatically (unless `--no-field-signal` is passed):
 ///
 /// - **Strong** (`threshold: 3.0`): `password`, `passwd`, `secret`,
@@ -315,7 +315,7 @@ pub struct FileTypeProfile {
     pub options: std::collections::HashMap<String, String>,
 
     /// Field-name signals injected at runtime from `kind: field-name` secrets
-    /// entries and from built-in defaults when `--use-default` or `--app` is
+    /// entries and from built-in defaults when default patterns or `--app` is
     /// active.  Never serialized to or deserialized from the profile file on
     /// disk — configure signals in your secrets file instead.
     #[serde(skip)]

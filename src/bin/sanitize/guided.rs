@@ -1,4 +1,4 @@
-use crate::common_allow_patterns;
+use crate::scanner_builder::common_allow_patterns;
 use sanitize_engine::processor::FileTypeProfile;
 use sanitize_engine::secrets::SecretEntry;
 use sanitize_engine::{Category, FieldRule};

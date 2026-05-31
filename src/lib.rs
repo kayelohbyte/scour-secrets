@@ -144,7 +144,7 @@ pub mod strategy;
 pub mod strip_values;
 
 // Re-exports for convenience.
-pub use atomic::{atomic_write, AtomicFileWriter};
+pub use atomic::{atomic_write, atomic_write_private, AtomicFileWriter};
 pub use category::Category;
 pub use error::{Result, SanitizeError};
 pub use generator::{HmacGenerator, RandomGenerator, ReplacementGenerator};

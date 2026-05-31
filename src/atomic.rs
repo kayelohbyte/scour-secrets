@@ -47,6 +47,20 @@ impl AtomicFileWriter {
     ///
     /// Returns an I/O error if the temporary file cannot be created.
     pub fn new(dest: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open(dest, false)
+    }
+
+    /// Like [`new`](Self::new), but restricts the temp file (and therefore
+    /// the renamed destination) to owner-read/write (0600) on Unix.
+    ///
+    /// Use this when writing files that contain sensitive material such as
+    /// plaintext secrets, so that the data is never world-readable — even
+    /// during the brief window between the initial `open` and the rename.
+    pub fn new_private(dest: impl AsRef<Path>) -> io::Result<Self> {
+        Self::open(dest, true)
+    }
+
+    fn open(dest: impl AsRef<Path>, private: bool) -> io::Result<Self> {
         let dest_path = dest.as_ref().to_path_buf();
         let dir = dest_path.parent().unwrap_or(Path::new("."));
         let base_name = dest_path
@@ -64,6 +78,15 @@ impl AtomicFileWriter {
             .write(true)
             .create_new(true)
             .open(&tmp_path)?;
+
+        // Restrict permissions before any data is written so the file is
+        // never world-readable, even briefly.
+        #[cfg(unix)]
+        if private {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        }
+
         Ok(Self {
             writer: BufWriter::new(file),
             tmp_path,
@@ -147,6 +170,15 @@ impl Drop for AtomicFileWriter {
 /// or renamed.
 pub fn atomic_write(dest: impl AsRef<Path>, data: &[u8]) -> io::Result<()> {
     let mut writer = AtomicFileWriter::new(dest)?;
+    writer.write_all(data)?;
+    writer.finish()
+}
+
+/// Like [`atomic_write`] but creates the file with owner-only permissions
+/// (0600 on Unix).  Use for files containing plaintext secrets or other
+/// sensitive material.
+pub fn atomic_write_private(dest: impl AsRef<Path>, data: &[u8]) -> io::Result<()> {
+    let mut writer = AtomicFileWriter::new_private(dest)?;
     writer.write_all(data)?;
     writer.finish()
 }

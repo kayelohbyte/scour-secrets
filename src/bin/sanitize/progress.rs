@@ -71,8 +71,9 @@ impl ProgressPolicy {
                 // when the shared cursor would cause interleaving. A stdout
                 // that is a TTY but isn't receiving output (e.g. writing to
                 // files) is fine.
+                let writing_to_tty_stdout = context.stdout_is_terminal && context.stdout_is_output;
                 let allow_live = context.stderr_is_terminal
-                    && !(context.stdout_is_terminal && context.stdout_is_output)
+                    && !writing_to_tty_stdout
                     && !context.is_ci
                     && !context.term_is_dumb
                     && !context.json_logs;

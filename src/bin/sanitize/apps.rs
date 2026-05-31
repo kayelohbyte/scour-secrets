@@ -1,4 +1,4 @@
-use crate::{AppsAddArgs, AppsArgs, AppsEditArgs, AppsRemoveArgs, AppsSubCommand};
+use crate::cli_args::{AppsAddArgs, AppsArgs, AppsEditArgs, AppsRemoveArgs, AppsSubCommand};
 use sanitize_engine::processor::FileTypeProfile;
 use sanitize_engine::secrets::SecretEntry;
 use std::fs;
