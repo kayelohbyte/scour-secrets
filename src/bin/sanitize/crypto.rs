@@ -3,8 +3,8 @@ use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
-use sanitize_engine::{atomic_write, atomic_write_private};
 use sanitize_engine::secrets::{decrypt_secrets, encrypt_secrets, parse_secrets, SecretsFormat};
+use sanitize_engine::{atomic_write, atomic_write_private};
 
 use crate::cli_args::{Cli, DecryptArgs, EncryptArgs};
 

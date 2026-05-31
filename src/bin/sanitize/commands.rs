@@ -231,7 +231,11 @@ pub(crate) fn run_test_pattern(args: &TestPatternArgs) -> Result<(), (String, i3
                     let (span, partial) = if let Some(g1) = m.get(1) {
                         (g1, true)
                     } else {
-                        (m.get(0).expect("group 0 is always Some on a successful captures call"), false)
+                        (
+                            m.get(0)
+                                .expect("group 0 is always Some on a successful captures call"),
+                            false,
+                        )
                     };
                     hits.push(MatchHit {
                         label: cp.label.clone(),

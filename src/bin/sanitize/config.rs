@@ -462,7 +462,10 @@ mod tests {
         // It may find one higher up on developer machines, so only assert
         // it doesn't find one *inside* our temp dir.
         if let Some(ref found) = result {
-            assert!(!found.starts_with(dir.path()), "should not find config inside temp dir");
+            assert!(
+                !found.starts_with(dir.path()),
+                "should not find config inside temp dir"
+            );
         }
     }
 
@@ -472,11 +475,15 @@ mod tests {
     fn load_project_config_parses_valid_toml() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(".sanitize.toml");
-        fs::write(&path, r#"
+        fs::write(
+            &path,
+            r#"
             app = ["gitlab"]
             allow = ["localhost"]
             fail_on_match = true
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         let (cfg, cfg_dir) = load_project_config(&path);
         assert_eq!(cfg.app, vec!["gitlab"]);
         assert_eq!(cfg.allow, vec!["localhost"]);

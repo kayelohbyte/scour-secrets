@@ -723,7 +723,6 @@ pub(crate) struct ScanArgs {
     /// Enable Shannon entropy detection with this threshold (bits/char, e.g. 4.5).
     #[arg(long, value_name = "THRESHOLD")]
     pub(crate) entropy_threshold: Option<f64>,
-
 }
 
 #[derive(Parser, Debug)]

@@ -658,7 +658,8 @@ pub(crate) fn parse_archive_filters(
                     ));
                 } else {
                     validate_pattern(&s)?;
-                    let key = current_archive.as_ref()
+                    let key = current_archive
+                        .as_ref()
                         .expect("state machine guarantees archive is set before pattern args");
                     let entry = filter_map.entry(key.clone()).or_default();
                     if state == State::CollectingOnly {

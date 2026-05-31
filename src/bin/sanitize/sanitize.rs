@@ -20,7 +20,9 @@ use sanitize_engine::{
 
 use crate::apps::{ensure_user_app_copy, load_app_bundle};
 use crate::cli_args::{Cli, ReportFormat};
-use crate::config::{find_project_config, load_project_config, load_settings, ProjectConfig, Settings};
+use crate::config::{
+    find_project_config, load_project_config, load_settings, ProjectConfig, Settings,
+};
 use crate::crypto::resolve_sanitize_password;
 use crate::dispatch::{
     abs_label, load_profiles, print_entropy_histogram, save_discovered_secrets, write_output,
@@ -185,28 +187,29 @@ fn load_run_resources(
         }
     }
 
-    let secrets_raw_bytes: Option<Zeroizing<Vec<u8>>> = if let Some(ref secrets_path) = cli.secrets_file {
-        if secrets_path.exists() {
-            Some(Zeroizing::new(fs::read(secrets_path).map_err(|e| {
-                (
-                    format!(
-                        "failed to read secrets file {}: {e}",
-                        secrets_path.display()
-                    ),
+    let secrets_raw_bytes: Option<Zeroizing<Vec<u8>>> =
+        if let Some(ref secrets_path) = cli.secrets_file {
+            if secrets_path.exists() {
+                Some(Zeroizing::new(fs::read(secrets_path).map_err(|e| {
+                    (
+                        format!(
+                            "failed to read secrets file {}: {e}",
+                            secrets_path.display()
+                        ),
+                        1,
+                    )
+                })?))
+            } else if cli.deterministic {
+                None
+            } else {
+                return Err((
+                    format!("secrets file not found: {}", secrets_path.display()),
                     1,
-                )
-            })?))
-        } else if cli.deterministic {
-            None
+                ));
+            }
         } else {
-            return Err((
-                format!("secrets file not found: {}", secrets_path.display()),
-                1,
-            ));
-        }
-    } else {
-        None
-    };
+            None
+        };
 
     let mut was_encrypted_secrets = false;
     if let Some(ref raw_bytes) = secrets_raw_bytes {
@@ -287,11 +290,9 @@ fn load_run_resources(
             None
         };
 
-    let nothing_specified = cli.secrets_file.is_none()
-        && cli.app.is_empty()
-        && cli.profile.is_none();
-    let load_defaults =
-        nothing_specified || (!cli.app.is_empty() && cli.secrets_file.is_none());
+    let nothing_specified =
+        cli.secrets_file.is_none() && cli.app.is_empty() && cli.profile.is_none();
+    let load_defaults = nothing_specified || (!cli.app.is_empty() && cli.secrets_file.is_none());
     if load_defaults {
         all_allow_patterns.extend(common_allow_patterns());
     }
@@ -986,7 +987,10 @@ pub(crate) fn run_sanitize(
     }
 
     let augmented_scanner = build_augmented_scanner(&base_patterns, &store, scan_config)?;
-    let aug_fp = FileProcessor { scanner: &augmented_scanner, ..base_fp };
+    let aug_fp = FileProcessor {
+        scanner: &augmented_scanner,
+        ..base_fp
+    };
 
     if !profiles.is_empty() {
         for target in stdin_targets {
@@ -1100,7 +1104,13 @@ mod tests {
     fn settings_layer_does_not_override_cli_flags() {
         let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--fail-on-match"]).unwrap();
         assert!(cli.fail_on_match);
-        apply_settings_layer(&mut cli, Settings { fail_on_match: Some(false), ..Default::default() });
+        apply_settings_layer(
+            &mut cli,
+            Settings {
+                fail_on_match: Some(false),
+                ..Default::default()
+            },
+        );
         // CLI flag wins — still true.
         assert!(cli.fail_on_match);
     }
@@ -1108,21 +1118,39 @@ mod tests {
     #[test]
     fn settings_layer_does_not_override_explicit_threads() {
         let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--threads", "2"]).unwrap();
-        apply_settings_layer(&mut cli, Settings { threads: Some(16), ..Default::default() });
+        apply_settings_layer(
+            &mut cli,
+            Settings {
+                threads: Some(16),
+                ..Default::default()
+            },
+        );
         assert_eq!(cli.threads, Some(2));
     }
 
     #[test]
     fn settings_layer_fills_app_when_cli_empty() {
         let mut cli = default_cli();
-        apply_settings_layer(&mut cli, Settings { app: vec!["gitlab".into()], ..Default::default() });
+        apply_settings_layer(
+            &mut cli,
+            Settings {
+                app: vec!["gitlab".into()],
+                ..Default::default()
+            },
+        );
         assert_eq!(cli.app, vec!["gitlab"]);
     }
 
     #[test]
     fn settings_layer_does_not_replace_cli_app() {
         let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--app", "kubernetes"]).unwrap();
-        apply_settings_layer(&mut cli, Settings { app: vec!["gitlab".into()], ..Default::default() });
+        apply_settings_layer(
+            &mut cli,
+            Settings {
+                app: vec!["gitlab".into()],
+                ..Default::default()
+            },
+        );
         assert_eq!(cli.app, vec!["kubernetes"]);
     }
 
@@ -1131,7 +1159,10 @@ mod tests {
     #[test]
     fn project_layer_adds_app_bundles_additively() {
         let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--app", "kubernetes"]).unwrap();
-        let pc = ProjectConfig { app: vec!["gitlab".into()], ..Default::default() };
+        let pc = ProjectConfig {
+            app: vec!["gitlab".into()],
+            ..Default::default()
+        };
         apply_project_config_layer(&mut cli, pc, Path::new("."));
         assert!(cli.app.contains(&"kubernetes".to_string()));
         assert!(cli.app.contains(&"gitlab".to_string()));
@@ -1140,7 +1171,10 @@ mod tests {
     #[test]
     fn project_layer_deduplicates_app_bundles() {
         let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--app", "gitlab"]).unwrap();
-        let pc = ProjectConfig { app: vec!["gitlab".into()], ..Default::default() };
+        let pc = ProjectConfig {
+            app: vec!["gitlab".into()],
+            ..Default::default()
+        };
         apply_project_config_layer(&mut cli, pc, Path::new("."));
         assert_eq!(cli.app.iter().filter(|a| *a == "gitlab").count(), 1);
     }
@@ -1158,15 +1192,17 @@ mod tests {
 
     #[test]
     fn project_layer_does_not_override_cli_secrets_file() {
-        let mut cli = Cli::try_parse_from([
-            "sanitize", "file.txt", "-s", "/explicit/secrets.yaml",
-        ]).unwrap();
+        let mut cli =
+            Cli::try_parse_from(["sanitize", "file.txt", "-s", "/explicit/secrets.yaml"]).unwrap();
         let pc = ProjectConfig {
             secrets_file: Some(PathBuf::from("project_secrets.yaml")),
             ..Default::default()
         };
         apply_project_config_layer(&mut cli, pc, Path::new("/repo"));
-        assert_eq!(cli.secrets_file, Some(PathBuf::from("/explicit/secrets.yaml")));
+        assert_eq!(
+            cli.secrets_file,
+            Some(PathBuf::from("/explicit/secrets.yaml"))
+        );
     }
 
     #[test]
@@ -1182,11 +1218,14 @@ mod tests {
 
     #[test]
     fn project_layer_adds_allow_additively() {
-        let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--allow", "localhost"]).unwrap();
-        let pc = ProjectConfig { allow: vec!["*.internal".into()], ..Default::default() };
+        let mut cli =
+            Cli::try_parse_from(["sanitize", "file.txt", "--allow", "localhost"]).unwrap();
+        let pc = ProjectConfig {
+            allow: vec!["*.internal".into()],
+            ..Default::default()
+        };
         apply_project_config_layer(&mut cli, pc, Path::new("."));
         assert!(cli.allow.contains(&"localhost".to_string()));
         assert!(cli.allow.contains(&"*.internal".to_string()));
     }
 }
-

@@ -554,7 +554,10 @@ mod tests {
 
     #[test]
     fn build_hook_flags_with_app() {
-        let args = InstallHookArgs { app: Some("gitlab".into()), ..base_args() };
+        let args = InstallHookArgs {
+            app: Some("gitlab".into()),
+            ..base_args()
+        };
         assert_eq!(build_hook_flags(&args), "--app 'gitlab'");
     }
 
@@ -583,6 +586,9 @@ mod tests {
             secrets_file: Some(PathBuf::from("secrets.yaml")),
             ..base_args()
         };
-        assert_eq!(build_hook_flags(&args), "--app 'kubernetes' -s 'secrets.yaml'");
+        assert_eq!(
+            build_hook_flags(&args),
+            "--app 'kubernetes' -s 'secrets.yaml'"
+        );
     }
 }

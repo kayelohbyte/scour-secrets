@@ -7,8 +7,8 @@ use tracing::{info, warn};
 
 use sanitize_engine::secrets::SecretEntry;
 use sanitize_engine::{
-    atomic_write, atomic_write_private, extract_context, extract_context_reader, ArchiveFilter, ArchiveFormat,
-    ArchiveProcessor, ArchiveProgress, AtomicFileWriter, EntryCallback, FileReport,
+    atomic_write, atomic_write_private, extract_context, extract_context_reader, ArchiveFilter,
+    ArchiveFormat, ArchiveProcessor, ArchiveProgress, AtomicFileWriter, EntryCallback, FileReport,
     FileTypeProfile, LlmEntry, LogContextConfig, LogContextResult, MappingStore, ProcessorRegistry,
     ReportBuilder, ScanPattern, ScanStats, StreamScanner,
 };
@@ -32,15 +32,15 @@ pub(crate) type LlmCollector = Arc<Mutex<Vec<LlmEntry>>>;
 /// Every field is a reference or `Copy` type, so `FileProcessor<'a>` is `Copy`.
 #[derive(Copy, Clone)]
 pub(crate) struct FileProcessor<'a> {
-    pub(crate) cli:                   &'a crate::cli_args::Cli,
-    pub(crate) scanner:               &'a Arc<StreamScanner>,
-    pub(crate) registry:              &'a Arc<ProcessorRegistry>,
-    pub(crate) store:                 &'a Arc<MappingStore>,
-    pub(crate) profiles:              &'a [FileTypeProfile],
-    pub(crate) report_builder:        Option<&'a ReportBuilder>,
-    pub(crate) progress:              Option<&'a SharedProgressReporter>,
-    pub(crate) llm_collector:         Option<&'a LlmCollector>,
-    pub(crate) entropy_configs:       &'a Arc<Vec<crate::entropy::EntropyConfig>>,
+    pub(crate) cli: &'a crate::cli_args::Cli,
+    pub(crate) scanner: &'a Arc<StreamScanner>,
+    pub(crate) registry: &'a Arc<ProcessorRegistry>,
+    pub(crate) store: &'a Arc<MappingStore>,
+    pub(crate) profiles: &'a [FileTypeProfile],
+    pub(crate) report_builder: Option<&'a ReportBuilder>,
+    pub(crate) progress: Option<&'a SharedProgressReporter>,
+    pub(crate) llm_collector: Option<&'a LlmCollector>,
+    pub(crate) entropy_configs: &'a Arc<Vec<crate::entropy::EntropyConfig>>,
     pub(crate) entropy_histogram_acc: Option<&'a Arc<Mutex<Vec<crate::entropy::EntropyBuckets>>>>,
 }
 
@@ -792,121 +792,690 @@ impl<'a> FileProcessor<'a> {
     }
 
     /// Process a plain (non-archive) file. Returns `true` if matches were found.
-    pub(crate) fn process_plain_file(self, input: &Path, output_path: Option<&Path>) -> Result<bool, String> {
+    pub(crate) fn process_plain_file(
+        self,
+        input: &Path,
+        output_path: Option<&Path>,
+    ) -> Result<bool, String> {
         let cli = self.cli;
         let fp = self;
-    let mut sample = [0u8; 512];
-    let sample_len = {
-        let mut f = fs::File::open(input)
-            .map_err(|e| format!("failed to open {}: {e}", input.display()))?;
-        io::Read::read(&mut f, &mut sample)
-            .map_err(|e| format!("failed to read {}: {e}", input.display()))?
-    };
-    if !cli.include_binary && looks_binary(&sample[..sample_len]) {
-        let file_size = sample_len as u64;
-        warn!(
-            file = %input.display(),
-            bytes = file_size,
-            "skipping binary file — use --include-binary to process it"
-        );
-        return Ok(false);
-    }
+        let mut sample = [0u8; 512];
+        let sample_len = {
+            let mut f = fs::File::open(input)
+                .map_err(|e| format!("failed to open {}: {e}", input.display()))?;
+            io::Read::read(&mut f, &mut sample)
+                .map_err(|e| format!("failed to read {}: {e}", input.display()))?
+        };
+        if !cli.include_binary && looks_binary(&sample[..sample_len]) {
+            let file_size = sample_len as u64;
+            warn!(
+                file = %input.display(),
+                bytes = file_size,
+                "skipping binary file — use --include-binary to process it"
+            );
+            return Ok(false);
+        }
 
-    let filename = if let Some(ref fmt) = cli.format {
-        format_to_ext(fmt)
-            .map(|ext| format!("override.{ext}"))
-            .unwrap_or_default()
-    } else {
-        input
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string()
-    };
+        let filename = if let Some(ref fmt) = cli.format {
+            format_to_ext(fmt)
+                .map(|ext| format!("override.{ext}"))
+                .unwrap_or_default()
+        } else {
+            input
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string()
+        };
 
-    let structured_ext = matches!(
-        filename.rsplit('.').next().unwrap_or(""),
-        "json"
-            | "jsonl"
-            | "ndjson"
-            | "yaml"
-            | "yml"
-            | "xml"
-            | "csv"
-            | "tsv"
-            | "rb"
-            | "conf"
-            | "cfg"
-            | "ini"
-            | "env"
-            | "properties"
-            | "toml"
-    ) || {
-        filename
-            .rsplit('/')
-            .next()
-            .unwrap_or(&filename)
-            .starts_with(".env")
-    };
+        let structured_ext = matches!(
+            filename.rsplit('.').next().unwrap_or(""),
+            "json"
+                | "jsonl"
+                | "ndjson"
+                | "yaml"
+                | "yml"
+                | "xml"
+                | "csv"
+                | "tsv"
+                | "rb"
+                | "conf"
+                | "cfg"
+                | "ini"
+                | "env"
+                | "properties"
+                | "toml"
+        ) || {
+            filename
+                .rsplit('/')
+                .next()
+                .unwrap_or(&filename)
+                .starts_with(".env")
+        };
 
-    let output_path = if output_path.is_some_and(|p| p == Path::new("-")) {
-        None
-    } else {
-        output_path
-    };
+        let output_path = if output_path.is_some_and(|p| p == Path::new("-")) {
+            None
+        } else {
+            output_path
+        };
 
-    let mut had_matches = false;
+        let mut had_matches = false;
 
-    if structured_ext && !cli.force_text {
-        let file_meta =
-            fs::metadata(input).map_err(|e| format!("failed to stat {}: {e}", input.display()))?;
-        let file_size = file_meta.len();
+        if structured_ext && !cli.force_text {
+            let file_meta = fs::metadata(input)
+                .map_err(|e| format!("failed to stat {}: {e}", input.display()))?;
+            let file_size = file_meta.len();
 
-        let maybe_streaming = fp.profiles
-            .iter()
-            .find(|p| p.matches_filename(&filename))
-            .and_then(|p| {
-                fp.registry
-                    .get(&p.processor)
-                    .filter(|proc| proc.supports_streaming())
-                    .map(|proc| (p.clone(), Arc::clone(proc)))
-            });
+            let maybe_streaming = fp
+                .profiles
+                .iter()
+                .find(|p| p.matches_filename(&filename))
+                .and_then(|p| {
+                    fp.registry
+                        .get(&p.processor)
+                        .filter(|proc| proc.supports_streaming())
+                        .map(|proc| (p.clone(), Arc::clone(proc)))
+                });
 
-        if let Some((streaming_profile, streaming_proc)) = maybe_streaming {
-            let store_snapshot = fp.store.snapshot();
-            {
-                let mut reader = BufReader::new(
+            if let Some((streaming_profile, streaming_proc)) = maybe_streaming {
+                let store_snapshot = fp.store.snapshot();
+                {
+                    let mut reader = BufReader::new(
+                        fs::File::open(input)
+                            .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
+                    );
+                    streaming_proc
+                        .process_stream(&mut reader, &mut io::sink(), &streaming_profile, fp.store)
+                        .map_err(|e| {
+                            format!("structured pass 1 failed for {}: {e}", input.display())
+                        })?;
+                }
+                let per_file_scanner = Arc::new(
+                    build_format_preserving_scanner(fp.scanner, fp.store, store_snapshot)
+                        .map_err(|e| format!("failed to build per-file scanner: {e}"))?,
+                );
+                let ext = filename.rsplit('.').next().unwrap_or("unknown");
+                let method = format!("structured+scan:{ext}");
+                let sz = file_size;
+
+                if cli.dry_run {
+                    let label = format!("Scanning {} (dry-run)", input.display());
+                    let progress_label = label.clone();
+                    return with_progress_scope(fp.progress, &label, move |progress| {
+                        let reader = BufReader::new(
+                            fs::File::open(input)
+                                .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
+                        );
+                        let (stats, locs, locs_truncated) = scan_with_locations(
+                            &per_file_scanner,
+                            reader,
+                            io::sink(),
+                            Some(sz),
+                            make_scan_callback(progress.clone(), &progress_label),
+                            cli.max_match_locations,
+                        )?;
+                        if stats.matches_found > 0 {
+                            had_matches = true;
+                        }
+                        if let Some(rb) = fp.report_builder {
+                            rb.record_file(
+                                FileReport::from_scan_stats(
+                                    input.display().to_string(),
+                                    &stats,
+                                    &method,
+                                )
+                                .with_match_locations(locs, locs_truncated),
+                            );
+                        }
+                        info!(
+                            matches = stats.matches_found,
+                            replacements = stats.replacements_applied,
+                            "dry-run complete"
+                        );
+                        Ok(had_matches)
+                    });
+                } else if let Some(out_path) = output_path {
+                    let label = format!("Scanning {}", input.display());
+                    let progress_label = label.clone();
+                    let llm_opt = fp.llm_collector.cloned();
+                    return with_progress_scope(fp.progress, &label, move |progress| {
+                        if llm_opt.is_some() {
+                            let reader =
+                                BufReader::new(fs::File::open(input).map_err(|e| {
+                                    format!("failed to open {}: {e}", input.display())
+                                })?);
+                            let mut buf: Vec<u8> = Vec::new();
+                            let (stats, locs, locs_truncated) = scan_with_locations(
+                                &per_file_scanner,
+                                reader,
+                                &mut buf,
+                                Some(sz),
+                                make_scan_callback(progress.clone(), &progress_label),
+                                cli.max_match_locations,
+                            )?;
+                            if crate::is_interrupted() {
+                                return Err("interrupted — partial output discarded".into());
+                            }
+                            if stats.matches_found > 0 {
+                                had_matches = true;
+                            }
+                            if let Some(rb) = fp.report_builder {
+                                rb.record_file(
+                                    FileReport::from_scan_stats(
+                                        input.display().to_string(),
+                                        &stats,
+                                        &method,
+                                    )
+                                    .with_match_locations(locs, locs_truncated),
+                                );
+                            }
+                            maybe_extract_context(
+                                &buf,
+                                &input.display().to_string(),
+                                cli,
+                                fp.report_builder,
+                            );
+                            maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
+                        } else {
+                            let reader =
+                                BufReader::new(fs::File::open(input).map_err(|e| {
+                                    format!("failed to open {}: {e}", input.display())
+                                })?);
+                            let mut atomic_writer = AtomicFileWriter::new(out_path)
+                                .map_err(|e| format!("failed to create output: {e}"))?;
+                            let (stats, locs, locs_truncated) = scan_with_locations(
+                                &per_file_scanner,
+                                reader,
+                                &mut atomic_writer,
+                                Some(sz),
+                                make_scan_callback(progress.clone(), &progress_label),
+                                cli.max_match_locations,
+                            )?;
+                            if crate::is_interrupted() {
+                                return Err("interrupted — partial output discarded".into());
+                            }
+                            atomic_writer
+                                .finish()
+                                .map_err(|e| format!("failed to finalize output: {e}"))?;
+                            if stats.matches_found > 0 {
+                                had_matches = true;
+                            }
+                            if let Some(rb) = fp.report_builder {
+                                rb.record_file(
+                                    FileReport::from_scan_stats(
+                                        input.display().to_string(),
+                                        &stats,
+                                        &method,
+                                    )
+                                    .with_match_locations(locs, locs_truncated),
+                                );
+                            }
+                            maybe_extract_context_reader(
+                                out_path,
+                                &input.display().to_string(),
+                                cli,
+                                fp.report_builder,
+                            );
+                        }
+                        Ok(had_matches)
+                    });
+                } else {
+                    let label = format!("Scanning {}", input.display());
+                    let progress_label = label.clone();
+                    let llm_opt = fp.llm_collector.cloned();
+                    return with_progress_scope(fp.progress, &label, move |progress| {
+                        let needs_buffer = (cli.extract_context || llm_opt.is_some())
+                            && sz <= MAX_CONTEXT_BUFFER_BYTES;
+                        if needs_buffer {
+                            let reader =
+                                BufReader::new(fs::File::open(input).map_err(|e| {
+                                    format!("failed to open {}: {e}", input.display())
+                                })?);
+                            let mut buf: Vec<u8> = Vec::new();
+                            let (stats, locs, locs_truncated) = scan_with_locations(
+                                &per_file_scanner,
+                                reader,
+                                &mut buf,
+                                Some(sz),
+                                make_scan_callback(progress.clone(), &progress_label),
+                                cli.max_match_locations,
+                            )?;
+                            if stats.matches_found > 0 {
+                                had_matches = true;
+                            }
+                            if let Some(rb) = fp.report_builder {
+                                rb.record_file(
+                                    FileReport::from_scan_stats(
+                                        input.display().to_string(),
+                                        &stats,
+                                        &method,
+                                    )
+                                    .with_match_locations(locs, locs_truncated),
+                                );
+                            }
+                            maybe_extract_context(
+                                &buf,
+                                &input.display().to_string(),
+                                cli,
+                                fp.report_builder,
+                            );
+                            if llm_opt.is_some() {
+                                maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
+                            } else {
+                                let stdout = io::stdout();
+                                stdout
+                                    .lock()
+                                    .write_all(&buf)
+                                    .map_err(|e| format!("failed to write to stdout: {e}"))?;
+                            }
+                        } else {
+                            if cli.extract_context {
+                                warn!(
+                                    file = %input.display(),
+                                    size = sz,
+                                    max = MAX_CONTEXT_BUFFER_BYTES,
+                                    "--extract-context: file too large to buffer for stdout; \
+                                     use -o/--output to write to a file for context extraction"
+                                );
+                            }
+                            let reader =
+                                BufReader::new(fs::File::open(input).map_err(|e| {
+                                    format!("failed to open {}: {e}", input.display())
+                                })?);
+                            let stdout = io::stdout();
+                            let writer = BufWriter::new(stdout.lock());
+                            let (stats, locs, locs_truncated) = scan_with_locations(
+                                &per_file_scanner,
+                                reader,
+                                writer,
+                                Some(sz),
+                                make_scan_callback(progress.clone(), &progress_label),
+                                cli.max_match_locations,
+                            )?;
+                            if stats.matches_found > 0 {
+                                had_matches = true;
+                            }
+                            if let Some(rb) = fp.report_builder {
+                                rb.record_file(
+                                    FileReport::from_scan_stats(
+                                        input.display().to_string(),
+                                        &stats,
+                                        &method,
+                                    )
+                                    .with_match_locations(locs, locs_truncated),
+                                );
+                            }
+                        }
+                        Ok(had_matches)
+                    });
+                }
+            }
+
+            if file_size > cli.max_structured_size {
+                warn!(
+                    file = %input.display(),
+                    size = file_size,
+                    max = cli.max_structured_size,
+                    "structured file exceeds size limit, falling back to streaming scanner"
+                );
+            } else {
+                let input_bytes = fs::read(input)
+                    .map_err(|e| format!("failed to read {}: {e}", input.display()))?;
+
+                let store_len_before = fp.store.len();
+                let store_snapshot = fp.store.snapshot();
+
+                let label = format!("Processing structured {}", input.display());
+                return with_progress_scope(fp.progress, &label, move |_| {
+                    let structured_result = try_structured_processing(
+                        &input_bytes,
+                        &filename,
+                        fp.registry,
+                        fp.store,
+                        fp.profiles,
+                    );
+
+                    let (output_bytes, method, _was_structured, fallback_stats) =
+                        match structured_result {
+                            Some(Ok(_structured_bytes)) => {
+                                let ext = filename.rsplit('.').next().unwrap_or("unknown");
+                                let per_file_scanner = build_format_preserving_scanner(
+                                    fp.scanner,
+                                    fp.store,
+                                    store_snapshot,
+                                )
+                                .map_err(|e| format!("failed to build per-file scanner: {e}"))?;
+                                let (scanned_bytes, scan_stats) =
+                                    scanner_fallback(&per_file_scanner, &input_bytes)?;
+                                (
+                                    scanned_bytes,
+                                    format!("structured+scan:{ext}"),
+                                    true,
+                                    Some(scan_stats),
+                                )
+                            }
+                            Some(Err(e)) => {
+                                if cli.strict {
+                                    return Err(format!("structured processing failed: {e}"));
+                                }
+                                warn!(error = %e, "structured processing failed, falling back to scanner");
+                                let (out, stats) = scanner_fallback(fp.scanner, &input_bytes)?;
+                                (out, "scanner".into(), false, Some(stats))
+                            }
+                            None => {
+                                let (out, stats) = scanner_fallback(fp.scanner, &input_bytes)?;
+                                (out, "scanner".into(), false, Some(stats))
+                            }
+                        };
+
+                    let (output_bytes, fallback_stats) = {
+                        let (ent_out, ent_lc) =
+                            entropy_scan_bytes(&output_bytes, fp.entropy_configs, fp.store);
+                        let stats = fallback_stats.map(|mut s| {
+                            merge_entropy_counts(&mut s, ent_lc);
+                            s
+                        });
+                        (ent_out, stats)
+                    };
+
+                    if cli.dry_run || fp.report_builder.is_some() || cli.fail_on_match {
+                        let _ = store_len_before;
+                        let replacements = fallback_stats
+                            .as_ref()
+                            .map_or(0, |s| s.replacements_applied);
+
+                        if replacements > 0 {
+                            had_matches = true;
+                        }
+                        if let Some(rb) = fp.report_builder {
+                            let stats = fallback_stats
+                                .map(|mut s| {
+                                    s.matches_found = replacements;
+                                    s.replacements_applied = replacements;
+                                    s.bytes_processed = input_bytes.len() as u64;
+                                    s.bytes_output = output_bytes.len() as u64;
+                                    s
+                                })
+                                .unwrap_or_else(|| ScanStats {
+                                    matches_found: replacements,
+                                    replacements_applied: replacements,
+                                    bytes_processed: input_bytes.len() as u64,
+                                    bytes_output: output_bytes.len() as u64,
+                                    ..Default::default()
+                                });
+                            rb.record_file(FileReport::from_scan_stats(
+                                input.display().to_string(),
+                                &stats,
+                                method,
+                            ));
+                        }
+                        if cli.dry_run {
+                            info!(
+                                matches = replacements,
+                                replacements = replacements,
+                                "dry-run complete"
+                            );
+                            return Ok(had_matches);
+                        }
+                    }
+                    maybe_extract_context(
+                        &output_bytes,
+                        &input.display().to_string(),
+                        cli,
+                        fp.report_builder,
+                    );
+                    write_or_collect(
+                        &output_bytes,
+                        &input.display().to_string(),
+                        output_path,
+                        fp.llm_collector,
+                    )?;
+                    Ok(had_matches)
+                });
+            }
+        }
+
+        let method = "scanner";
+        let entropy_active = !fp.entropy_configs.is_empty();
+
+        if cli.dry_run {
+            let label = format!("Scanning {} (dry-run)", input.display());
+            let progress_label = label.clone();
+            let ent_cfgs = Arc::clone(fp.entropy_configs);
+            let store_arc = Arc::clone(fp.store);
+            with_progress_scope(fp.progress, &label, move |progress| {
+                let reader = BufReader::new(
                     fs::File::open(input)
                         .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
                 );
-                streaming_proc
-                    .process_stream(&mut reader, &mut io::sink(), &streaming_profile, fp.store)
-                    .map_err(|e| {
-                        format!("structured pass 1 failed for {}: {e}", input.display())
-                    })?;
-            }
-            let per_file_scanner = Arc::new(
-                build_format_preserving_scanner(fp.scanner, fp.store, store_snapshot)
-                    .map_err(|e| format!("failed to build per-file scanner: {e}"))?,
-            );
-            let ext = filename.rsplit('.').next().unwrap_or("unknown");
-            let method = format!("structured+scan:{ext}");
-            let sz = file_size;
-
-            if cli.dry_run {
-                let label = format!("Scanning {} (dry-run)", input.display());
-                let progress_label = label.clone();
-                return with_progress_scope(fp.progress, &label, move |progress| {
+                let progress_for_scan = progress.clone();
+                let sz = file_size(input)?;
+                let (stats, locs, locs_truncated) = if entropy_active {
+                    let mut buf: Vec<u8> = Vec::new();
+                    let (mut s, locs, tr) = scan_with_locations(
+                        fp.scanner,
+                        reader,
+                        &mut buf,
+                        Some(sz),
+                        make_scan_callback(progress_for_scan, &progress_label),
+                        cli.max_match_locations,
+                    )?;
+                    let (_ent_out, ent_lc) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
+                    merge_entropy_counts(&mut s, ent_lc);
+                    if let Some(acc) = fp.entropy_histogram_acc {
+                        accumulate_entropy_histogram(acc, &buf, &ent_cfgs);
+                    }
+                    (s, locs, tr)
+                } else {
+                    scan_with_locations(
+                        fp.scanner,
+                        reader,
+                        io::sink(),
+                        Some(sz),
+                        make_scan_callback(progress_for_scan, &progress_label),
+                        cli.max_match_locations,
+                    )?
+                };
+                if stats.matches_found > 0 {
+                    had_matches = true;
+                }
+                if let Some(rb) = fp.report_builder {
+                    rb.record_file(
+                        FileReport::from_scan_stats(input.display().to_string(), &stats, method)
+                            .with_match_locations(locs, locs_truncated),
+                    );
+                }
+                info!(
+                    matches = stats.matches_found,
+                    replacements = stats.replacements_applied,
+                    "dry-run complete"
+                );
+                Ok(had_matches)
+            })
+        } else if let Some(out_path) = output_path {
+            let label = format!("Scanning {}", input.display());
+            let progress_label = label.clone();
+            let llm_opt = fp.llm_collector.cloned();
+            let ent_cfgs = Arc::clone(fp.entropy_configs);
+            let store_arc = Arc::clone(fp.store);
+            with_progress_scope(fp.progress, &label, move |progress| {
+                if llm_opt.is_some() || entropy_active {
                     let reader = BufReader::new(
                         fs::File::open(input)
                             .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
                     );
-                    let (stats, locs, locs_truncated) = scan_with_locations(
-                        &per_file_scanner,
+                    let mut buf: Vec<u8> = Vec::new();
+                    let progress_for_scan = progress.clone();
+                    let (mut stats, locs, locs_truncated) = scan_with_locations(
+                        fp.scanner,
                         reader,
-                        io::sink(),
+                        &mut buf,
+                        Some(file_size(input)?),
+                        make_scan_callback(progress_for_scan, &progress_label),
+                        cli.max_match_locations,
+                    )?;
+                    if crate::is_interrupted() {
+                        return Err("interrupted — partial output discarded".into());
+                    }
+                    if entropy_active {
+                        let (ent_out, ent_lc) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
+                        buf = ent_out;
+                        merge_entropy_counts(&mut stats, ent_lc);
+                    }
+                    if stats.matches_found > 0 {
+                        had_matches = true;
+                    }
+                    if let Some(rb) = fp.report_builder {
+                        rb.record_file(
+                            FileReport::from_scan_stats(
+                                input.display().to_string(),
+                                &stats,
+                                method,
+                            )
+                            .with_match_locations(locs, locs_truncated),
+                        );
+                    }
+                    maybe_extract_context(
+                        &buf,
+                        &input.display().to_string(),
+                        cli,
+                        fp.report_builder,
+                    );
+                    if llm_opt.is_some() {
+                        maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
+                    } else {
+                        atomic_write(out_path, &buf)
+                            .map_err(|e| format!("failed to write output: {e}"))?;
+                    }
+                } else {
+                    let reader = BufReader::new(
+                        fs::File::open(input)
+                            .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
+                    );
+                    let mut atomic_writer = AtomicFileWriter::new(out_path)
+                        .map_err(|e| format!("failed to create output: {e}"))?;
+
+                    let progress_for_scan = progress.clone();
+                    let (stats, locs, locs_truncated) = scan_with_locations(
+                        fp.scanner,
+                        reader,
+                        &mut atomic_writer,
+                        Some(file_size(input)?),
+                        make_scan_callback(progress_for_scan, &progress_label),
+                        cli.max_match_locations,
+                    )?;
+
+                    if crate::is_interrupted() {
+                        return Err("interrupted — partial output discarded".into());
+                    }
+
+                    atomic_writer
+                        .finish()
+                        .map_err(|e| format!("failed to finalize output: {e}"))?;
+
+                    if stats.matches_found > 0 {
+                        had_matches = true;
+                    }
+                    if let Some(rb) = fp.report_builder {
+                        rb.record_file(
+                            FileReport::from_scan_stats(
+                                input.display().to_string(),
+                                &stats,
+                                method,
+                            )
+                            .with_match_locations(locs, locs_truncated),
+                        );
+                    }
+                    maybe_extract_context_reader(
+                        out_path,
+                        &input.display().to_string(),
+                        cli,
+                        fp.report_builder,
+                    );
+                }
+                Ok(had_matches)
+            })
+        } else {
+            let label = format!("Scanning {}", input.display());
+            let progress_label = label.clone();
+            let llm_opt = fp.llm_collector.cloned();
+            let ent_cfgs = Arc::clone(fp.entropy_configs);
+            let store_arc = Arc::clone(fp.store);
+            with_progress_scope(fp.progress, &label, move |progress| {
+                let sz = file_size(input)?;
+                let needs_buffer = (cli.extract_context || llm_opt.is_some() || entropy_active)
+                    && sz <= MAX_CONTEXT_BUFFER_BYTES;
+                if needs_buffer {
+                    let reader = BufReader::new(
+                        fs::File::open(input)
+                            .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
+                    );
+                    let mut buf: Vec<u8> = Vec::new();
+                    let progress_for_scan = progress.clone();
+                    let (mut stats, locs, locs_truncated) = scan_with_locations(
+                        fp.scanner,
+                        reader,
+                        &mut buf,
                         Some(sz),
-                        make_scan_callback(progress.clone(), &progress_label),
+                        make_scan_callback(progress_for_scan, &progress_label),
+                        cli.max_match_locations,
+                    )?;
+                    if entropy_active {
+                        let (ent_out, ent_lc) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
+                        buf = ent_out;
+                        merge_entropy_counts(&mut stats, ent_lc);
+                    }
+                    if stats.matches_found > 0 {
+                        had_matches = true;
+                    }
+                    if let Some(rb) = fp.report_builder {
+                        rb.record_file(
+                            FileReport::from_scan_stats(
+                                input.display().to_string(),
+                                &stats,
+                                method,
+                            )
+                            .with_match_locations(locs, locs_truncated),
+                        );
+                    }
+                    maybe_extract_context(
+                        &buf,
+                        &input.display().to_string(),
+                        cli,
+                        fp.report_builder,
+                    );
+                    if llm_opt.is_some() {
+                        maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
+                    } else {
+                        let stdout = io::stdout();
+                        stdout
+                            .lock()
+                            .write_all(&buf)
+                            .map_err(|e| format!("failed to write to stdout: {e}"))?;
+                    }
+                } else {
+                    if cli.extract_context {
+                        warn!(
+                            file = %input.display(),
+                            size = sz,
+                            max = MAX_CONTEXT_BUFFER_BYTES,
+                            "--extract-context: file too large to buffer for stdout; \
+                             use -o/--output to write to a file for context extraction"
+                        );
+                    }
+                    let reader = BufReader::new(
+                        fs::File::open(input)
+                            .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
+                    );
+                    let stdout = io::stdout();
+                    let writer = BufWriter::new(stdout.lock());
+                    let progress_for_scan = progress.clone();
+                    let (stats, locs, locs_truncated) = scan_with_locations(
+                        fp.scanner,
+                        reader,
+                        writer,
+                        Some(sz),
+                        make_scan_callback(progress_for_scan, &progress_label),
                         cli.max_match_locations,
                     )?;
                     if stats.matches_found > 0 {
@@ -917,548 +1486,16 @@ impl<'a> FileProcessor<'a> {
                             FileReport::from_scan_stats(
                                 input.display().to_string(),
                                 &stats,
-                                &method,
+                                method,
                             )
                             .with_match_locations(locs, locs_truncated),
                         );
                     }
-                    info!(
-                        matches = stats.matches_found,
-                        replacements = stats.replacements_applied,
-                        "dry-run complete"
-                    );
-                    Ok(had_matches)
-                });
-            } else if let Some(out_path) = output_path {
-                let label = format!("Scanning {}", input.display());
-                let progress_label = label.clone();
-                let llm_opt = fp.llm_collector.cloned();
-                return with_progress_scope(fp.progress, &label, move |progress| {
-                    if llm_opt.is_some() {
-                        let reader = BufReader::new(
-                            fs::File::open(input)
-                                .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
-                        );
-                        let mut buf: Vec<u8> = Vec::new();
-                        let (stats, locs, locs_truncated) = scan_with_locations(
-                            &per_file_scanner,
-                            reader,
-                            &mut buf,
-                            Some(sz),
-                            make_scan_callback(progress.clone(), &progress_label),
-                            cli.max_match_locations,
-                        )?;
-                        if crate::is_interrupted() {
-                            return Err("interrupted — partial output discarded".into());
-                        }
-                        if stats.matches_found > 0 {
-                            had_matches = true;
-                        }
-                        if let Some(rb) = fp.report_builder {
-                            rb.record_file(
-                                FileReport::from_scan_stats(
-                                    input.display().to_string(),
-                                    &stats,
-                                    &method,
-                                )
-                                .with_match_locations(locs, locs_truncated),
-                            );
-                        }
-                        maybe_extract_context(
-                            &buf,
-                            &input.display().to_string(),
-                            cli,
-                            fp.report_builder,
-                        );
-                        maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
-                    } else {
-                        let reader = BufReader::new(
-                            fs::File::open(input)
-                                .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
-                        );
-                        let mut atomic_writer = AtomicFileWriter::new(out_path)
-                            .map_err(|e| format!("failed to create output: {e}"))?;
-                        let (stats, locs, locs_truncated) = scan_with_locations(
-                            &per_file_scanner,
-                            reader,
-                            &mut atomic_writer,
-                            Some(sz),
-                            make_scan_callback(progress.clone(), &progress_label),
-                            cli.max_match_locations,
-                        )?;
-                        if crate::is_interrupted() {
-                            return Err("interrupted — partial output discarded".into());
-                        }
-                        atomic_writer
-                            .finish()
-                            .map_err(|e| format!("failed to finalize output: {e}"))?;
-                        if stats.matches_found > 0 {
-                            had_matches = true;
-                        }
-                        if let Some(rb) = fp.report_builder {
-                            rb.record_file(
-                                FileReport::from_scan_stats(
-                                    input.display().to_string(),
-                                    &stats,
-                                    &method,
-                                )
-                                .with_match_locations(locs, locs_truncated),
-                            );
-                        }
-                        maybe_extract_context_reader(
-                            out_path,
-                            &input.display().to_string(),
-                            cli,
-                            fp.report_builder,
-                        );
-                    }
-                    Ok(had_matches)
-                });
-            } else {
-                let label = format!("Scanning {}", input.display());
-                let progress_label = label.clone();
-                let llm_opt = fp.llm_collector.cloned();
-                return with_progress_scope(fp.progress, &label, move |progress| {
-                    let needs_buffer = (cli.extract_context || llm_opt.is_some())
-                        && sz <= MAX_CONTEXT_BUFFER_BYTES;
-                    if needs_buffer {
-                        let reader = BufReader::new(
-                            fs::File::open(input)
-                                .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
-                        );
-                        let mut buf: Vec<u8> = Vec::new();
-                        let (stats, locs, locs_truncated) = scan_with_locations(
-                            &per_file_scanner,
-                            reader,
-                            &mut buf,
-                            Some(sz),
-                            make_scan_callback(progress.clone(), &progress_label),
-                            cli.max_match_locations,
-                        )?;
-                        if stats.matches_found > 0 {
-                            had_matches = true;
-                        }
-                        if let Some(rb) = fp.report_builder {
-                            rb.record_file(
-                                FileReport::from_scan_stats(
-                                    input.display().to_string(),
-                                    &stats,
-                                    &method,
-                                )
-                                .with_match_locations(locs, locs_truncated),
-                            );
-                        }
-                        maybe_extract_context(
-                            &buf,
-                            &input.display().to_string(),
-                            cli,
-                            fp.report_builder,
-                        );
-                        if llm_opt.is_some() {
-                            maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
-                        } else {
-                            let stdout = io::stdout();
-                            stdout
-                                .lock()
-                                .write_all(&buf)
-                                .map_err(|e| format!("failed to write to stdout: {e}"))?;
-                        }
-                    } else {
-                        if cli.extract_context {
-                            warn!(
-                                file = %input.display(),
-                                size = sz,
-                                max = MAX_CONTEXT_BUFFER_BYTES,
-                                "--extract-context: file too large to buffer for stdout; \
-                                 use -o/--output to write to a file for context extraction"
-                            );
-                        }
-                        let reader = BufReader::new(
-                            fs::File::open(input)
-                                .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
-                        );
-                        let stdout = io::stdout();
-                        let writer = BufWriter::new(stdout.lock());
-                        let (stats, locs, locs_truncated) = scan_with_locations(
-                            &per_file_scanner,
-                            reader,
-                            writer,
-                            Some(sz),
-                            make_scan_callback(progress.clone(), &progress_label),
-                            cli.max_match_locations,
-                        )?;
-                        if stats.matches_found > 0 {
-                            had_matches = true;
-                        }
-                        if let Some(rb) = fp.report_builder {
-                            rb.record_file(
-                                FileReport::from_scan_stats(
-                                    input.display().to_string(),
-                                    &stats,
-                                    &method,
-                                )
-                                .with_match_locations(locs, locs_truncated),
-                            );
-                        }
-                    }
-                    Ok(had_matches)
-                });
-            }
-        }
-
-        if file_size > cli.max_structured_size {
-            warn!(
-                file = %input.display(),
-                size = file_size,
-                max = cli.max_structured_size,
-                "structured file exceeds size limit, falling back to streaming scanner"
-            );
-        } else {
-            let input_bytes =
-                fs::read(input).map_err(|e| format!("failed to read {}: {e}", input.display()))?;
-
-            let store_len_before = fp.store.len();
-            let store_snapshot = fp.store.snapshot();
-
-            let label = format!("Processing structured {}", input.display());
-            return with_progress_scope(fp.progress, &label, move |_| {
-                let structured_result =
-                    try_structured_processing(&input_bytes, &filename, fp.registry, fp.store, fp.profiles);
-
-                let (output_bytes, method, _was_structured, fallback_stats) =
-                    match structured_result {
-                        Some(Ok(_structured_bytes)) => {
-                            let ext = filename.rsplit('.').next().unwrap_or("unknown");
-                            let per_file_scanner =
-                                build_format_preserving_scanner(fp.scanner, fp.store, store_snapshot)
-                                    .map_err(|e| {
-                                        format!("failed to build per-file scanner: {e}")
-                                    })?;
-                            let (scanned_bytes, scan_stats) =
-                                scanner_fallback(&per_file_scanner, &input_bytes)?;
-                            (
-                                scanned_bytes,
-                                format!("structured+scan:{ext}"),
-                                true,
-                                Some(scan_stats),
-                            )
-                        }
-                        Some(Err(e)) => {
-                            if cli.strict {
-                                return Err(format!("structured processing failed: {e}"));
-                            }
-                            warn!(error = %e, "structured processing failed, falling back to scanner");
-                            let (out, stats) = scanner_fallback(fp.scanner, &input_bytes)?;
-                            (out, "scanner".into(), false, Some(stats))
-                        }
-                        None => {
-                            let (out, stats) = scanner_fallback(fp.scanner, &input_bytes)?;
-                            (out, "scanner".into(), false, Some(stats))
-                        }
-                    };
-
-                let (output_bytes, fallback_stats) = {
-                    let (ent_out, ent_lc) =
-                        entropy_scan_bytes(&output_bytes, fp.entropy_configs, fp.store);
-                    let stats = fallback_stats.map(|mut s| {
-                        merge_entropy_counts(&mut s, ent_lc);
-                        s
-                    });
-                    (ent_out, stats)
-                };
-
-                if cli.dry_run || fp.report_builder.is_some() || cli.fail_on_match {
-                    let _ = store_len_before;
-                    let replacements = fallback_stats
-                        .as_ref()
-                        .map_or(0, |s| s.replacements_applied);
-
-                    if replacements > 0 {
-                        had_matches = true;
-                    }
-                    if let Some(rb) = fp.report_builder {
-                        let stats = fallback_stats
-                            .map(|mut s| {
-                                s.matches_found = replacements;
-                                s.replacements_applied = replacements;
-                                s.bytes_processed = input_bytes.len() as u64;
-                                s.bytes_output = output_bytes.len() as u64;
-                                s
-                            })
-                            .unwrap_or_else(|| ScanStats {
-                                matches_found: replacements,
-                                replacements_applied: replacements,
-                                bytes_processed: input_bytes.len() as u64,
-                                bytes_output: output_bytes.len() as u64,
-                                ..Default::default()
-                            });
-                        rb.record_file(FileReport::from_scan_stats(
-                            input.display().to_string(),
-                            &stats,
-                            method,
-                        ));
-                    }
-                    if cli.dry_run {
-                        info!(
-                            matches = replacements,
-                            replacements = replacements,
-                            "dry-run complete"
-                        );
-                        return Ok(had_matches);
-                    }
                 }
-                maybe_extract_context(
-                    &output_bytes,
-                    &input.display().to_string(),
-                    cli,
-                    fp.report_builder,
-                );
-                write_or_collect(
-                    &output_bytes,
-                    &input.display().to_string(),
-                    output_path,
-                    fp.llm_collector,
-                )?;
                 Ok(had_matches)
-            });
+            })
         }
     }
-
-    let method = "scanner";
-    let entropy_active = !fp.entropy_configs.is_empty();
-
-    if cli.dry_run {
-        let label = format!("Scanning {} (dry-run)", input.display());
-        let progress_label = label.clone();
-        let ent_cfgs = Arc::clone(fp.entropy_configs);
-        let store_arc = Arc::clone(fp.store);
-        with_progress_scope(fp.progress, &label, move |progress| {
-            let reader = BufReader::new(
-                fs::File::open(input)
-                    .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
-            );
-            let progress_for_scan = progress.clone();
-            let sz = file_size(input)?;
-            let (stats, locs, locs_truncated) = if entropy_active {
-                let mut buf: Vec<u8> = Vec::new();
-                let (mut s, locs, tr) = scan_with_locations(
-                    fp.scanner,
-                    reader,
-                    &mut buf,
-                    Some(sz),
-                    make_scan_callback(progress_for_scan, &progress_label),
-                    cli.max_match_locations,
-                )?;
-                let (_ent_out, ent_lc) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
-                merge_entropy_counts(&mut s, ent_lc);
-                if let Some(acc) = fp.entropy_histogram_acc {
-                    accumulate_entropy_histogram(acc, &buf, &ent_cfgs);
-                }
-                (s, locs, tr)
-            } else {
-                scan_with_locations(
-                    fp.scanner,
-                    reader,
-                    io::sink(),
-                    Some(sz),
-                    make_scan_callback(progress_for_scan, &progress_label),
-                    cli.max_match_locations,
-                )?
-            };
-            if stats.matches_found > 0 {
-                had_matches = true;
-            }
-            if let Some(rb) = fp.report_builder {
-                rb.record_file(
-                    FileReport::from_scan_stats(input.display().to_string(), &stats, method)
-                        .with_match_locations(locs, locs_truncated),
-                );
-            }
-            info!(
-                matches = stats.matches_found,
-                replacements = stats.replacements_applied,
-                "dry-run complete"
-            );
-            Ok(had_matches)
-        })
-    } else if let Some(out_path) = output_path {
-        let label = format!("Scanning {}", input.display());
-        let progress_label = label.clone();
-        let llm_opt = fp.llm_collector.cloned();
-        let ent_cfgs = Arc::clone(fp.entropy_configs);
-        let store_arc = Arc::clone(fp.store);
-        with_progress_scope(fp.progress, &label, move |progress| {
-            if llm_opt.is_some() || entropy_active {
-                let reader = BufReader::new(
-                    fs::File::open(input)
-                        .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
-                );
-                let mut buf: Vec<u8> = Vec::new();
-                let progress_for_scan = progress.clone();
-                let (mut stats, locs, locs_truncated) = scan_with_locations(
-                    fp.scanner,
-                    reader,
-                    &mut buf,
-                    Some(file_size(input)?),
-                    make_scan_callback(progress_for_scan, &progress_label),
-                    cli.max_match_locations,
-                )?;
-                if crate::is_interrupted() {
-                    return Err("interrupted — partial output discarded".into());
-                }
-                if entropy_active {
-                    let (ent_out, ent_lc) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
-                    buf = ent_out;
-                    merge_entropy_counts(&mut stats, ent_lc);
-                }
-                if stats.matches_found > 0 {
-                    had_matches = true;
-                }
-                if let Some(rb) = fp.report_builder {
-                    rb.record_file(
-                        FileReport::from_scan_stats(input.display().to_string(), &stats, method)
-                            .with_match_locations(locs, locs_truncated),
-                    );
-                }
-                maybe_extract_context(&buf, &input.display().to_string(), cli, fp.report_builder);
-                if llm_opt.is_some() {
-                    maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
-                } else {
-                    atomic_write(out_path, &buf)
-                        .map_err(|e| format!("failed to write output: {e}"))?;
-                }
-            } else {
-                let reader = BufReader::new(
-                    fs::File::open(input)
-                        .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
-                );
-                let mut atomic_writer = AtomicFileWriter::new(out_path)
-                    .map_err(|e| format!("failed to create output: {e}"))?;
-
-                let progress_for_scan = progress.clone();
-                let (stats, locs, locs_truncated) = scan_with_locations(
-                    fp.scanner,
-                    reader,
-                    &mut atomic_writer,
-                    Some(file_size(input)?),
-                    make_scan_callback(progress_for_scan, &progress_label),
-                    cli.max_match_locations,
-                )?;
-
-                if crate::is_interrupted() {
-                    return Err("interrupted — partial output discarded".into());
-                }
-
-                atomic_writer
-                    .finish()
-                    .map_err(|e| format!("failed to finalize output: {e}"))?;
-
-                if stats.matches_found > 0 {
-                    had_matches = true;
-                }
-                if let Some(rb) = fp.report_builder {
-                    rb.record_file(
-                        FileReport::from_scan_stats(input.display().to_string(), &stats, method)
-                            .with_match_locations(locs, locs_truncated),
-                    );
-                }
-                maybe_extract_context_reader(
-                    out_path,
-                    &input.display().to_string(),
-                    cli,
-                    fp.report_builder,
-                );
-            }
-            Ok(had_matches)
-        })
-    } else {
-        let label = format!("Scanning {}", input.display());
-        let progress_label = label.clone();
-        let llm_opt = fp.llm_collector.cloned();
-        let ent_cfgs = Arc::clone(fp.entropy_configs);
-        let store_arc = Arc::clone(fp.store);
-        with_progress_scope(fp.progress, &label, move |progress| {
-            let sz = file_size(input)?;
-            let needs_buffer = (cli.extract_context || llm_opt.is_some() || entropy_active)
-                && sz <= MAX_CONTEXT_BUFFER_BYTES;
-            if needs_buffer {
-                let reader = BufReader::new(
-                    fs::File::open(input)
-                        .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
-                );
-                let mut buf: Vec<u8> = Vec::new();
-                let progress_for_scan = progress.clone();
-                let (mut stats, locs, locs_truncated) = scan_with_locations(
-                    fp.scanner,
-                    reader,
-                    &mut buf,
-                    Some(sz),
-                    make_scan_callback(progress_for_scan, &progress_label),
-                    cli.max_match_locations,
-                )?;
-                if entropy_active {
-                    let (ent_out, ent_lc) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
-                    buf = ent_out;
-                    merge_entropy_counts(&mut stats, ent_lc);
-                }
-                if stats.matches_found > 0 {
-                    had_matches = true;
-                }
-                if let Some(rb) = fp.report_builder {
-                    rb.record_file(
-                        FileReport::from_scan_stats(input.display().to_string(), &stats, method)
-                            .with_match_locations(locs, locs_truncated),
-                    );
-                }
-                maybe_extract_context(&buf, &input.display().to_string(), cli, fp.report_builder);
-                if llm_opt.is_some() {
-                    maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
-                } else {
-                    let stdout = io::stdout();
-                    stdout
-                        .lock()
-                        .write_all(&buf)
-                        .map_err(|e| format!("failed to write to stdout: {e}"))?;
-                }
-            } else {
-                if cli.extract_context {
-                    warn!(
-                        file = %input.display(),
-                        size = sz,
-                        max = MAX_CONTEXT_BUFFER_BYTES,
-                        "--extract-context: file too large to buffer for stdout; \
-                         use -o/--output to write to a file for context extraction"
-                    );
-                }
-                let reader = BufReader::new(
-                    fs::File::open(input)
-                        .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
-                );
-                let stdout = io::stdout();
-                let writer = BufWriter::new(stdout.lock());
-                let progress_for_scan = progress.clone();
-                let (stats, locs, locs_truncated) = scan_with_locations(
-                    fp.scanner,
-                    reader,
-                    writer,
-                    Some(sz),
-                    make_scan_callback(progress_for_scan, &progress_label),
-                    cli.max_match_locations,
-                )?;
-                if stats.matches_found > 0 {
-                    had_matches = true;
-                }
-                if let Some(rb) = fp.report_builder {
-                    rb.record_file(
-                        FileReport::from_scan_stats(input.display().to_string(), &stats, method)
-                            .with_match_locations(locs, locs_truncated),
-                    );
-                }
-            }
-            Ok(had_matches)
-        })
-    }
-}
 
     /// Process an archive file. Returns `true` if entries were processed.
     pub(crate) fn process_archive(
@@ -1477,12 +1514,12 @@ impl<'a> FileProcessor<'a> {
         let filter_active = !filter.is_empty();
         with_progress_scope(fp.progress, &label, move |progress| {
             let label = label_inner;
-        let context_map: Option<Arc<Mutex<HashMap<String, LogContextResult>>>> =
-            if cli.extract_context && fp.report_builder.is_some() {
-                Some(Arc::new(Mutex::new(HashMap::new())))
-            } else {
-                None
-            };
+            let context_map: Option<Arc<Mutex<HashMap<String, LogContextResult>>>> =
+                if cli.extract_context && fp.report_builder.is_some() {
+                    Some(Arc::new(Mutex::new(HashMap::new())))
+                } else {
+                    None
+                };
 
             let base_proc = ArchiveProcessor::new(
                 Arc::clone(fp.registry),
@@ -1490,143 +1527,146 @@ impl<'a> FileProcessor<'a> {
                 Arc::clone(fp.store),
                 fp.profiles.to_vec(),
             )
-        .with_max_depth(cli.max_archive_depth)
-        .with_force_text(cli.force_text)
-        .with_filter(filter);
+            .with_max_depth(cli.max_archive_depth)
+            .with_force_text(cli.force_text)
+            .with_filter(filter);
 
-        let base_proc = if suppress_inner_parallelism {
-            base_proc.with_parallel_threshold(usize::MAX)
-        } else {
-            base_proc
-        };
+            let base_proc = if suppress_inner_parallelism {
+                base_proc.with_parallel_threshold(usize::MAX)
+            } else {
+                base_proc
+            };
 
-        let base_proc = if let Some(ctx_map) = &context_map {
-            let ctx_map = Arc::clone(ctx_map);
-            let config = build_log_context_config(cli);
-            let cb: EntryCallback = Arc::new(move |name: &str, bytes: &[u8]| {
-                let text = String::from_utf8_lossy(bytes);
-                let result = extract_context(&text, &config);
-                if let Ok(mut map) = ctx_map.lock() {
-                    map.insert(name.to_string(), result);
+            let base_proc = if let Some(ctx_map) = &context_map {
+                let ctx_map = Arc::clone(ctx_map);
+                let config = build_log_context_config(cli);
+                let cb: EntryCallback = Arc::new(move |name: &str, bytes: &[u8]| {
+                    let text = String::from_utf8_lossy(bytes);
+                    let result = extract_context(&text, &config);
+                    if let Ok(mut map) = ctx_map.lock() {
+                        map.insert(name.to_string(), result);
+                    }
+                });
+                base_proc.with_entry_callback(cb)
+            } else {
+                base_proc
+            };
+
+            let archive_proc = if let Some(progress) = &progress {
+                let label = label.clone();
+                let progress = Arc::clone(progress);
+                base_proc.with_progress_callback(Arc::new(
+                    move |archive_progress: &ArchiveProgress| {
+                        progress
+                            .lock()
+                            .expect("progress lock poisoned")
+                            .update_archive(&label, archive_progress);
+                    },
+                ))
+            } else {
+                base_proc
+            };
+
+            if cli.dry_run {
+                let stats = match format {
+                    ArchiveFormat::Tar => {
+                        let reader = BufReader::new(
+                            fs::File::open(input)
+                                .map_err(|e| format!("failed to open archive: {e}"))?,
+                        );
+                        archive_proc
+                            .process_tar(reader, io::sink())
+                            .map_err(|e| format!("archive error: {e}"))?
+                    }
+                    ArchiveFormat::TarGz => {
+                        let reader = BufReader::new(
+                            fs::File::open(input)
+                                .map_err(|e| format!("failed to open archive: {e}"))?,
+                        );
+                        archive_proc
+                            .process_tar_gz(reader, io::sink())
+                            .map_err(|e| format!("archive error: {e}"))?
+                    }
+                    ArchiveFormat::Zip => {
+                        let mut reader = BufReader::new(
+                            fs::File::open(input)
+                                .map_err(|e| format!("failed to open archive: {e}"))?,
+                        );
+                        let mut null_out = NullSeekWriter { pos: 0, len: 0 };
+                        archive_proc
+                            .process_zip(&mut reader, &mut null_out)
+                            .map_err(|e| format!("archive error: {e}"))?
+                    }
+                };
+
+                if let Some(rb) = fp.report_builder {
+                    record_archive_stats(rb, &stats);
                 }
-            });
-            base_proc.with_entry_callback(cb)
-        } else {
-            base_proc
-        };
 
-        let archive_proc = if let Some(progress) = &progress {
-            let label = label.clone();
-            let progress = Arc::clone(progress);
-            base_proc.with_progress_callback(Arc::new(move |archive_progress: &ArchiveProgress| {
-                progress
-                    .lock()
-                    .expect("progress lock poisoned")
-                    .update_archive(&label, archive_progress);
-            }))
-        } else {
-            base_proc
-        };
+                info!(
+                    files = stats.files_processed,
+                    structured = stats.structured_hits,
+                    scanner = stats.scanner_fallback,
+                    "dry-run archive processing complete"
+                );
 
-        if cli.dry_run {
+                return Ok(stats.files_processed > 0);
+            }
+
             let stats = match format {
                 ArchiveFormat::Tar => {
                     let reader = BufReader::new(
-                        fs::File::open(input)
-                            .map_err(|e| format!("failed to open archive: {e}"))?,
+                        fs::File::open(input).map_err(|e| format!("failed to open input: {e}"))?,
                     );
-                    archive_proc
-                        .process_tar(reader, io::sink())
-                        .map_err(|e| format!("archive error: {e}"))?
+                    let mut atomic_writer = AtomicFileWriter::new(output_path)
+                        .map_err(|e| format!("failed to create output: {e}"))?;
+                    let stats = archive_proc
+                        .process_tar(reader, &mut atomic_writer)
+                        .map_err(|e| format!("archive processing error: {e}"))?;
+                    if crate::is_interrupted() {
+                        return Err("interrupted — partial output discarded".into());
+                    }
+                    atomic_writer
+                        .finish()
+                        .map_err(|e| format!("failed to finalize output: {e}"))?;
+                    stats
                 }
                 ArchiveFormat::TarGz => {
                     let reader = BufReader::new(
-                        fs::File::open(input)
-                            .map_err(|e| format!("failed to open archive: {e}"))?,
+                        fs::File::open(input).map_err(|e| format!("failed to open input: {e}"))?,
                     );
-                    archive_proc
-                        .process_tar_gz(reader, io::sink())
-                        .map_err(|e| format!("archive error: {e}"))?
+                    let mut atomic_writer = AtomicFileWriter::new(output_path)
+                        .map_err(|e| format!("failed to create output: {e}"))?;
+                    let stats = archive_proc
+                        .process_tar_gz(reader, &mut atomic_writer)
+                        .map_err(|e| format!("archive processing error: {e}"))?;
+                    if crate::is_interrupted() {
+                        return Err("interrupted — partial output discarded".into());
+                    }
+                    atomic_writer
+                        .finish()
+                        .map_err(|e| format!("failed to finalize output: {e}"))?;
+                    stats
                 }
                 ArchiveFormat::Zip => {
                     let mut reader = BufReader::new(
                         fs::File::open(input)
                             .map_err(|e| format!("failed to open archive: {e}"))?,
                     );
-                    let mut null_out = NullSeekWriter { pos: 0, len: 0 };
-                    archive_proc
-                        .process_zip(&mut reader, &mut null_out)
-                        .map_err(|e| format!("archive error: {e}"))?
+                    let mut atomic_writer = AtomicFileWriter::new(output_path)
+                        .map_err(|e| format!("failed to create output: {e}"))?;
+                    let stats = archive_proc
+                        .process_zip(&mut reader, &mut atomic_writer)
+                        .map_err(|e| format!("archive processing error: {e}"))?;
+                    if crate::is_interrupted() {
+                        return Err("interrupted — partial output discarded".into());
+                    }
+                    atomic_writer
+                        .finish()
+                        .map_err(|e| format!("failed to finalize output: {e}"))?;
+                    stats
                 }
             };
-
-            if let Some(rb) = fp.report_builder {
-                record_archive_stats(rb, &stats);
-            }
-
-            info!(
-                files = stats.files_processed,
-                structured = stats.structured_hits,
-                scanner = stats.scanner_fallback,
-                "dry-run archive processing complete"
-            );
-
-            return Ok(stats.files_processed > 0);
-        }
-
-        let stats = match format {
-            ArchiveFormat::Tar => {
-                let reader = BufReader::new(
-                    fs::File::open(input).map_err(|e| format!("failed to open input: {e}"))?,
-                );
-                let mut atomic_writer = AtomicFileWriter::new(output_path)
-                    .map_err(|e| format!("failed to create output: {e}"))?;
-                let stats = archive_proc
-                    .process_tar(reader, &mut atomic_writer)
-                    .map_err(|e| format!("archive processing error: {e}"))?;
-                if crate::is_interrupted() {
-                    return Err("interrupted — partial output discarded".into());
-                }
-                atomic_writer
-                    .finish()
-                    .map_err(|e| format!("failed to finalize output: {e}"))?;
-                stats
-            }
-            ArchiveFormat::TarGz => {
-                let reader = BufReader::new(
-                    fs::File::open(input).map_err(|e| format!("failed to open input: {e}"))?,
-                );
-                let mut atomic_writer = AtomicFileWriter::new(output_path)
-                    .map_err(|e| format!("failed to create output: {e}"))?;
-                let stats = archive_proc
-                    .process_tar_gz(reader, &mut atomic_writer)
-                    .map_err(|e| format!("archive processing error: {e}"))?;
-                if crate::is_interrupted() {
-                    return Err("interrupted — partial output discarded".into());
-                }
-                atomic_writer
-                    .finish()
-                    .map_err(|e| format!("failed to finalize output: {e}"))?;
-                stats
-            }
-            ArchiveFormat::Zip => {
-                let mut reader = BufReader::new(
-                    fs::File::open(input).map_err(|e| format!("failed to open archive: {e}"))?,
-                );
-                let mut atomic_writer = AtomicFileWriter::new(output_path)
-                    .map_err(|e| format!("failed to create output: {e}"))?;
-                let stats = archive_proc
-                    .process_zip(&mut reader, &mut atomic_writer)
-                    .map_err(|e| format!("archive processing error: {e}"))?;
-                if crate::is_interrupted() {
-                    return Err("interrupted — partial output discarded".into());
-                }
-                atomic_writer
-                    .finish()
-                    .map_err(|e| format!("failed to finalize output: {e}"))?;
-                stats
-            }
-        };
 
             if let Some(rb) = fp.report_builder {
                 record_archive_stats(rb, &stats);
@@ -1665,7 +1705,9 @@ mod tests {
 
     fn store_with_entry(original: &str) -> Arc<MappingStore> {
         let store = empty_store();
-        store.get_or_insert(&sanitize_engine::Category::AuthToken, original).unwrap();
+        store
+            .get_or_insert(&sanitize_engine::Category::AuthToken, original)
+            .unwrap();
         store
     }
 
@@ -1677,7 +1719,10 @@ mod tests {
         let path = dir.path().join("secrets.yaml");
         let n = save_discovered_secrets(&empty_store(), &path).unwrap();
         assert_eq!(n, 0);
-        assert!(!path.exists(), "no file should be created when store is empty");
+        assert!(
+            !path.exists(),
+            "no file should be created when store is empty"
+        );
     }
 
     #[test]
@@ -1689,8 +1734,14 @@ mod tests {
         let n = save_discovered_secrets(&store, &path).unwrap();
         assert_eq!(n, 1);
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("abc123"), "written file should contain the literal value");
-        assert!(content.contains("literal"), "entry kind should be 'literal'");
+        assert!(
+            content.contains("abc123"),
+            "written file should contain the literal value"
+        );
+        assert!(
+            content.contains("literal"),
+            "entry kind should be 'literal'"
+        );
     }
 
     #[test]
@@ -1736,6 +1787,9 @@ mod tests {
 
         let store = store_with_entry("abc123");
         let result = save_discovered_secrets(&store, &path);
-        assert!(result.is_err(), "malformed YAML should return an error, not silently lose data");
+        assert!(
+            result.is_err(),
+            "malformed YAML should return an error, not silently lose data"
+        );
     }
 }
