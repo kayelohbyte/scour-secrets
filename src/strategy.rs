@@ -176,7 +176,7 @@ impl StrategyGenerator {
     /// Access the underlying strategy.
     #[must_use]
     pub fn strategy(&self) -> &dyn Strategy {
-        &*self.strategy
+        self.strategy.as_ref()
     }
 }
 

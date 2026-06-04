@@ -1,6 +1,6 @@
 use crate::cli_args::{AppsAddArgs, AppsArgs, AppsEditArgs, AppsRemoveArgs, AppsSubCommand};
-use sanitize_engine::processor::FileTypeProfile;
-use sanitize_engine::secrets::SecretEntry;
+use rust_sanitize::processor::FileTypeProfile;
+use rust_sanitize::secrets::SecretEntry;
 use std::fs;
 use std::path::{Path, PathBuf};
 

@@ -161,8 +161,8 @@ impl MappingStore {
     }
 
     /// Return the allowlist attached to this store, if any.
-    pub fn allowlist(&self) -> Option<&Arc<AllowlistMatcher>> {
-        self.allowlist.as_ref()
+    pub fn allowlist(&self) -> Option<&AllowlistMatcher> {
+        self.allowlist.as_deref()
     }
 
     // ---------------- Core API ----------------
@@ -219,6 +219,12 @@ impl MappingStore {
             // Atomically reserve a capacity slot *before* generating the value.
             // This eliminates the TOCTOU race where multiple threads pass the
             // capacity check and all insert.
+            //
+            // insertion_index is set to `current` (the pre-increment value) from
+            // the successful CAS — not from a separate load after the loop, which
+            // could observe a higher count from a concurrent inserter and assign
+            // the wrong monotonic position to this entry.
+            let insertion_index;
             loop {
                 let current = self.len.load(Ordering::Acquire);
                 if current >= limit {
@@ -238,6 +244,7 @@ impl MappingStore {
                     )
                     .is_ok()
                 {
+                    insertion_index = current;
                     break;
                 }
                 // CAS failed → another thread incremented; retry.
@@ -245,7 +252,6 @@ impl MappingStore {
 
             // Slot reserved — generate and insert (first-writer-wins).
             let mut was_inserted = false;
-            let insertion_index = self.len.load(Ordering::Acquire).saturating_sub(1);
             let result = inner
                 .entry(ZeroizingString(original.to_owned()))
                 .or_insert_with(|| {

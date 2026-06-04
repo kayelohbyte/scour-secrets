@@ -1,5 +1,5 @@
-use sanitize_engine::secrets::{parse_category, SecretEntry};
-use sanitize_engine::{Category, MappingStore, ScanStats, StreamScanner};
+use rust_sanitize::secrets::{parse_category, SecretEntry};
+use rust_sanitize::{Category, MappingStore, ScanStats, StreamScanner};
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;

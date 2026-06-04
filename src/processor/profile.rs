@@ -364,8 +364,8 @@ impl FileTypeProfile {
     /// # Examples
     ///
     /// ```
-    /// use sanitize_engine::processor::profile::FieldRule;
-    /// use sanitize_engine::processor::profile::FileTypeProfile;
+    /// use rust_sanitize::processor::profile::FieldRule;
+    /// use rust_sanitize::processor::profile::FileTypeProfile;
     ///
     /// let profile = FileTypeProfile::new("json", vec![])
     ///     .with_extension(".json");

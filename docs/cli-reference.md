@@ -444,15 +444,16 @@ sanitize scan [OPTIONS] [INPUT]...
 | `--hidden` | Walk hidden files and directories. |
 | `--exclude-path <GLOB>` | Exclude paths by glob pattern during directory walks. Repeatable. |
 | `--include-path <GLOB>` | Only scan files matching this glob pattern during directory walks. Repeatable. When both `--include-path` and `--exclude-path` match a file, exclusion wins. No effect on explicitly named file arguments. |
-| `-r, --report [PATH]` | Write a JSON match report to PATH (or stderr if omitted). |
+| `-r, --report [PATH]` | Write a match report to PATH (or stderr if omitted). |
+| `--report-format <FMT>` | Format for `--report` output: `json` (default), `sarif`, or `html`. |
 | `--entropy-threshold <THRESHOLD>` | Enable Shannon entropy detection for high-entropy tokens (bits/char, e.g. `4.5`). Off by default. Prints an entropy calibration histogram to stderr (counts only — no token values). |
-| `--json` | Write findings as NDJSON to stdout instead of human-readable log. One JSON object per file plus a summary line. Implies `--progress off`. |
+| `--findings` | Write per-file findings as NDJSON to stdout instead of human-readable log. One JSON object per file plus a summary line. Implies `--progress off`. |
 | `--threads <N>` | Worker thread count (default: auto). |
 | `--log-format <FMT>` | `human` (default) or `json`. |
 
 **Exit codes:** `0` = clean, `2` = matches found, `1` = error.
 
-**`--json` flag:** writes per-file findings as NDJSON to stdout instead of human-readable log output. Each line is a self-contained JSON object — one per file, plus a summary line. Implies `--no-progress`. Compatible with `jq`, SIEM ingest, and line-oriented JSON tools.
+**`--findings` flag:** writes per-file findings as NDJSON to stdout instead of human-readable log output. Each line is a self-contained JSON object — one per file, plus a summary line. Implies `--no-progress`. Compatible with `jq`, SIEM ingest, and line-oriented JSON tools.
 
 ```
 {"type":"file","file":"server.log","matches":3,"clean":false,"patterns":{"aws_access_key":2,"github_pat":1},"bytes_processed":4096}
@@ -469,9 +470,9 @@ sanitize scan ./support-bundle/ --include-path '**/*.conf' --include-path '**/*.
 git diff HEAD | sanitize scan -s patterns.yaml                  # scan a patch
 
 # Machine-readable output:
-sanitize scan ./logs/ --app gitlab --json
-sanitize scan ./logs/ --app gitlab --json | jq 'select(.type=="file" and .clean==false)'
-sanitize scan ./logs/ --app gitlab --json | jq -r 'select(.type=="summary") | .matches'
+sanitize scan ./logs/ --app gitlab --findings
+sanitize scan ./logs/ --app gitlab --findings | jq 'select(.type=="file" and .clean==false)'
+sanitize scan ./logs/ --app gitlab --findings | jq -r 'select(.type=="summary") | .matches'
 ```
 
 ---
@@ -843,7 +844,7 @@ When neither `-s`/`--secrets-file` nor `--app` is provided, the built-in pattern
 | `--no-progress` | | Deprecated. Use `--progress off` instead. Hidden from `--help`. |
 | `--extract-context` | | After sanitizing, scan the output for error/warning/failure keywords and embed matching lines with surrounding context in the JSON report. Each file entry in `files[]` gets its own `log_context` object. Requires `--report`. Has no effect without `--report`. For stdout paths larger than 256 MiB the flag is silently skipped (use file output and the two-pass reader path instead). |
 | `--context-lines <N>` | | Lines of context to capture before and after each keyword match when `--extract-context` is set. Default: `10`. |
-| `--context-keywords <KEYWORDS>` | | Comma-separated list of keywords to scan for when `--extract-context` is set. Merged with the built-in defaults (`error`, `failure`, `warning`, `warn`, `fatal`, `exception`, `critical`, `panic`, `timeout`, `oomkilled`) unless `--context-keywords-replace` is also passed. Example: `--context-keywords timeout,oomkilled,backoff`. |
+| `--context-keywords <KEYWORDS>` | | Comma-separated list of keywords to scan for when `--extract-context` is set. Merged with the built-in defaults (`error`, `failure`, `warning`, `warn`, `fatal`, `exception`, `critical`) unless `--context-keywords-replace` is also passed. Example: `--context-keywords timeout,oomkilled,backoff`. |
 | `--context-keywords-replace` | | Replace the built-in keyword list entirely with the keywords given by `--context-keywords`. Without this flag, custom keywords are merged with the built-ins. Has no effect if `--context-keywords` is not set. |
 | `--max-context-matches <N>` | | Maximum number of keyword matches to capture per file when `--extract-context` is set. Default: `50`. Once this cap is hit, `truncated: true` is set in `log_context` and the rest of the file is skipped. Increase this (not `--context-lines`) when you are missing events. |
 | `--context-case-sensitive` | | Make keyword matching case-sensitive when `--extract-context` is set. By default keywords are matched case-insensitively (`error` matches `ERROR`, `Error`, etc.). |
@@ -1303,7 +1304,7 @@ sanitize encrypt [OPTIONS] <INPUT> <OUTPUT>
 | `<OUTPUT>` | Path for encrypted output file (`.enc`). |
 | `--password` | Prompt interactively for the encryption password. The password is never echoed. For non-interactive automation use `--password-file` or `SANITIZE_PASSWORD` instead. |
 | `--password-file <FILE>` | Read the password from a file (must have `0600` or `0400` permissions). |
-| `--format <FMT>` | Force input format: `json`, `yaml`, or `toml` (default: auto-detect from extension). |
+| `--secrets-format <FMT>` | Force input format: `json`, `yaml`, or `toml` (default: auto-detect from extension). |
 | `--validate` | Parse plaintext before encrypting and report errors (default). |
 | `--no-validate` | Skip pre-encryption validation. |
 | `-h, --help` | Print help. |
@@ -1322,7 +1323,7 @@ sanitize decrypt [OPTIONS] <INPUT> <OUTPUT>
 | `<OUTPUT>` | Path for decrypted plaintext output. |
 | `--password` | Prompt interactively for the decryption password. The password is never echoed. For non-interactive automation use `--password-file` or `SANITIZE_PASSWORD` instead. |
 | `--password-file <FILE>` | Read the password from a file (must have `0600` or `0400` permissions). |
-| `--format <FMT>` | Validate decrypted content as this format (`json`, `yaml`, `toml`). If omitted, raw bytes are written. |
+| `--secrets-format <FMT>` | Validate decrypted content as this format (`json`, `yaml`, `toml`). If omitted, raw bytes are written. |
 | `-h, --help` | Print help. |
 
 ---

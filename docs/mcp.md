@@ -44,14 +44,14 @@ The MCP path prevents the agent from reading raw content *through the sanitize t
 | OpenCode | Yes | ✓ `permission.read` deny rules | No — rules apply to agent reads, not subprocesses |
 | Cursor | Yes | ✓ Enforcement hooks (enterprise) | No — hooks intercept agent reads only |
 | OpenAI Codex | Yes | ✓ TOML deny rules (OS-enforced) | **Yes** — Seatbelt/bubblewrap applies to all child processes |
-| VS Code (Copilot) | Yes | ✗ | N/A |
+| VS Code (Copilot) | Yes | ✗ (`.copilotignore` is indexing-only, not a security boundary) | No — daemon + [mcp-remote](https://github.com/modelcontextprotocol/mcp-remote) shim enables service-user isolation |
 | ChatGPT / Gemini | No direct filesystem access | ✗ | N/A — files must be explicitly uploaded |
 
 For **Claude Code, OpenCode, and Cursor**: deny rules block the agent's direct file reads but leave MCP subprocess calls unaffected — sanitize-mcp can be spawned on-demand and will still access the files.
 
 For **OpenAI Codex**: deny rules are enforced by the OS sandbox (Seatbelt on macOS, bubblewrap on Linux). All child processes inherit the sandbox, including an on-demand `sanitize-mcp`. To allow sanitize-mcp to access denied files, run it as a **persistent daemon outside the Codex sandbox** — connect Codex to the already-running MCP server rather than having Codex spawn it.
 
-For **VS Code**: OS-level file permissions (service-user model) are the only mechanism.
+For **VS Code**: there is no built-in path deny mechanism. `.copilotignore` prevents Copilot from indexing files but does not block the agent from reading them explicitly. OS-level file permissions (service-user model) are the effective control; pair them with the [persistent daemon](#running-as-a-persistent-daemon) and the [mcp-remote](https://github.com/modelcontextprotocol/mcp-remote) shim to enforce the service-user boundary. See [VS Code: Limit Exposure with `.copilotignore` and `mcp-remote`](#vs-code-copilot-limit-exposure-with-copilotignore-and-mcp-remote).
 
 For **ChatGPT and Gemini**: no ambient filesystem access — control what you explicitly upload.
 
@@ -206,7 +206,18 @@ OpenCode (`~/.config/opencode/opencode.json`, global scope):
 }
 ```
 
-For Codex, add a remote MCP entry pointing to the same URL with the same header. The daemon runs outside Codex's OS sandbox, so it can access any files `sanitize-svc` has permission to read.
+For Codex, add a remote MCP entry to `~/.codex/config.yaml` pointing to the daemon. The daemon runs outside Codex's OS sandbox, so it can access any files `sanitize-svc` has permission to read:
+
+```yaml
+mcp_servers:
+  rust-sanitize:
+    type: http
+    url: "http://127.0.0.1:6277/mcp"
+    headers:
+      Authorization: "Bearer YOUR_TOKEN_HERE"
+```
+
+Refer to the [Codex permissions documentation](https://developers.openai.com/codex/permissions#filesystem-permissions) for the latest config schema — the MCP server format may vary by Codex CLI version.
 
 > **Single-session limit:** The HTTP daemon maintains one active MCP session at a time. When the AI tool disconnects cleanly (sends the MCP DELETE request), the daemon exits and the service manager restarts it automatically — the next connection gets a fresh session. This covers the common case: Claude Code, OpenCode, and most clients send DELETE on shutdown or session end. Unclean disconnects (process crash, kill signal) leave the daemon in a stuck state; the service manager cannot detect these without a health-check probe, so a manual `launchctl kickstart`/`systemctl restart`/`nssm restart` is required after an unclean exit.
 
@@ -245,6 +256,50 @@ Cursor's enterprise tier supports enforcement hooks that intercept the agent loo
 The hook pattern mirrors Claude Code's approach: inspect the incoming file path and deny if it matches a restricted prefix. Refer to [Cursor's enterprise documentation](https://cursor.com/docs/enterprise/llm-safety-and-controls) for the exact JSON field names and registration syntax, as these are enterprise-tier specifics.
 
 > **Note:** `.cursorignore` is explicitly not a security boundary — Cursor's own documentation states it is a convenience feature for excluding files from indexing, not for preventing access. Do not rely on it to protect sensitive files.
+
+### VS Code (Copilot): Limit Exposure with `.copilotignore` and `mcp-remote`
+
+VS Code does not offer a security-enforced path deny mechanism. The practical options are a soft guardrail for indexing and the persistent daemon for true service-user isolation.
+
+**Soft guardrail — `.copilotignore`**
+
+Create `.copilotignore` in the repo root using `.gitignore` syntax to exclude files from Copilot's index:
+
+```
+/secrets/
+*.pem
+*.key
+.env*
+```
+
+This reduces accidental exposure in autocomplete and inline suggestions. It does **not** prevent the agent from explicitly reading those files — treat it as a convenience filter, not a security boundary.
+
+**Service-user isolation — daemon + `mcp-remote`**
+
+VS Code's `mcp.json` HTTP server type (`"type": "http"`) does not support custom request headers, so the Bearer token cannot be passed natively. [`mcp-remote`](https://github.com/modelcontextprotocol/mcp-remote) bridges this gap: VS Code spawns it as a stdio server, and it forwards every request to the HTTP daemon with the `Authorization` header injected.
+
+1. Start the daemon as described in [Running as a Persistent Daemon](#running-as-a-persistent-daemon).
+2. Install the shim: `npm install -g mcp-remote`
+3. Configure VS Code — add to `.vscode/mcp.json` (project scope) or user `settings.json` (user scope):
+
+```json
+{
+  "servers": {
+    "rust-sanitize": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://127.0.0.1:6277/mcp",
+        "--header",
+        "Authorization: Bearer YOUR_TOKEN_HERE"
+      ]
+    }
+  }
+}
+```
+
+Because VS Code spawns `mcp-remote` as your login user, it still cannot access files owned exclusively by `sanitize-svc` — the service-user boundary holds. The token in `.vscode/mcp.json` can end up in version control; prefer user-scope settings or add `.vscode/mcp.json` to `.gitignore`.
 
 ### OpenAI Codex: Block Reads with OS-Enforced TOML Deny Rules
 
@@ -375,6 +430,49 @@ Or write `.mcp.json` at the repo root manually:
 **Global scope** — same format at `~/.cursor/mcp.json`.
 
 Requires Cursor 0.43 or later. Restart Cursor after editing the file.
+
+### VS Code (Copilot)
+
+Requires VS Code 1.99 or later with the GitHub Copilot extension.
+
+**On-demand (stdio) — project scope** — create `.vscode/mcp.json` in the repo root:
+
+```json
+{
+  "servers": {
+    "rust-sanitize": {
+      "type": "stdio",
+      "command": "/usr/local/bin/sanitize-mcp",
+      "env": {
+        "SANITIZE_BIN": "/usr/local/bin/sanitize"
+      }
+    }
+  }
+}
+```
+
+**Via daemon with `mcp-remote` (recommended when sensitive files are involved)** — run the daemon as a service user (see [Running as a Persistent Daemon](#running-as-a-persistent-daemon)), then point VS Code at it through the [`mcp-remote`](https://github.com/modelcontextprotocol/mcp-remote) shim. Install once with `npm install -g mcp-remote`, then add to `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "rust-sanitize": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "http://127.0.0.1:6277/mcp",
+        "--header",
+        "Authorization: Bearer YOUR_TOKEN_HERE"
+      ]
+    }
+  }
+}
+```
+
+Keep the token out of version control — either add `.vscode/mcp.json` to `.gitignore`, or use user-scope settings (`Preferences: Open User Settings (JSON)` → add a `mcp` key with the same structure).
+
+Restart VS Code after editing the file.
 
 ### Neovim
 

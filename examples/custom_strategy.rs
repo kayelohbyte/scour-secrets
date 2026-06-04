@@ -2,9 +2,9 @@
 //!
 //! Run with: `cargo run --example custom_strategy`
 
-use sanitize_engine::category::Category;
-use sanitize_engine::store::MappingStore;
-use sanitize_engine::strategy::{EntropyMode, Strategy, StrategyGenerator};
+use rust_sanitize::category::Category;
+use rust_sanitize::store::MappingStore;
+use rust_sanitize::strategy::{EntropyMode, Strategy, StrategyGenerator};
 use std::sync::Arc;
 
 /// A simple strategy that replaces every character with `X`.

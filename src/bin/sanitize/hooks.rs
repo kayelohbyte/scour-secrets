@@ -1,4 +1,5 @@
 use crate::cli_args::{HookMode, HookType, InstallHookArgs};
+use rust_sanitize::atomic_write;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -449,7 +450,9 @@ pub(crate) fn run_install_hook(args: &InstallHookArgs) -> Result<(), (String, i3
     fs::create_dir_all(&hooks_dir)
         .map_err(|e| (format!("failed to create {}: {e}", hooks_dir.display()), 1))?;
 
-    fs::write(&hook_path, &script)
+    // Write atomically (temp file + rename) so a mid-write crash never leaves
+    // a zeroed hook that silently passes all commits.
+    atomic_write(&hook_path, script.as_bytes())
         .map_err(|e| (format!("failed to write {}: {e}", hook_path.display()), 1))?;
 
     #[cfg(unix)]

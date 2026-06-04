@@ -1,9 +1,9 @@
 //! Benchmark for replacement store throughput.
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use sanitize_engine::category::Category;
-use sanitize_engine::generator::HmacGenerator;
-use sanitize_engine::store::MappingStore;
+use rust_sanitize::category::Category;
+use rust_sanitize::generator::HmacGenerator;
+use rust_sanitize::store::MappingStore;
 use std::sync::Arc;
 
 fn bench_insert_unique(c: &mut Criterion) {

@@ -4,9 +4,9 @@
 //! arbitrary inputs, not just hand-crafted examples.
 
 use proptest::prelude::*;
-use sanitize_engine::category::Category;
-use sanitize_engine::generator::{HmacGenerator, ReplacementGenerator};
-use sanitize_engine::store::MappingStore;
+use rust_sanitize::category::Category;
+use rust_sanitize::generator::{HmacGenerator, ReplacementGenerator};
+use rust_sanitize::store::MappingStore;
 use std::sync::Arc;
 
 /// Arbitrary `Category` generator for proptest.

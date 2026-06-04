@@ -20,8 +20,8 @@
 //! # Example
 //!
 //! ```rust
-//! use sanitize_engine::log_context::{extract_context, LogContextConfig};
-//! use sanitize_engine::report::{FileReport, ReportBuilder, ReportMetadata};
+//! use rust_sanitize::log_context::{extract_context, LogContextConfig};
+//! use rust_sanitize::report::{FileReport, ReportBuilder, ReportMetadata};
 //! use std::collections::HashMap;
 //!
 //! let meta = ReportMetadata {
@@ -447,12 +447,20 @@ footer{{margin-top:40px;padding-top:16px;border-top:1px solid var(--border);font
 // Private helpers
 // ---------------------------------------------------------------------------
 
+fn is_pii_category(pattern: &str) -> bool {
+    matches!(
+        pattern,
+        "email" | "name" | "phone" | "credit_card" | "ssn" | "auth_token" | "jwt"
+    )
+}
+
 /// Map a pattern name to a SARIF severity level.
 /// PII and credential categories → "error"; everything else → "warning".
 fn sarif_level(pattern: &str) -> &'static str {
-    match pattern {
-        "email" | "name" | "phone" | "credit_card" | "ssn" | "auth_token" | "jwt" => "error",
-        _ => "warning",
+    if is_pii_category(pattern) {
+        "error"
+    } else {
+        "warning"
     }
 }
 
@@ -478,9 +486,10 @@ fn path_to_sarif_uri(path: &str) -> String {
 
 /// CSS badge class for a pattern in the HTML report.
 fn sarif_badge_class(pattern: &str) -> &'static str {
-    match pattern {
-        "email" | "name" | "phone" | "credit_card" | "ssn" | "auth_token" | "jwt" => "badge-pii",
-        _ => "badge-warn",
+    if is_pii_category(pattern) {
+        "badge-pii"
+    } else {
+        "badge-warn"
     }
 }
 

@@ -2,8 +2,8 @@ use std::sync::Arc;
 use tracing::{info, warn};
 use zeroize::Zeroizing;
 
-use sanitize_engine::secrets::{entries_to_patterns, parse_category, SecretEntry};
-use sanitize_engine::{
+use rust_sanitize::secrets::{entries_to_patterns, parse_category, SecretEntry};
+use rust_sanitize::{
     FieldNameSignal, HmacGenerator, MappingStore, RandomGenerator, ReplacementGenerator,
     ScanConfig, ScanPattern, StreamScanner, DEFAULT_FIELD_SIGNAL_THRESHOLD,
 };
@@ -15,7 +15,7 @@ pub(crate) fn build_store(
     deterministic: bool,
     password: Option<&str>,
     max_mappings: usize,
-    allowlist: Option<Arc<sanitize_engine::allowlist::AllowlistMatcher>>,
+    allowlist: Option<Arc<rust_sanitize::allowlist::AllowlistMatcher>>,
 ) -> std::result::Result<Arc<MappingStore>, String> {
     let generator: Arc<dyn ReplacementGenerator> = if deterministic {
         match password {

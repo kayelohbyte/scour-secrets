@@ -10,10 +10,10 @@
 //! - S-1/S-2: SecretEntry zeroize on drop
 //! - M-4: MappingStore capacity from CLI default
 
-use sanitize_engine::category::Category;
-use sanitize_engine::generator::{HmacGenerator, RandomGenerator, ReplacementGenerator};
-use sanitize_engine::scanner::{ScanConfig, ScanPattern, StreamScanner};
-use sanitize_engine::store::MappingStore;
+use rust_sanitize::category::Category;
+use rust_sanitize::generator::{HmacGenerator, RandomGenerator, ReplacementGenerator};
+use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use rust_sanitize::store::MappingStore;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -217,9 +217,9 @@ fn c1_concurrent_capacity_never_exceeded() {
 
 #[test]
 fn r4_json_depth_limit_rejects_deep_nesting() {
-    use sanitize_engine::processor::json_proc::JsonProcessor;
-    use sanitize_engine::processor::profile::{FieldRule, FileTypeProfile};
-    use sanitize_engine::processor::Processor;
+    use rust_sanitize::processor::json_proc::JsonProcessor;
+    use rust_sanitize::processor::profile::{FieldRule, FileTypeProfile};
+    use rust_sanitize::processor::Processor;
 
     let store = make_store(None);
     let profile = FileTypeProfile::new("json", vec![FieldRule::new("*")]);
@@ -246,9 +246,9 @@ fn r4_json_depth_limit_rejects_deep_nesting() {
 
 #[test]
 fn r4_yaml_depth_limit_rejects_deep_nesting() {
-    use sanitize_engine::processor::profile::{FieldRule, FileTypeProfile};
-    use sanitize_engine::processor::yaml_proc::YamlProcessor;
-    use sanitize_engine::processor::Processor;
+    use rust_sanitize::processor::profile::{FieldRule, FileTypeProfile};
+    use rust_sanitize::processor::yaml_proc::YamlProcessor;
+    use rust_sanitize::processor::Processor;
 
     let store = make_store(None);
     let profile = FileTypeProfile::new("yaml", vec![FieldRule::new("*")]);
@@ -270,9 +270,9 @@ fn r4_yaml_depth_limit_rejects_deep_nesting() {
 
 #[test]
 fn r4_yaml_size_limit_rejects_large_input() {
-    use sanitize_engine::processor::profile::{FieldRule, FileTypeProfile};
-    use sanitize_engine::processor::yaml_proc::YamlProcessor;
-    use sanitize_engine::processor::Processor;
+    use rust_sanitize::processor::profile::{FieldRule, FileTypeProfile};
+    use rust_sanitize::processor::yaml_proc::YamlProcessor;
+    use rust_sanitize::processor::Processor;
 
     let store = make_store(None);
     let profile = FileTypeProfile::new("yaml", vec![FieldRule::new("*")]);
@@ -291,9 +291,9 @@ fn r4_yaml_size_limit_rejects_large_input() {
 
 #[test]
 fn r5_xml_depth_limit_rejects_deep_nesting() {
-    use sanitize_engine::processor::profile::{FieldRule, FileTypeProfile};
-    use sanitize_engine::processor::xml_proc::XmlProcessor;
-    use sanitize_engine::processor::Processor;
+    use rust_sanitize::processor::profile::{FieldRule, FileTypeProfile};
+    use rust_sanitize::processor::xml_proc::XmlProcessor;
+    use rust_sanitize::processor::Processor;
 
     let store = make_store(None);
     let profile = FileTypeProfile::new("xml", vec![FieldRule::new("*")]);
@@ -320,7 +320,7 @@ fn r5_xml_depth_limit_rejects_deep_nesting() {
 
 #[test]
 fn s1_secret_entry_implements_drop_zeroize() {
-    use sanitize_engine::secrets::SecretEntry;
+    use rust_sanitize::secrets::SecretEntry;
 
     // Verify that creating and dropping a SecretEntry doesn't panic
     // (Drop impl calls zeroize on all fields).

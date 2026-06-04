@@ -249,14 +249,13 @@ fn format_char_class_lp(
 /// ASCII digit with a deterministic digit derived from `hash`.
 /// Falls back to hex if the original contains no digits.
 fn format_digits_lp(hash: &[u8; 32], original: &str, target: usize) -> String {
-    let hex = hex_bytes(hash);
     format_char_class_lp(
         hash,
         original,
         |c| c.is_ascii_digit(),
         |_, b| (b'0' + b % 10) as char,
     )
-    .unwrap_or_else(|| pad_or_truncate("", target, &hex))
+    .unwrap_or_else(|| pad_or_truncate("", target, &hex_bytes(hash)))
 }
 
 /// Length-preserving hex-digit replacement (for IPv6, UUID, MAC, container ID).

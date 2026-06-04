@@ -1,6 +1,6 @@
 # Security Model
 
-> **rust-sanitize** v0.11.0
+> **rust-sanitize** v0.12.0
 
 This document describes the security properties, threat mitigations,
 and operational constraints of the sanitization engine.
@@ -145,7 +145,34 @@ The following threats are outside the tool's design boundary:
 
 ---
 
-## 9. Responsible Disclosure
+## 9. HTTP Daemon Mode
+
+When `sanitize-mcp --http` is used, the server binds to `127.0.0.1` only and
+requires a bearer token on every request:
+
+| Property | Value |
+|----------|-------|
+| Bind address | `127.0.0.1` (loopback only — not reachable from the network) |
+| Auth | Bearer token via `SANITIZE_MCP_HTTP_TOKEN` (required; server refuses to start without it) |
+| Session model | One active MCP session at a time; daemon exits on clean disconnect so the service manager can restart it |
+| Token in transit | Plaintext over loopback — acceptable locally; use a TLS reverse proxy for remote deployments |
+| Token storage | Service config file must be mode `0600` (shown in `docs/mcp.md`) |
+
+The daemon never logs request bodies, file paths, file content, or the
+`Authorization` header. Only startup messages and unhandled error class
+names appear in log output.
+
+**Threat:** Token theft via process listing or config file read.  
+**Mitigation:** Config file is mode `0600`; token is not passed via argv.
+
+**Threat:** Unclean disconnect leaves daemon in stuck state.  
+**Mitigation:** Service manager (launchd / systemd / NSSM) auto-restarts on
+clean disconnect. Unclean exits (SIGKILL) require manual restart — no
+health-check probe is built in.
+
+---
+
+## 10. Responsible Disclosure
 
 If you discover a security vulnerability, please report it privately
 via GitHub Security Advisories or email the maintainers directly.
@@ -158,7 +185,7 @@ Do not open a public issue for security vulnerabilities.
 
 ---
 
-## 10. YAML Alias Bomb Mitigation
+## 11. YAML Alias Bomb Mitigation
 
 YAML anchors/aliases can cause exponential expansion:
 
@@ -177,7 +204,7 @@ The `YamlProcessor` defends against this with three layers:
 
 ---
 
-## 11. Archive Decompression Bomb Mitigation
+## 12. Archive Decompression Bomb Mitigation
 
 Malicious archives can contain entries that expand to many times their
 compressed size (zip bombs, tar bombs, nested archives). The
@@ -187,7 +214,7 @@ compressed size (zip bombs, tar bombs, nested archives). The
    diverted to the streaming scanner (which processes in bounded chunks)
    rather than being buffered in memory for structured processing.
 2. **Nesting depth cap** — recursive archive processing (archives inside
-   archives) is limited to a default depth of 3 and a hard maximum of
+   archives) is limited to a default depth of 5 and a hard maximum of
    10. Exceeding the limit returns `RecursionDepthExceeded`.
 3. **Entry-by-entry processing** — archives are never fully decompressed
    into memory. Each entry is processed independently, so peak memory is
@@ -196,7 +223,7 @@ compressed size (zip bombs, tar bombs, nested archives). The
 
 ---
 
-## 12. Signal Safety
+## 13. Signal Safety
 
 `SIGINT` / `SIGTERM` set a global `AtomicBool`. The pipeline checks
 this flag before committing output. If interrupted:
@@ -206,7 +233,7 @@ this flag before committing output. If interrupted:
 
 ---
 
-## 13. Logging Hygiene
+## 14. Logging Hygiene
 
 The tracing layer **never** logs:
 
@@ -219,7 +246,7 @@ and error descriptions.
 
 ---
 
-## 14. Threat Model Summary
+## 15. Threat Model Summary
 
 | Threat | Mitigation |
 |--------|-----------|

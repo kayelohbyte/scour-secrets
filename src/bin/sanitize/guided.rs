@@ -1,7 +1,7 @@
 use crate::scanner_builder::common_allow_patterns;
-use sanitize_engine::processor::FileTypeProfile;
-use sanitize_engine::secrets::SecretEntry;
-use sanitize_engine::{Category, FieldRule};
+use rust_sanitize::processor::FileTypeProfile;
+use rust_sanitize::secrets::SecretEntry;
+use rust_sanitize::{Category, FieldRule};
 use std::collections::HashSet;
 use std::io::{self, Write};
 
@@ -737,254 +737,249 @@ pub(crate) const TEMPLATE_HEADER: &str = "\
 ";
 
 pub(crate) fn template_body_generic() -> &'static str {
-    r#"secrets:
-  # --- Tokens & credentials ---
-  - pattern: '(?i)\b(?:bearer|token|api[_-]?key|secret)[\s:=]+[A-Za-z0-9._~+/=-]{16,}\b'
-    kind: regex
-    category: auth_token
-    label: auth_token_context
+    r#"# --- Tokens & credentials ---
+- pattern: '(?i)\b(?:bearer|token|api[_-]?key|secret)[\s:=]+[A-Za-z0-9._~+/=-]{16,}\b'
+  kind: regex
+  category: auth_token
+  label: auth_token_context
 
-  - pattern: '\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b'
-    kind: regex
-    category: jwt
-    label: jwt
+- pattern: '\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b'
+  kind: regex
+  category: jwt
+  label: jwt
 
-  # --- Network identifiers ---
-  - pattern: '\b(?:\d{1,3}\.){3}\d{1,3}\b'
-    kind: regex
-    category: ipv4
-    label: ipv4
+# --- Network identifiers ---
+- pattern: '\b(?:\d{1,3}\.){3}\d{1,3}\b'
+  kind: regex
+  category: ipv4
+  label: ipv4
 
-  - pattern: '\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}\b'
-    kind: regex
-    category: ipv6
-    label: ipv6
+- pattern: '\b(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}\b'
+  kind: regex
+  category: ipv6
+  label: ipv6
 
-  - pattern: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
-    kind: regex
-    category: email
-    label: email
+- pattern: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+  kind: regex
+  category: email
+  label: email
 
-  - pattern: '\b(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)\.)+(?:[a-zA-Z]{2,63})\b'
-    kind: regex
-    category: hostname
-    label: hostname
+- pattern: '\b(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)\.)+(?:[a-zA-Z]{2,63})\b'
+  kind: regex
+  category: hostname
+  label: hostname
 
-  - pattern: 'https?://[^\s"''<>]+'
-    kind: regex
-    category: url
-    label: url
+- pattern: 'https?://[^\s"''<>]+'
+  kind: regex
+  category: url
+  label: url
 
-  # --- Identifiers ---
-  - pattern: '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b'
-    kind: regex
-    category: uuid
-    label: uuid
+# --- Identifiers ---
+- pattern: '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b'
+  kind: regex
+  category: uuid
+  label: uuid
 
-  - pattern: '\b[a-f0-9]{12,64}\b'
-    kind: regex
-    category: container_id
-    label: container_id
+- pattern: '\b[a-f0-9]{12,64}\b'
+  kind: regex
+  category: container_id
+  label: container_id
 
-  # --- Add your own literals below ---
-  # - pattern: 'my-internal-hostname.corp.example.com'
-  #   kind: literal
-  #   category: hostname
-  #   label: corp_hostname
+# --- Add your own literals below ---
+# - pattern: 'my-internal-hostname.corp.example.com'
+#   kind: literal
+#   category: hostname
+#   label: corp_hostname
 "#
 }
 
 pub(crate) fn template_body_web() -> &'static str {
-    r#"secrets:
-  # --- JWTs and session tokens ---
-  - pattern: '\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b'
-    kind: regex
-    category: jwt
-    label: jwt
+    r#"# --- JWTs and session tokens ---
+- pattern: '\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b'
+  kind: regex
+  category: jwt
+  label: jwt
 
-  - pattern: '(?i)\bsess(?:ion)?[_-]?(?:id|token|key)[\s:=]+[A-Za-z0-9._~+/=-]{8,}\b'
-    kind: regex
-    category: auth_token
-    label: session_id
+- pattern: '(?i)\bsess(?:ion)?[_-]?(?:id|token|key)[\s:=]+[A-Za-z0-9._~+/=-]{8,}\b'
+  kind: regex
+  category: auth_token
+  label: session_id
 
-  - pattern: '(?i)(?:refresh|access)[_-]?token[\s:=]+[A-Za-z0-9._~+/=-]{16,}'
-    kind: regex
-    category: auth_token
-    label: oauth_token
+- pattern: '(?i)(?:refresh|access)[_-]?token[\s:=]+[A-Za-z0-9._~+/=-]{16,}'
+  kind: regex
+  category: auth_token
+  label: oauth_token
 
-  - pattern: '(?i)\b(?:bearer|authorization)[\s:]+[A-Za-z0-9._~+/=-]{16,}\b'
-    kind: regex
-    category: auth_token
-    label: bearer_token
+- pattern: '(?i)\b(?:bearer|authorization)[\s:]+[A-Za-z0-9._~+/=-]{16,}\b'
+  kind: regex
+  category: auth_token
+  label: bearer_token
 
-  # --- User identifiers ---
-  - pattern: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
-    kind: regex
-    category: email
-    label: email
+# --- User identifiers ---
+- pattern: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+  kind: regex
+  category: email
+  label: email
 
-  - pattern: '\b(?:\d{1,3}\.){3}\d{1,3}\b'
-    kind: regex
-    category: ipv4
-    label: client_ip
+- pattern: '\b(?:\d{1,3}\.){3}\d{1,3}\b'
+  kind: regex
+  category: ipv4
+  label: client_ip
 
-  # --- URLs (may contain query params with tokens) ---
-  - pattern: 'https?://[^\s"''<>]+'
-    kind: regex
-    category: url
-    label: url
+# --- URLs (may contain query params with tokens) ---
+- pattern: 'https?://[^\s"''<>]+'
+  kind: regex
+  category: url
+  label: url
 
-  # --- Add domain-specific literals ---
-  # - pattern: 'users.myapp.com'
-  #   kind: literal
-  #   category: hostname
-  #   label: app_domain
+# --- Add domain-specific literals ---
+# - pattern: 'users.myapp.com'
+#   kind: literal
+#   category: hostname
+#   label: app_domain
 "#
 }
 
 pub(crate) fn template_body_k8s() -> &'static str {
-    r#"secrets:
-  # --- Service account tokens (base64, JWT) ---
-  - pattern: '\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b'
-    kind: regex
-    category: jwt
-    label: k8s_service_account_jwt
+    r#"# --- Service account tokens (base64, JWT) ---
+- pattern: '\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b'
+  kind: regex
+  category: jwt
+  label: k8s_service_account_jwt
 
-  - pattern: '(?i)token[\s:]+[A-Za-z0-9._~+/=-]{20,}'
-    kind: regex
-    category: auth_token
-    label: k8s_token
+- pattern: '(?i)token[\s:]+[A-Za-z0-9._~+/=-]{20,}'
+  kind: regex
+  category: auth_token
+  label: k8s_token
 
-  # --- Namespace and pod names ---
-  - pattern: '\bnamespace[\s:]+[a-z][a-z0-9-]{2,62}\b'
-    kind: regex
-    category: custom:k8s_namespace
-    label: k8s_namespace
+# --- Namespace and pod names ---
+- pattern: '\bnamespace[\s:]+[a-z][a-z0-9-]{2,62}\b'
+  kind: regex
+  category: custom:k8s_namespace
+  label: k8s_namespace
 
-  # --- IPs assigned to pods and services ---
-  - pattern: '\b(?:\d{1,3}\.){3}\d{1,3}\b'
-    kind: regex
-    category: ipv4
-    label: pod_or_svc_ip
+# --- IPs assigned to pods and services ---
+- pattern: '\b(?:\d{1,3}\.){3}\d{1,3}\b'
+  kind: regex
+  category: ipv4
+  label: pod_or_svc_ip
 
-  # --- Cluster hostnames / DNS names ---
-  - pattern: '\b(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)\.)+(?:[a-zA-Z]{2,63})\b'
-    kind: regex
-    category: hostname
-    label: k8s_dns
+# --- Cluster hostnames / DNS names ---
+- pattern: '\b(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)\.)+(?:[a-zA-Z]{2,63})\b'
+  kind: regex
+  category: hostname
+  label: k8s_dns
 
-  # --- UUIDs (pod IDs, request IDs, etc.) ---
-  - pattern: '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b'
-    kind: regex
-    category: uuid
-    label: uid
+# --- UUIDs (pod IDs, request IDs, etc.) ---
+- pattern: '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b'
+  kind: regex
+  category: uuid
+  label: uid
 
-  # --- Docker / container image digests ---
-  - pattern: '\b[a-f0-9]{64}\b'
-    kind: regex
-    category: container_id
-    label: image_digest
+# --- Docker / container image digests ---
+- pattern: '\b[a-f0-9]{64}\b'
+  kind: regex
+  category: container_id
+  label: image_digest
 
-  # --- Add your cluster name as a literal ---
-  # - pattern: 'prod-cluster-1'
-  #   kind: literal
-  #   category: hostname
-  #   label: cluster_name
+# --- Add your cluster name as a literal ---
+# - pattern: 'prod-cluster-1'
+#   kind: literal
+#   category: hostname
+#   label: cluster_name
 "#
 }
 
 pub(crate) fn template_body_database() -> &'static str {
-    r#"secrets:
-  # --- Connection strings (contain embedded credentials) ---
-  - pattern: '(?i)(?:postgres|mysql|mongodb|redis|amqp|jdbc:[^:]+)://[^\s"''>]+'
-    kind: regex
-    category: url
-    label: db_connection_string
+    r#"# --- Connection strings (contain embedded credentials) ---
+- pattern: '(?i)(?:postgres|mysql|mongodb|redis|amqp|jdbc:[^:]+)://[^\s"''>]+'
+  kind: regex
+  category: url
+  label: db_connection_string
 
-  # --- Inline passwords / secrets ---
-  - pattern: '(?i)(?:password|passwd|pwd)[\s:=]+[^\s"'']{6,}'
-    kind: regex
-    category: custom:db_password
-    label: db_password
+# --- Inline passwords / secrets ---
+- pattern: '(?i)(?:password|passwd|pwd)[\s:=]+[^\s"'']{6,}'
+  kind: regex
+  category: custom:db_password
+  label: db_password
 
-  - pattern: '(?i)(?:user|username|login)[\s:=]+[^\s"'']{3,}'
-    kind: regex
-    category: name
-    label: db_username
+- pattern: '(?i)(?:user|username|login)[\s:=]+[^\s"'']{3,}'
+  kind: regex
+  category: name
+  label: db_username
 
-  # --- Host / IP for database servers ---
-  - pattern: '\b(?:\d{1,3}\.){3}\d{1,3}\b'
-    kind: regex
-    category: ipv4
-    label: db_host_ip
+# --- Host / IP for database servers ---
+- pattern: '\b(?:\d{1,3}\.){3}\d{1,3}\b'
+  kind: regex
+  category: ipv4
+  label: db_host_ip
 
-  - pattern: '\b(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)\.)+(?:[a-zA-Z]{2,63})\b'
-    kind: regex
-    category: hostname
-    label: db_hostname
+- pattern: '\b(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)\.)+(?:[a-zA-Z]{2,63})\b'
+  kind: regex
+  category: hostname
+  label: db_hostname
 
-  # --- TLS certificate fingerprints / hashes ---
-  - pattern: '\b[a-f0-9]{40}\b'
-    kind: regex
-    category: container_id
-    label: cert_fingerprint
+# --- TLS certificate fingerprints / hashes ---
+- pattern: '\b[a-f0-9]{40}\b'
+  kind: regex
+  category: container_id
+  label: cert_fingerprint
 
-  # --- Add database-specific literals ---
-  # - pattern: 'prod-db.internal.example.com'
-  #   kind: literal
-  #   category: hostname
-  #   label: prod_db_host
+# --- Add database-specific literals ---
+# - pattern: 'prod-db.internal.example.com'
+#   kind: literal
+#   category: hostname
+#   label: prod_db_host
 "#
 }
 
 pub(crate) fn template_body_aws() -> &'static str {
-    r#"secrets:
-  # --- AWS access key IDs ---
-  - pattern: '\b(?:AKIA|ASIA)[A-Z0-9]{16}\b'
-    kind: regex
-    category: auth_token
-    label: aws_access_key_id
+    r#"# --- AWS access key IDs ---
+- pattern: '\b(?:AKIA|ASIA)[A-Z0-9]{16}\b'
+  kind: regex
+  category: auth_token
+  label: aws_access_key_id
 
-  # --- ARNs (may reveal account IDs, resource names) ---
-  - pattern: '\barn:aws:[^\s]+'
-    kind: regex
-    category: aws_arn
-    label: aws_arn
+# --- ARNs (may reveal account IDs, resource names) ---
+- pattern: '\barn:aws:[^\s]+'
+  kind: regex
+  category: aws_arn
+  label: aws_arn
 
-  # --- AWS account IDs (12-digit numbers in ARNs or standalone) ---
-  - pattern: '\b\d{12}\b'
-    kind: regex
-    category: custom:aws_account_id
-    label: aws_account_id
+# --- AWS account IDs (12-digit numbers in ARNs or standalone) ---
+- pattern: '\b\d{12}\b'
+  kind: regex
+  category: custom:aws_account_id
+  label: aws_account_id
 
-  # --- S3 bucket names and keys in URLs ---
-  - pattern: 'https://s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com/[^\s"''<>]+'
-    kind: regex
-    category: url
-    label: s3_url
+# --- S3 bucket names and keys in URLs ---
+- pattern: 'https://s3(?:[.-][a-z0-9-]+)?\.amazonaws\.com/[^\s"''<>]+'
+  kind: regex
+  category: url
+  label: s3_url
 
-  # --- EC2 / ECS instance IDs ---
-  - pattern: '\bi-[0-9a-f]{8,17}\b'
-    kind: regex
-    category: container_id
-    label: ec2_instance_id
+# --- EC2 / ECS instance IDs ---
+- pattern: '\bi-[0-9a-f]{8,17}\b'
+  kind: regex
+  category: container_id
+  label: ec2_instance_id
 
-  # --- IPs for EC2 instances ---
-  - pattern: '\b(?:\d{1,3}\.){3}\d{1,3}\b'
-    kind: regex
-    category: ipv4
-    label: ec2_ip
+# --- IPs for EC2 instances ---
+- pattern: '\b(?:\d{1,3}\.){3}\d{1,3}\b'
+  kind: regex
+  category: ipv4
+  label: ec2_ip
 
-  # --- Emails in IAM roles, SES, etc. ---
-  - pattern: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
-    kind: regex
-    category: email
-    label: email
+# --- Emails in IAM roles, SES, etc. ---
+- pattern: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+  kind: regex
+  category: email
+  label: email
 
-  # --- Add your AWS account ID as a literal for exact matching ---
-  # - pattern: '123456789012'
-  #   kind: literal
-  #   category: custom:aws_account_id
-  #   label: my_account_id
+# --- Add your AWS account ID as a literal for exact matching ---
+# - pattern: '123456789012'
+#   kind: literal
+#   category: custom:aws_account_id
+#   label: my_account_id
 "#
 }

@@ -9,14 +9,14 @@
 //! - Zeroization / memory hygiene for plaintext entries
 //! - Unified `load_secrets_auto` paths
 
-use sanitize_engine::category::Category;
-use sanitize_engine::generator::{HmacGenerator, RandomGenerator};
-use sanitize_engine::scanner::{ScanConfig, ScanPattern, StreamScanner};
-use sanitize_engine::secrets::{
+use rust_sanitize::category::Category;
+use rust_sanitize::generator::{HmacGenerator, RandomGenerator};
+use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use rust_sanitize::secrets::{
     encrypt_secrets, load_plaintext_secrets, load_secrets_auto, looks_encrypted, parse_secrets,
     SecretsFormat,
 };
-use sanitize_engine::store::MappingStore;
+use rust_sanitize::store::MappingStore;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------

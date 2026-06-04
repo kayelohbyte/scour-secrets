@@ -1,6 +1,6 @@
 [package]
 name = "rust-sanitize"
-version = "0.11.0"
+version = "0.12.0"
 edition = "2021"
 rust-version = "1.74"
 description = "Deterministic one-way data sanitization engine"
@@ -14,7 +14,7 @@ exclude = ["tests/", "fuzz/", ".github/", "docs/", "target/"]
 autobins = false
 
 [lib]
-name = "sanitize_engine"
+name = "rust_sanitize"
 path = "src/lib.rs"
 
 [features]

@@ -8,11 +8,11 @@ use std::time::SystemTime;
 use tracing::{info, warn};
 use zeroize::Zeroizing;
 
-use sanitize_engine::secrets::{
+use rust_sanitize::secrets::{
     decrypt_secrets, entries_to_patterns, extract_allow_patterns, parse_secrets, SecretEntry,
     SecretsFormat,
 };
-use sanitize_engine::{
+use rust_sanitize::{
     atomic_write, format_llm_prompt, format_llm_prompt_reference, strip_values_from_text,
     ArchiveFilter, ArchiveFormat, ArchiveProcessor, FileTypeProfile, LlmPathEntry, MappingStore,
     ProcessorRegistry, ReportBuilder, ReportMetadata, ScanConfig, ScanPattern, StreamScanner,
@@ -42,6 +42,29 @@ use crate::scanner_builder::{
     builtin_field_name_signals, common_allow_patterns, field_signals_from_entries,
 };
 
+/// Apply a `bool` setting from a config layer: skip if the flag is already set by a higher-priority source.
+///
+/// Requires that every covered field defaults to `false` in `Cli` (i.e. the flag is off by default).
+/// A field that defaults to `true` would be permanently skipped, silently ignoring config.
+macro_rules! apply_bool_flag {
+    ($cli:expr, $src:expr, $field:ident) => {
+        if !$cli.$field {
+            if let Some(v) = $src.$field {
+                $cli.$field = v;
+            }
+        }
+    };
+}
+
+/// Apply an `Option<T>` setting from a config layer: skip if already set.
+macro_rules! apply_opt_field {
+    ($cli:expr, $src:expr, $field:ident) => {
+        if $cli.$field.is_none() {
+            $cli.$field = $src.$field;
+        }
+    };
+}
+
 fn apply_settings_layer(cli: &mut Cli, s: Settings) {
     if cli.app.is_empty() && !s.app.is_empty() {
         cli.app = s.app;
@@ -49,40 +72,14 @@ fn apply_settings_layer(cli: &mut Cli, s: Settings) {
     if cli.allow.is_empty() && !s.allow.is_empty() {
         cli.allow = s.allow;
     }
-    if !cli.fail_on_match {
-        if let Some(v) = s.fail_on_match {
-            cli.fail_on_match = v;
-        }
-    }
-    if !cli.strict {
-        if let Some(v) = s.strict {
-            cli.strict = v;
-        }
-    }
-    if !cli.no_structured_handoff {
-        if let Some(v) = s.no_structured_handoff {
-            cli.no_structured_handoff = v;
-        }
-    }
-    if !cli.no_field_signal {
-        if let Some(v) = s.no_field_signal {
-            cli.no_field_signal = v;
-        }
-    }
-    if cli.threads.is_none() {
-        cli.threads = s.threads;
-    }
-    if cli.log_format.is_none() {
-        cli.log_format = s.log_format;
-    }
-    if cli.log_level.is_none() {
-        cli.log_level = s.log_level;
-    }
-    if !cli.no_progress {
-        if let Some(v) = s.no_progress {
-            cli.no_progress = v;
-        }
-    }
+    apply_bool_flag!(cli, s, fail_on_match);
+    apply_bool_flag!(cli, s, strict);
+    apply_bool_flag!(cli, s, no_structured_handoff);
+    apply_bool_flag!(cli, s, no_field_signal);
+    apply_opt_field!(cli, s, threads);
+    apply_opt_field!(cli, s, log_format);
+    apply_opt_field!(cli, s, log_level);
+    apply_bool_flag!(cli, s, no_progress);
 }
 
 fn apply_project_config_layer(cli: &mut Cli, pc: ProjectConfig, config_dir: &std::path::Path) {
@@ -101,36 +98,16 @@ fn apply_project_config_layer(cli: &mut Cli, pc: ProjectConfig, config_dir: &std
             cli.secrets_file = Some(config_dir.join(rel));
         }
     }
-    if !cli.encrypted_secrets {
-        if let Some(v) = pc.encrypted_secrets {
-            cli.encrypted_secrets = v;
-        }
-    }
+    apply_bool_flag!(cli, pc, encrypted_secrets);
     if cli.profile.is_none() {
         if let Some(rel) = pc.profile {
             cli.profile = Some(config_dir.join(rel));
         }
     }
-    if !cli.fail_on_match {
-        if let Some(v) = pc.fail_on_match {
-            cli.fail_on_match = v;
-        }
-    }
-    if !cli.strict {
-        if let Some(v) = pc.strict {
-            cli.strict = v;
-        }
-    }
-    if !cli.no_structured_handoff {
-        if let Some(v) = pc.no_structured_handoff {
-            cli.no_structured_handoff = v;
-        }
-    }
-    if !cli.no_field_signal {
-        if let Some(v) = pc.no_field_signal {
-            cli.no_field_signal = v;
-        }
-    }
+    apply_bool_flag!(cli, pc, fail_on_match);
+    apply_bool_flag!(cli, pc, strict);
+    apply_bool_flag!(cli, pc, no_structured_handoff);
+    apply_bool_flag!(cli, pc, no_field_signal);
 }
 
 fn merge_settings(mut cli: Cli) -> Cli {
@@ -142,11 +119,142 @@ fn merge_settings(mut cli: Cli) -> Cli {
     cli
 }
 
+struct LoadedSecrets {
+    patterns: Vec<ScanPattern>,
+    allow_patterns: Vec<String>,
+    entropy_configs: Vec<EntropyConfig>,
+    raw_bytes: Zeroizing<Vec<u8>>,
+    /// Decrypted plaintext for encrypted secrets files; `None` for plaintext files.
+    /// Stored here so `apply_field_name_signals` can reuse it without a second
+    /// PBKDF2+AES-GCM round.
+    plaintext_bytes: Option<Zeroizing<Vec<u8>>>,
+}
+
+fn load_secrets_data(
+    cli: &Cli,
+    password: Option<&str>,
+) -> Result<Option<LoadedSecrets>, (String, i32)> {
+    let secrets_path = match cli.secrets_file.as_ref() {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    let raw_bytes = if secrets_path.exists() {
+        Zeroizing::new(fs::read(secrets_path).map_err(|e| {
+            (
+                format!(
+                    "failed to read secrets file {}: {e}",
+                    secrets_path.display()
+                ),
+                1,
+            )
+        })?)
+    } else if cli.deterministic {
+        return Ok(None);
+    } else {
+        return Err((
+            format!("secrets file not found: {}", secrets_path.display()),
+            1,
+        ));
+    };
+
+    let secrets_format = SecretsFormat::from_extension(secrets_path.to_string_lossy().as_ref());
+    let (((patterns, warnings), allow_patterns), was_encrypted) =
+        rust_sanitize::secrets::load_secrets_auto(
+            &raw_bytes,
+            password,
+            secrets_format,
+            !cli.encrypted_secrets,
+        )
+        .map_err(|e| (format!("failed to load secrets: {e}"), 1))?;
+
+    if was_encrypted {
+        info!(secrets_file = %secrets_path.display(), "loaded encrypted secrets");
+    } else {
+        info!(secrets_file = %secrets_path.display(), "loaded plaintext secrets (unencrypted)");
+    }
+
+    if !warnings.is_empty() {
+        for (idx, err) in &warnings {
+            warn!(entry = idx, error = %err, "secret entry warning");
+        }
+        if cli.strict {
+            return Err((
+                format!(
+                    "{} secret entries had errors (use without --strict to continue)",
+                    warnings.len()
+                ),
+                1,
+            ));
+        }
+    }
+
+    let plaintext_bytes: Option<Zeroizing<Vec<u8>>> = if was_encrypted {
+        password.and_then(|pw| decrypt_secrets(&raw_bytes, pw).ok())
+    } else {
+        None
+    };
+    let bytes_for_entropy: &[u8] = plaintext_bytes
+        .as_deref()
+        .map_or(raw_bytes.as_slice(), |v| v);
+    let entropy_configs = if let Ok(ent_entries) = parse_secrets(bytes_for_entropy, None) {
+        entropy_configs_from_entries(&ent_entries)
+    } else {
+        vec![]
+    };
+
+    Ok(Some(LoadedSecrets {
+        patterns,
+        allow_patterns,
+        entropy_configs,
+        raw_bytes,
+        plaintext_bytes,
+    }))
+}
+
+fn apply_field_name_signals(
+    cli: &Cli,
+    profiles: &mut [FileTypeProfile],
+    loaded_secrets: Option<&LoadedSecrets>,
+) {
+    if cli.no_field_signal || profiles.is_empty() {
+        return;
+    }
+
+    let mut active_signals = builtin_field_name_signals();
+
+    if let Some(ls) = loaded_secrets {
+        let bytes = ls
+            .plaintext_bytes
+            .as_deref()
+            .map_or(ls.raw_bytes.as_slice(), |v| v);
+        if let Ok(entries) = parse_secrets(bytes, None) {
+            let user_signals = field_signals_from_entries(&entries);
+            if !user_signals.is_empty() {
+                info!(
+                    count = user_signals.len(),
+                    "loaded user-defined field-name signals"
+                );
+            }
+            active_signals.extend(user_signals);
+        }
+    }
+
+    let signal_count = active_signals.len();
+    for profile in profiles.iter_mut() {
+        profile.field_name_signals = active_signals.clone();
+    }
+    info!(
+        signals = signal_count,
+        "field-name signals active (disable with --no-field-signal)"
+    );
+}
+
 struct RunResources {
     scanner: Arc<StreamScanner>,
     store: Arc<MappingStore>,
     registry: Arc<ProcessorRegistry>,
-    profiles: Vec<sanitize_engine::FileTypeProfile>,
+    profiles: Vec<rust_sanitize::FileTypeProfile>,
     entropy_configs: Arc<Vec<EntropyConfig>>,
     entropy_histogram_acc: Option<Arc<Mutex<Vec<EntropyBuckets>>>>,
     base_patterns: Vec<ScanPattern>,
@@ -187,87 +295,11 @@ fn load_run_resources(
         }
     }
 
-    let secrets_raw_bytes: Option<Zeroizing<Vec<u8>>> =
-        if let Some(ref secrets_path) = cli.secrets_file {
-            if secrets_path.exists() {
-                Some(Zeroizing::new(fs::read(secrets_path).map_err(|e| {
-                    (
-                        format!(
-                            "failed to read secrets file {}: {e}",
-                            secrets_path.display()
-                        ),
-                        1,
-                    )
-                })?))
-            } else if cli.deterministic {
-                None
-            } else {
-                return Err((
-                    format!("secrets file not found: {}", secrets_path.display()),
-                    1,
-                ));
-            }
-        } else {
-            None
-        };
-
-    let mut was_encrypted_secrets = false;
-    if let Some(ref raw_bytes) = secrets_raw_bytes {
-        let secrets_format = cli
-            .secrets_file
-            .as_ref()
-            .and_then(|p| SecretsFormat::from_extension(p.to_string_lossy().as_ref()));
-        let (((patterns, warnings), allow_from_secrets), was_encrypted) =
-            sanitize_engine::secrets::load_secrets_auto(
-                raw_bytes,
-                effective_password.as_ref().map(|s| s.as_str()),
-                secrets_format,
-                !cli.encrypted_secrets,
-            )
-            .map_err(|e| (format!("failed to load secrets: {e}"), 1))?;
-
-        let secrets_display = cli
-            .secrets_file
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
-        was_encrypted_secrets = was_encrypted;
-        if was_encrypted {
-            info!(secrets_file = %secrets_display, "loaded encrypted secrets");
-        } else {
-            info!(secrets_file = %secrets_display, "loaded plaintext secrets (unencrypted)");
-        }
-
-        if !warnings.is_empty() {
-            for (idx, err) in &warnings {
-                warn!(entry = idx, error = %err, "secret entry warning");
-            }
-            if cli.strict {
-                return Err((
-                    format!(
-                        "{} secret entries had errors (use without --strict to continue)",
-                        warnings.len()
-                    ),
-                    1,
-                ));
-            }
-        }
-        base_patterns.extend(patterns);
-        all_allow_patterns.extend(allow_from_secrets);
-
-        let entropy_plaintext: Option<Zeroizing<Vec<u8>>> = if was_encrypted {
-            effective_password
-                .as_ref()
-                .and_then(|pw| decrypt_secrets(raw_bytes, pw.as_str()).ok())
-        } else {
-            None
-        };
-        let bytes_for_entropy: &[u8] = entropy_plaintext
-            .as_deref()
-            .map_or(raw_bytes.as_slice(), |v| v);
-        if let Ok(ent_entries) = parse_secrets(bytes_for_entropy, None) {
-            entropy_configs.extend(entropy_configs_from_entries(&ent_entries));
-        }
+    let loaded_secrets = load_secrets_data(cli, effective_password.as_ref().map(|s| s.as_str()))?;
+    if let Some(ref ls) = loaded_secrets {
+        base_patterns.extend(ls.patterns.iter().cloned());
+        all_allow_patterns.extend(ls.allow_patterns.iter().cloned());
+        entropy_configs.extend(ls.entropy_configs.iter().cloned());
     }
 
     if let Some(threshold) = cli.entropy_threshold {
@@ -297,12 +329,12 @@ fn load_run_resources(
         all_allow_patterns.extend(common_allow_patterns());
     }
 
-    let allowlist: Option<Arc<sanitize_engine::allowlist::AllowlistMatcher>> =
+    let allowlist: Option<Arc<rust_sanitize::allowlist::AllowlistMatcher>> =
         if all_allow_patterns.is_empty() {
             None
         } else {
             let (matcher, al_warnings) =
-                sanitize_engine::allowlist::AllowlistMatcher::new(all_allow_patterns);
+                rust_sanitize::allowlist::AllowlistMatcher::new(all_allow_patterns);
             for w in &al_warnings {
                 warn!(warning = %w, "allowlist pattern warning");
             }
@@ -368,41 +400,7 @@ fn load_run_resources(
         merged
     };
 
-    if !cli.no_field_signal && !profiles.is_empty() {
-        let mut active_signals = builtin_field_name_signals();
-
-        if let Some(ref raw_bytes) = secrets_raw_bytes {
-            let plaintext_for_signals: Option<Zeroizing<Vec<u8>>> = if was_encrypted_secrets {
-                effective_password
-                    .as_ref()
-                    .and_then(|pw| decrypt_secrets(raw_bytes, pw.as_str()).ok())
-            } else {
-                None
-            };
-            let bytes = plaintext_for_signals
-                .as_deref()
-                .map_or(raw_bytes.as_slice(), |v| v);
-            if let Ok(entries) = parse_secrets(bytes, None) {
-                let user_signals = field_signals_from_entries(&entries);
-                if !user_signals.is_empty() {
-                    info!(
-                        count = user_signals.len(),
-                        "loaded user-defined field-name signals"
-                    );
-                }
-                active_signals.extend(user_signals);
-            }
-        }
-
-        let signal_count = active_signals.len();
-        for profile in &mut profiles {
-            profile.field_name_signals = active_signals.clone();
-        }
-        info!(
-            signals = signal_count,
-            "field-name signals active (disable with --no-field-signal)"
-        );
-    }
+    apply_field_name_signals(cli, &mut profiles, loaded_secrets.as_ref());
 
     if !profiles.is_empty() {
         info!(count = profiles.len(), "loaded field-path profiles");

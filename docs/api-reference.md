@@ -80,7 +80,7 @@ All public types are re-exported from the crate root (`rust_sanitize::*`) for co
 | `ArchiveProcessor::with_parallel_threshold(threshold)` | Builder method: set the minimum file-entry count required to enable parallel entry sanitization. Default: `4`. Set to `usize::MAX` to disable entry-level parallelism (e.g. when outer file-level parallelism already saturates the thread budget). |
 | `ArchiveFormat` | Enum: `Tar`, `TarGz`, `Zip`. |
 | `ArchiveStats` | Processing results: `files_processed`, `entries_skipped`, `structured_hits`, `scanner_fallback`, `nested_archives`, `total_input_bytes`, `total_output_bytes`, `file_methods`, `file_scan_stats`. |
-| `DEFAULT_ARCHIVE_DEPTH` | Default maximum nesting depth for recursive archive processing (`3`). |
+| `DEFAULT_ARCHIVE_DEPTH` | Default maximum nesting depth for recursive archive processing (`5`). |
 
 ## Report Module (`report`)
 

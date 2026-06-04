@@ -1,6 +1,6 @@
 # Architecture
 
-> **rust-sanitize** v0.11.0 — Deterministic, one-way data sanitization.
+> **rust-sanitize** v0.12.0 — Deterministic, one-way data sanitization.
 
 This document describes the internal architecture of the sanitization
 engine.  It is aimed at contributors and operators who need to
@@ -50,7 +50,25 @@ understand data-flow, concurrency, and security boundaries.
 └────────────────────────────────────────────────────────┘
 ```
 
-### Plain file path
+### Two-Pass Pipeline (with `--profile`)
+
+When a structured field profile is active, processing uses two serial-then-parallel phases:
+
+**Phase 1 — Serial structured scan:**
+
+1. Load secrets + profiles.
+2. For each file matching a profile (in command-line order): parse structured content, walk fields, call `MappingStore::get_or_insert` for matched values. This seeds the store with typed field values (passwords, tokens, hostnames) extracted from config files.
+3. Archive discovery pre-pass: each archive is read a second time to collect profile-matched entry values and add them to the store.
+
+**Phase 2 — Parallel augmented scan:**
+
+4. Build augmented scanner: base secrets patterns + all literals discovered in Phase 1.
+5. Stdin (if present) is processed now with the augmented scanner so values found in configs are also replaced in piped input.
+6. All remaining files and archives are processed in parallel using the augmented scanner.
+
+The two-pass design ensures cross-file consistency: a password extracted from `config.yaml` in Phase 1 is replaced everywhere it appears in Phase 2 logs.
+
+### Plain file path (no profile)
 
 1. Load encrypted secrets → decrypt with password (PBKDF2 + AES-256-GCM).
 2. Build `ScanPattern` list from decrypted plain-text entries.
@@ -119,6 +137,17 @@ via stdin or a temp file (never via argv), and leaves only via a
 temp-file path that the TypeScript layer reads once and then deletes.
 The Rust binary is the only component with access to secrets files,
 decryption keys, and pattern-matched values.
+
+**HTTP daemon mode (`--http`):** The server can run as a persistent
+local HTTP service binding to `127.0.0.1` (port 6277 by default,
+configurable via `--http <port>`). All requests require a bearer token
+set via `SANITIZE_MCP_HTTP_TOKEN`. In this mode AI tools connect to the
+already-running daemon rather than spawning it on demand, which decouples
+the daemon's user account and file permissions from those of the AI tool.
+The daemon enforces a single active MCP session at a time; when the client
+disconnects the daemon exits so the service manager can restart it cleanly
+for the next connection. Token travel over loopback is acceptable for local
+use; for remote deployments a TLS-terminating reverse proxy is required.
 
 **Namespace support:** When `SANITIZE_SECRETS_DIR` is set, the MCP
 server resolves a `namespace` parameter to a per-tenant directory

@@ -50,12 +50,8 @@ fn template_default_creates_generic_yaml() {
 
     let content = fs::read_to_string(&out_path).unwrap();
     assert!(
-        content.contains("secrets:"),
-        "template should contain 'secrets:' key; got:\n{content}"
-    );
-    assert!(
-        content.contains("pattern:"),
-        "template should contain at least one 'pattern:' entry; got:\n{content}"
+        content.contains("- pattern:"),
+        "template should contain at least one '- pattern:' entry; got:\n{content}"
     );
 }
 
@@ -166,8 +162,8 @@ fn template_overwrite_flag_replaces_existing_file() {
 
     let content = fs::read_to_string(&out_path).unwrap();
     assert!(
-        content.contains("secrets:"),
-        "file should contain 'secrets:' after overwrite; got:\n{content}"
+        content.contains("- pattern:"),
+        "file should contain '- pattern:' after overwrite; got:\n{content}"
     );
     assert!(
         !content.contains("dummy content"),
@@ -191,49 +187,16 @@ fn template_generated_file_is_valid_for_sanitize() {
     );
     assert!(template_path.exists());
 
-    // The template is a human-editable YAML file whose top-level key is
-    // `secrets:` (a sequence). The sanitize CLI auto-detects secrets format
-    // from file content: files starting with `#` (the template header) fall
-    // through to the TOML detector, which cannot parse YAML.  To make the
-    // generated template usable as a `-s` argument, we extract the inner YAML
-    // sequence and write it as a standalone YAML array file (the native format
-    // for plaintext YAML secrets files).
-    let raw = fs::read_to_string(&template_path).unwrap();
-
-    // Strip comment lines and the `secrets:` wrapper to obtain a bare YAML
-    // sequence.  The sequence entries start at the first `  - ` line.
-    let entries_yaml: String = raw
-        .lines()
-        .filter(|l| {
-            let t = l.trim_start();
-            // Keep entry lines (start with `- ` after stripping indentation)
-            // and continuation lines (start with `  ` within an entry, but not
-            // the bare `secrets:` key itself).
-            !t.is_empty() && !t.starts_with('#') && t != "secrets:"
-        })
-        .map(|l| {
-            // Remove one level of leading indentation (two spaces) that
-            // nests the entries under `secrets:`.
-            l.strip_prefix("  ").unwrap_or(l)
-        })
-        .fold(String::new(), |mut acc, l| {
-            acc.push_str(l);
-            acc.push('\n');
-            acc
-        });
-
-    let usable_secrets = dir.path().join("usable-secrets.yaml");
-    fs::write(&usable_secrets, entries_yaml.as_bytes()).unwrap();
-
     // Create a simple input file.
     fs::write(&input_path, b"safe text with no secrets here\n").unwrap();
 
-    // Run sanitize with the usable secrets file derived from the template.
+    // The template generates a flat YAML sequence (bare `- pattern:` list) that
+    // sanitize can load directly — no transformation needed.
     let run_out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
         .args([
             input_path.to_str().unwrap(),
             "-s",
-            usable_secrets.to_str().unwrap(),
+            template_path.to_str().unwrap(),
             "-o",
             out_path.to_str().unwrap(),
         ])
@@ -246,7 +209,7 @@ fn template_generated_file_is_valid_for_sanitize() {
 
     assert!(
         run_out.status.success(),
-        "sanitize run with secrets derived from generated template should exit 0; stderr: {}",
+        "sanitize run with generated template as secrets file should exit 0; stderr: {}",
         String::from_utf8_lossy(&run_out.stderr)
     );
 }

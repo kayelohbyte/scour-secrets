@@ -36,9 +36,9 @@ impl ProcessorRegistry {
     #[must_use]
     pub fn with_builtins() -> Self {
         let mut reg = Self::new();
-        let kv: Arc<dyn Processor> = Arc::new(super::key_value::KeyValueProcessor);
-        reg.processors.insert("key_value".into(), Arc::clone(&kv));
-        reg.processors.insert("key-value".into(), kv);
+        // Registered under "key_value" (canonical, from name()) and "key-value" (hyphen alias)
+        // so profile files can use either naming convention.
+        reg.register_with_alias(Arc::new(super::key_value::KeyValueProcessor), "key-value");
         reg.register(Arc::new(super::json_proc::JsonProcessor));
         reg.register(Arc::new(super::jsonl_proc::JsonLinesProcessor));
         reg.register(Arc::new(super::yaml_proc::YamlProcessor));
@@ -54,6 +54,14 @@ impl ProcessorRegistry {
     /// Register a processor. Overwrites any existing processor with the
     /// same name.
     pub fn register(&mut self, processor: Arc<dyn Processor>) {
+        self.processors
+            .insert(processor.name().to_string(), processor);
+    }
+
+    /// Register a processor under its canonical name and an additional alias.
+    pub fn register_with_alias(&mut self, processor: Arc<dyn Processor>, alias: &str) {
+        self.processors
+            .insert(alias.to_string(), Arc::clone(&processor));
         self.processors
             .insert(processor.name().to_string(), processor);
     }

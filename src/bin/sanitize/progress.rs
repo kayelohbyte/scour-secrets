@@ -4,7 +4,7 @@
 //! terminals and falls back to milestone log lines in CI / non-TTY environments.
 
 use clap::ValueEnum;
-use sanitize_engine::{ArchiveProgress, ScanProgress};
+use rust_sanitize::{ArchiveProgress, ScanProgress};
 use std::env;
 use std::io::{self, IsTerminal, Write};
 use std::sync::{Arc, Mutex};

@@ -22,8 +22,8 @@ MappingStore
 |----------|----------|---------------|--------|-------|
 | `RandomString` | `"random_string"` | Alphanumeric `[a-zA-Z0-9]` | Configurable (default 16, range 1–64) | `RandomString::new()` or `RandomString::with_length(n)` |
 | `RandomUuid` | `"random_uuid"` | UUID v4 format `xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx` | Always 36 | Version nibble = 4, variant ∈ {8,9,a,b} |
-| `FakeIp` | `"fake_ip"` | IPv4 in `10.0.0.0/8` range | Variable | Format: `10.<b1>.<b2>.<b3>` (b3 ≥ 1) |
-| `PreserveLength` | `"preserve_length"` | Lowercase hex + alphanumeric `[a-z0-9]` | Same as original | Deterministic PRNG seeded from entropy |
+| `FakeIp` | `"fake_ip"` | Dot positions preserved; other characters replaced with entropy-derived decimal digits | Same as original | Preserves column widths and log formatting |
+| `PreserveLength` | `"preserve_length"` | Lowercase alphanumeric `[a-z0-9]` | Same as original | Deterministic PRNG seeded from entropy |
 | `HmacHash` | `"hmac_hash"` | Lowercase hex | Configurable (default 32, max 64) | Carries own HMAC key; deterministic by construction regardless of entropy mode |
 
 ## Library API Example

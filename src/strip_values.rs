@@ -10,7 +10,7 @@
 //! # Example
 //!
 //! ```rust
-//! use sanitize_engine::strip_values_from_text;
+//! use rust_sanitize::strip_values_from_text;
 //!
 //! let input = "# db settings\nhost = localhost\nport = 5432\n";
 //! let output = strip_values_from_text(input, "=", "#");

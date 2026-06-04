@@ -265,8 +265,8 @@ impl ScanPattern {
     /// # Examples
     ///
     /// ```
-    /// use sanitize_engine::scanner::ScanPattern;
-    /// use sanitize_engine::category::Category;
+    /// use rust_sanitize::scanner::ScanPattern;
+    /// use rust_sanitize::category::Category;
     ///
     /// // No capture group — full match replaced:
     /// let email = ScanPattern::from_regex(
@@ -309,8 +309,8 @@ impl ScanPattern {
     /// # Examples
     ///
     /// ```
-    /// use sanitize_engine::scanner::ScanPattern;
-    /// use sanitize_engine::category::Category;
+    /// use rust_sanitize::scanner::ScanPattern;
+    /// use rust_sanitize::category::Category;
     ///
     /// let pat = ScanPattern::from_literal(
     ///     "sk-proj-abc123secret",
@@ -490,10 +490,10 @@ pub struct ScanProgress {
 /// # Usage
 ///
 /// ```rust
-/// use sanitize_engine::scanner::{StreamScanner, ScanPattern, ScanConfig};
-/// use sanitize_engine::category::Category;
-/// use sanitize_engine::generator::HmacGenerator;
-/// use sanitize_engine::store::MappingStore;
+/// use rust_sanitize::scanner::{StreamScanner, ScanPattern, ScanConfig};
+/// use rust_sanitize::category::Category;
+/// use rust_sanitize::generator::HmacGenerator;
+/// use rust_sanitize::store::MappingStore;
 /// use std::sync::Arc;
 ///
 /// // 1. Build the replacement store.

@@ -5,7 +5,7 @@ use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
-use sanitize_engine::ArchiveFormat;
+use rust_sanitize::ArchiveFormat;
 
 use crate::apps::{builtin_app_names, user_apps_dir, BUILTIN_APPS};
 use crate::cli_args::Cli;
@@ -114,6 +114,34 @@ pub(crate) fn format_to_ext(fmt: &str) -> Option<&str> {
         "log" => Some("log"),
         _ => None,
     }
+}
+
+/// Returns `true` if `filename` should be processed by a structured processor
+/// rather than the streaming scanner.  Checks both the extension and `.env`-style
+/// dot-prefixed names.
+pub(crate) fn is_structured_filename(filename: &str) -> bool {
+    matches!(
+        filename.rsplit('.').next().unwrap_or(""),
+        "json"
+            | "jsonl"
+            | "ndjson"
+            | "yaml"
+            | "yml"
+            | "xml"
+            | "csv"
+            | "tsv"
+            | "rb"
+            | "conf"
+            | "cfg"
+            | "ini"
+            | "env"
+            | "properties"
+            | "toml"
+    ) || filename
+        .rsplit('/')
+        .next()
+        .unwrap_or(filename)
+        .starts_with(".env")
 }
 
 /// Derive a default output path for archive files.
@@ -255,12 +283,17 @@ pub(crate) fn walk_dir(dir: &Path, include_hidden: bool) -> Result<Vec<PathBuf>,
     Ok(files)
 }
 
-struct IgnoreList {
+/// Compiled glob pattern list used for both exclude and include-path filtering.
+///
+/// Empty-list semantics differ: an empty `GlobList` used as an exclude filter
+/// excludes nothing (`is_excluded` returns `false`), while one used as an
+/// include filter includes everything (`is_included` returns `true`).
+struct GlobList {
     patterns: Vec<(glob::Pattern, bool)>,
 }
 
-impl IgnoreList {
-    fn new(raw: &[String]) -> Self {
+impl GlobList {
+    fn new(raw: &[String], label: &str) -> Self {
         let mut patterns = Vec::with_capacity(raw.len());
         for p in raw {
             let is_subtree = p.ends_with('/');
@@ -270,112 +303,55 @@ impl IgnoreList {
             }
             match glob::Pattern::new(trimmed) {
                 Ok(compiled) => patterns.push((compiled, is_subtree)),
-                Err(e) => eprintln!("warning: invalid exclude pattern '{p}': {e} — skipping"),
+                Err(e) => eprintln!("warning: invalid {label} pattern '{p}': {e} — skipping"),
             }
         }
         Self { patterns }
+    }
+
+    /// Returns `true` if any pattern matches `path` relative to `root`.
+    fn any_match(&self, path: &Path, root: &Path) -> bool {
+        let opts = glob::MatchOptions {
+            case_sensitive: true,
+            require_literal_separator: true,
+            require_literal_leading_dot: false,
+        };
+        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let rel = canon_path.strip_prefix(&canon_root).unwrap_or(&canon_path);
+        let rel_str = rel.to_string_lossy();
+        let filename = path
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default();
+
+        for (pat, is_subtree) in &self.patterns {
+            if *is_subtree {
+                let prefix = pat.as_str();
+                if rel_str.starts_with(prefix)
+                    && (rel_str.len() == prefix.len()
+                        || rel_str.as_bytes().get(prefix.len()) == Some(&b'/'))
+                {
+                    return true;
+                }
+            } else {
+                if pat.matches_with(&rel_str, opts) {
+                    return true;
+                }
+                if !pat.as_str().contains('/') && pat.matches_with(&filename, opts) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn is_excluded(&self, path: &Path, root: &Path) -> bool {
-        if self.patterns.is_empty() {
-            return false;
-        }
-        let opts = glob::MatchOptions {
-            case_sensitive: true,
-            require_literal_separator: true,
-            require_literal_leading_dot: false,
-        };
-        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        let rel = canon_path.strip_prefix(&canon_root).unwrap_or(&canon_path);
-        let rel_str = rel.to_string_lossy();
-        let filename = path
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default();
-
-        for (pat, is_subtree) in &self.patterns {
-            if *is_subtree {
-                let prefix = pat.as_str();
-                if rel_str.starts_with(prefix)
-                    && (rel_str.len() == prefix.len()
-                        || rel_str.as_bytes().get(prefix.len()) == Some(&b'/'))
-                {
-                    return true;
-                }
-            } else {
-                if pat.matches_with(&rel_str, opts) {
-                    return true;
-                }
-                if !pat.as_str().contains('/') && pat.matches_with(&filename, opts) {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-}
-
-struct IncludeList {
-    patterns: Vec<(glob::Pattern, bool)>,
-}
-
-impl IncludeList {
-    fn new(raw: &[String]) -> Self {
-        let mut patterns = Vec::with_capacity(raw.len());
-        for p in raw {
-            let is_subtree = p.ends_with('/');
-            let trimmed = p.trim_end_matches('/');
-            if trimmed.is_empty() {
-                continue;
-            }
-            match glob::Pattern::new(trimmed) {
-                Ok(compiled) => patterns.push((compiled, is_subtree)),
-                Err(e) => {
-                    eprintln!("warning: invalid include-path pattern '{p}': {e} — skipping")
-                }
-            }
-        }
-        Self { patterns }
+        !self.patterns.is_empty() && self.any_match(path, root)
     }
 
     fn is_included(&self, path: &Path, root: &Path) -> bool {
-        if self.patterns.is_empty() {
-            return true;
-        }
-        let opts = glob::MatchOptions {
-            case_sensitive: true,
-            require_literal_separator: true,
-            require_literal_leading_dot: false,
-        };
-        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        let canon_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-        let rel = canon_path.strip_prefix(&canon_root).unwrap_or(&canon_path);
-        let rel_str = rel.to_string_lossy();
-        let filename = path
-            .file_name()
-            .map(|n| n.to_string_lossy())
-            .unwrap_or_default();
-
-        for (pat, is_subtree) in &self.patterns {
-            if *is_subtree {
-                let prefix = pat.as_str();
-                if rel_str.starts_with(prefix)
-                    && (rel_str.len() == prefix.len()
-                        || rel_str.as_bytes().get(prefix.len()) == Some(&b'/'))
-                {
-                    return true;
-                }
-            } else {
-                if pat.matches_with(&rel_str, opts) {
-                    return true;
-                }
-                if !pat.as_str().contains('/') && pat.matches_with(&filename, opts) {
-                    return true;
-                }
-            }
-        }
-        false
+        self.patterns.is_empty() || self.any_match(path, root)
     }
 }
 
@@ -415,8 +391,8 @@ pub(crate) fn plan_input_targets(cli: &Cli) -> Result<Vec<InputTarget>, String> 
         patterns.extend(cli.exclude_path.iter().cloned());
         (patterns, root)
     };
-    let ignore_list = IgnoreList::new(&ignore_patterns);
-    let include_list = IncludeList::new(&cli.include_path);
+    let ignore_list = GlobList::new(&ignore_patterns, "exclude");
+    let include_list = GlobList::new(&cli.include_path, "include-path");
 
     let mut expanded: Vec<ExpandedInput> = Vec::new();
 

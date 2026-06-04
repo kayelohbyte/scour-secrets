@@ -1,7 +1,7 @@
 use crate::progress::ProgressMode;
 use clap::{Parser, Subcommand, ValueEnum};
-use sanitize_engine::secrets::SecretsFormat;
-use sanitize_engine::{DEFAULT_ARCHIVE_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_MAX_MATCHES};
+use rust_sanitize::secrets::SecretsFormat;
+use rust_sanitize::{DEFAULT_ARCHIVE_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_MAX_MATCHES};
 use std::path::PathBuf;
 
 pub(crate) const DEFAULT_MAX_STRUCTURED_FILE_SIZE: u64 = 256 * 1024 * 1024; // 256 MiB

@@ -9,10 +9,10 @@
 //! - Mixed pattern types
 //! - Edge cases (empty input, no matches, very small chunks)
 
-use sanitize_engine::category::Category;
-use sanitize_engine::generator::HmacGenerator;
-use sanitize_engine::scanner::{ScanConfig, ScanPattern, StreamScanner};
-use sanitize_engine::store::MappingStore;
+use rust_sanitize::category::Category;
+use rust_sanitize::generator::HmacGenerator;
+use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use rust_sanitize::store::MappingStore;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -478,7 +478,7 @@ fn stats_pattern_counts_per_type() {
 
 #[test]
 fn scanner_with_strategy_generator() {
-    use sanitize_engine::strategy::{EntropyMode, RandomString, StrategyGenerator};
+    use rust_sanitize::strategy::{EntropyMode, RandomString, StrategyGenerator};
 
     let strat = Box::new(RandomString::new());
     let gen = Arc::new(StrategyGenerator::new(

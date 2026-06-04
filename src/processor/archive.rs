@@ -58,16 +58,26 @@ use crate::store::MappingStore;
 
 /// Strip path traversal components from an archive entry path before writing output.
 ///
-/// Removes: leading `/`, `./`, and any `../` sequences. The result is always
-/// a relative path with no upward traversal. An empty result is replaced with
-/// `"_"` to avoid writing an entry with a blank name. Backslashes are
-/// normalised to forward slashes (handles Windows-style zip entries).
+/// Removes: leading `/`, `./`, `../`, and Windows drive-letter prefixes (`C:`).
+/// The result is always a relative path with no upward traversal. An empty
+/// result is replaced with `"_"` to avoid writing an entry with a blank name.
+/// Backslashes are normalised to forward slashes (handles Windows-style zip entries).
 fn sanitize_archive_entry_name(name: &str) -> String {
     let name = name.replace('\\', "/");
     let name = name.trim_start_matches('/');
     let safe: Vec<&str> = name
         .split('/')
-        .filter(|s| !s.is_empty() && *s != "." && *s != "..")
+        .filter(|s| {
+            if s.is_empty() || *s == "." || *s == ".." {
+                return false;
+            }
+            // Strip Windows drive-letter prefixes ("C:", "D:", etc.) to prevent
+            // zip-slip path-traversal when the output is extracted on Windows.
+            if s.len() == 2 && s.as_bytes()[1] == b':' && s.as_bytes()[0].is_ascii_alphabetic() {
+                return false;
+            }
+            true
+        })
         .collect();
     let result = safe.join("/");
     if result.is_empty() {
@@ -97,6 +107,25 @@ use crate::processor::limits::{
     DEFAULT_ARCHIVE_DEPTH, MAX_ARCHIVE_DEPTH, PARALLEL_ENTRY_THRESHOLD, PARALLEL_TAR_DATA_SIZE,
     PARALLEL_ZIP_DATA_SIZE, STRUCTURED_ENTRY_SIZE,
 };
+
+/// Read up to `limit` bytes from `reader` into a `Vec<u8>`.
+///
+/// Returns an error if the reader yields more than `limit` bytes, preventing
+/// unbounded heap growth from crafted archive entries.
+fn read_bounded(reader: &mut dyn Read, limit: u64, label: &str) -> Result<Vec<u8>> {
+    let mut content = Vec::new();
+    // Read one byte beyond the limit so we can detect over-sized entries.
+    reader
+        .take(limit + 1)
+        .read_to_end(&mut content)
+        .map_err(|e| SanitizeError::ArchiveError(format!("read '{label}': {e}")))?;
+    if content.len() as u64 > limit {
+        return Err(SanitizeError::ArchiveError(format!(
+            "entry '{label}' exceeds the {limit}-byte size limit",
+        )));
+    }
+    Ok(content)
+}
 
 // ---------------------------------------------------------------------------
 // Archive format enum
@@ -344,12 +373,12 @@ impl ArchiveStats {
 /// # Usage
 ///
 /// ```rust,no_run
-/// use sanitize_engine::processor::archive::{ArchiveProcessor, ArchiveFormat};
-/// use sanitize_engine::processor::registry::ProcessorRegistry;
-/// use sanitize_engine::scanner::{StreamScanner, ScanPattern, ScanConfig};
-/// use sanitize_engine::generator::HmacGenerator;
-/// use sanitize_engine::store::MappingStore;
-/// use sanitize_engine::category::Category;
+/// use rust_sanitize::processor::archive::{ArchiveProcessor, ArchiveFormat};
+/// use rust_sanitize::processor::registry::ProcessorRegistry;
+/// use rust_sanitize::scanner::{StreamScanner, ScanPattern, ScanConfig};
+/// use rust_sanitize::generator::HmacGenerator;
+/// use rust_sanitize::store::MappingStore;
+/// use rust_sanitize::category::Category;
 /// use std::sync::Arc;
 ///
 /// let gen = Arc::new(HmacGenerator::new([42u8; 32]));
@@ -664,7 +693,10 @@ impl ArchiveProcessor {
             )));
         }
 
-        // Buffer the nested archive (bounded by STRUCTURED_ENTRY_SIZE).
+        // Buffer the nested archive (always bounded by STRUCTURED_ENTRY_SIZE).
+        // The size hint (from a zip central-directory entry) is checked first for
+        // a fast early rejection; the bounded read enforces the cap even when the
+        // hint is absent (e.g. some tar entries) to prevent unbounded heap growth.
         if let Some(sz) = entry_size_hint {
             if sz > STRUCTURED_ENTRY_SIZE {
                 return Err(SanitizeError::ArchiveError(format!(
@@ -674,10 +706,7 @@ impl ArchiveProcessor {
             }
         }
 
-        let mut content = Vec::new();
-        reader.read_to_end(&mut content).map_err(|e| {
-            SanitizeError::ArchiveError(format!("read nested archive '{filename}': {e}"))
-        })?;
+        let content = read_bounded(reader, STRUCTURED_ENTRY_SIZE, filename)?;
         stats.total_input_bytes += content.len() as u64;
 
         // Recurse into the nested archive.
@@ -755,11 +784,16 @@ impl ArchiveProcessor {
             let Some(profile) = self.find_profile(&path) else {
                 continue;
             };
-            let mut content = Vec::new();
-            entry
-                .read_to_end(&mut content)
-                .map_err(|e| SanitizeError::ArchiveError(format!("read '{path}': {e}")))?;
-            let _ = self.registry.process(&content, profile, &self.store);
+            let content = match read_bounded(&mut entry, STRUCTURED_ENTRY_SIZE, &path) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(path = %path, error = %e, "discovery: skipping oversized entry");
+                    continue;
+                }
+            };
+            if let Err(e) = self.registry.process(&content, profile, &self.store) {
+                tracing::warn!(path = %path, error = %e, "discovery: structured processor failed; partial mappings may persist");
+            }
         }
         Ok(())
     }
@@ -800,11 +834,16 @@ impl ArchiveProcessor {
             let Some(profile) = self.find_profile(&name) else {
                 continue;
             };
-            let mut content = Vec::new();
-            entry
-                .read_to_end(&mut content)
-                .map_err(|e| SanitizeError::ArchiveError(format!("read '{name}': {e}")))?;
-            let _ = self.registry.process(&content, profile, &self.store);
+            let content = match read_bounded(&mut entry, STRUCTURED_ENTRY_SIZE, &name) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(name = %name, error = %e, "discovery: skipping oversized entry");
+                    continue;
+                }
+            };
+            if let Err(e) = self.registry.process(&content, profile, &self.store) {
+                tracing::warn!(name = %name, error = %e, "discovery: structured processor failed; partial mappings may persist");
+            }
         }
         Ok(())
     }

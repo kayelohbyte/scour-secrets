@@ -3,8 +3,8 @@ use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
-use sanitize_engine::secrets::{decrypt_secrets, encrypt_secrets, parse_secrets, SecretsFormat};
-use sanitize_engine::{atomic_write, atomic_write_private};
+use rust_sanitize::secrets::{decrypt_secrets, encrypt_secrets, parse_secrets, SecretsFormat};
+use rust_sanitize::{atomic_write, atomic_write_private};
 
 use crate::cli_args::{Cli, DecryptArgs, EncryptArgs};
 
@@ -34,6 +34,15 @@ pub(crate) fn resolve_password(
 
     if let Ok(pw) = std::env::var("SANITIZE_PASSWORD") {
         if !pw.is_empty() {
+            // Remove the variable immediately after reading so the plaintext
+            // password is no longer visible to child processes or subsequent
+            // /proc/<pid>/environ readers.
+            //
+            // Safety: `remove_var` is not thread-safe on Linux when other threads
+            // concurrently call getenv/setenv (POSIX data race). This call is safe
+            // here because it happens during single-threaded startup, before the
+            // Rayon thread pool or any library worker threads are initialised.
+            // Do NOT move this call to a context where worker threads are active.
             std::env::remove_var("SANITIZE_PASSWORD");
             eprintln!("info: using password from SANITIZE_PASSWORD environment variable");
             return Ok(Zeroizing::new(pw));

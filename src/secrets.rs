@@ -506,8 +506,6 @@ pub fn parse_category(s: &str) -> Category {
 // Conversion to ScanPatterns
 // ---------------------------------------------------------------------------
 
-/// Zeroize all sensitive string fields in a `Vec<SecretEntry>` and drop it.
-///
 /// Extract allowlist patterns from a set of entries.
 ///
 /// Entries with `kind: allow` are returned as raw pattern strings to be
@@ -714,12 +712,26 @@ pub fn looks_encrypted(data: &[u8]) -> bool {
     // plaintext marker, treat it as plaintext.
     if let Ok(text) = std::str::from_utf8(data) {
         let trimmed = text.trim_start();
-        // Recognisable plaintext markers for JSON ('[', '{'), YAML ('-'), TOML ('#').
+        // Recognisable plaintext markers:
+        //   JSON  → '[' (array) or '{' (object)
+        //   YAML  → '-' (sequence item) or '---' (document start)
+        //   TOML  → '#' (comment) or '[' (table header)
+        //   TOML bare-key → any ASCII letter (e.g. `pattern = "foo"`)
+        //
         // starts_with('[') already covers "[["; starts_with('-') covers "---".
+        // The ASCII-letter check handles TOML files whose first meaningful token
+        // is a bare key — without it those files were misclassified as encrypted
+        // and produced a confusing "decryption failed" error.
+        //
+        // A valid AES-256-GCM ciphertext starts with 32 bytes of random salt and
+        // 12 bytes of random nonce; the probability that those 44 bytes are entirely
+        // valid UTF-8 AND begin with an ASCII letter is negligible (< 2^-6).
+        let first_char = trimmed.chars().next();
         let has_marker = trimmed.starts_with('[')
             || trimmed.starts_with('{')
             || trimmed.starts_with('-')
-            || trimmed.starts_with('#');
+            || trimmed.starts_with('#')
+            || first_char.is_some_and(|c| c.is_ascii_alphabetic());
         if has_marker {
             return false;
         }

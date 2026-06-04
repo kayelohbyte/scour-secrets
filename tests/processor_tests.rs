@@ -10,19 +10,19 @@
 //! - Integration with encrypted secrets (shared MappingStore)
 //! - File-type profile matching
 
-use sanitize_engine::category::Category;
-use sanitize_engine::generator::HmacGenerator;
-use sanitize_engine::processor::csv_proc::CsvProcessor;
-use sanitize_engine::processor::json_proc::JsonProcessor;
-use sanitize_engine::processor::key_value::KeyValueProcessor;
-use sanitize_engine::processor::profile::{FieldRule, FileTypeProfile};
-use sanitize_engine::processor::registry::ProcessorRegistry;
-use sanitize_engine::processor::xml_proc::XmlProcessor;
-use sanitize_engine::processor::yaml_proc::YamlProcessor;
-use sanitize_engine::processor::Processor;
-use sanitize_engine::scanner::{ScanConfig, ScanPattern, StreamScanner};
-use sanitize_engine::secrets::{encrypt_secrets, SecretsFormat};
-use sanitize_engine::store::MappingStore;
+use rust_sanitize::category::Category;
+use rust_sanitize::generator::HmacGenerator;
+use rust_sanitize::processor::csv_proc::CsvProcessor;
+use rust_sanitize::processor::json_proc::JsonProcessor;
+use rust_sanitize::processor::key_value::KeyValueProcessor;
+use rust_sanitize::processor::profile::{FieldRule, FileTypeProfile};
+use rust_sanitize::processor::registry::ProcessorRegistry;
+use rust_sanitize::processor::xml_proc::XmlProcessor;
+use rust_sanitize::processor::yaml_proc::YamlProcessor;
+use rust_sanitize::processor::Processor;
+use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use rust_sanitize::secrets::{encrypt_secrets, SecretsFormat};
+use rust_sanitize::store::MappingStore;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -549,7 +549,7 @@ impl Processor for DummyProcessor {
         content: &[u8],
         _profile: &FileTypeProfile,
         _store: &MappingStore,
-    ) -> sanitize_engine::Result<Vec<u8>> {
+    ) -> rust_sanitize::Result<Vec<u8>> {
         // Just uppercases everything (for testing).
         let text = String::from_utf8_lossy(content).to_uppercase();
         Ok(text.into_bytes())

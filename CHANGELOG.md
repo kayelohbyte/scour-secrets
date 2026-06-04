@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-06-03
+
+### Added
+
+- **`sanitize-mcp` HTTP daemon mode** — `sanitize-mcp --http` binds to
+  `127.0.0.1:6277` (default) and serves the MCP protocol over HTTP. Pass
+  `--http <n>` to use a different port. Requires `SANITIZE_MCP_HTTP_TOKEN` to be
+  set; the server refuses to start without it.
+
+- **Daemon auto-restart on session close** — the HTTP daemon now exits with code
+  `0` when the MCP client sends a `DELETE /mcp` (clean disconnect). Service
+  managers configured with `Restart=always` (systemd), `KeepAlive: true`
+  (launchd), or `AppExit Default Restart` (NSSM) will automatically restart the
+  daemon for the next connection. Systemd unit updated from `Restart=on-failure`
+  to `Restart=always` + `RestartSec=1`.
+
+- **Default HTTP port constant** — `DEFAULT_HTTP_PORT = 6277`. Port is validated
+  at startup (1–65535, numeric); non-numeric or out-of-range values exit with a
+  clear error message.
+
+- **`build_secrets` overwrite guard** — calling `build_secrets` when the output
+  file already exists now returns an `"already exists"` error instead of silently
+  passing `--overwrite` to the CLI. Pass `"overwrite": true` explicitly to
+  replace an existing file. This matches CLI behaviour.
+
+- **NUL byte sanitization in `build_secrets`** — NUL bytes in entry labels and
+  patterns are stripped before writing to the YAML output file.
+
+- **87 tests in `mcp/test-direct.ts`** — new tests for default port, invalid
+  port values, daemon exit on session close (exit code 0), and reconnect after
+  restart.
+
+### Changed
+
+- **`test_pattern` exit-code-1 handling** — replaced a brittle stderr string
+  match with a JSON parse attempt; the tool now correctly reports partial matches
+  (some values match, some do not) without returning an error.
+
+### Documentation
+
+- Added VS Code (Copilot) coverage: `.copilotignore` soft guardrail, `mcp-remote`
+  shim setup for service-user isolation, IDE setup section with on-demand stdio
+  and daemon configs.
+- Added VS Code row to the tool comparison table with accurate deny-mechanism
+  status.
+- Corrected service manager restart instructions: systemd `Restart=always` +
+  `RestartSec=1`; added explanation of clean vs unclean disconnect behaviour.
+- Added Codex daemon client config example.
+- Security notes expanded: what the daemon logs, token handling, loopback-only
+  binding.
+
 ## [0.11.0] - 2026-05-30
 
 ### Added
@@ -261,7 +312,7 @@ contract and MSRV policy.
 
 - **`sanitize template` subcommand** — generate a starter secrets template YAML for a preset use case (`generic`, `web`, `k8s`, `database`, `aws`). Output defaults to `secrets.template.<preset>.yaml`.
 
-- **`AllowlistMatcher`** — new public type in `sanitize_engine::allowlist`. Compiles `*`-glob and exact patterns; `is_allowed()` and `match_pattern()` methods; atomic seen-counter; regex-character warning on construction.
+- **`AllowlistMatcher`** — new public type in `rust_sanitize::allowlist`. Compiles `*`-glob and exact patterns; `is_allowed()` and `match_pattern()` methods; atomic seen-counter; regex-character warning on construction.
 
 - **`AllowlistMatcher::match_pattern`** — returns the first matching pattern string (not just a bool), used by `allow-test` to show which pattern matched.
 
@@ -465,7 +516,9 @@ contract and MSRV policy.
 - **290+ tests** including unit, integration, property-based (proptest), and
   4 fuzz targets.
 
-[Unreleased]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.10.0...v0.11.0
 [0.8.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.5.0...v0.8.0
 [0.5.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kayelohbyte/rust-sanitize/releases/tag/v0.4.0

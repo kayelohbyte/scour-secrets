@@ -4,10 +4,10 @@ use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
 use zeroize::Zeroizing;
 
-use sanitize_engine::secrets::{
+use rust_sanitize::secrets::{
     entries_to_patterns, parse_secrets, serialize_secrets, SecretsFormat,
 };
-use sanitize_engine::{
+use rust_sanitize::{
     atomic_write, DEFAULT_ARCHIVE_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_MAX_MATCHES,
 };
 
@@ -107,10 +107,10 @@ pub(crate) fn run_scan(args: &ScanArgs) -> Result<(), (String, i32)> {
 }
 
 pub(crate) fn run_test_pattern(args: &TestPatternArgs) -> Result<(), (String, i32)> {
-    let mut entries: Vec<sanitize_engine::secrets::SecretEntry> = Vec::new();
+    let mut entries: Vec<rust_sanitize::secrets::SecretEntry> = Vec::new();
 
     for p in &args.patterns {
-        entries.push(sanitize_engine::secrets::SecretEntry {
+        entries.push(rust_sanitize::secrets::SecretEntry {
             pattern: p.clone(),
             kind: "regex".to_string(),
             category: "auth_token".to_string(),
@@ -356,7 +356,7 @@ pub(crate) fn run_test_pattern(args: &TestPatternArgs) -> Result<(), (String, i3
 }
 
 pub(crate) fn run_allow_test(args: &AllowTestArgs) -> Result<(), (String, i32)> {
-    use sanitize_engine::allowlist::AllowlistMatcher;
+    use rust_sanitize::allowlist::AllowlistMatcher;
 
     let (matcher, warnings) = AllowlistMatcher::new(args.allow.clone());
     for w in &warnings {
@@ -511,7 +511,7 @@ pub(crate) fn normalize_guided_output_path(path: PathBuf) -> PathBuf {
 }
 
 pub(crate) fn run_guided() -> Result<(), (String, i32)> {
-    use sanitize_engine::secrets::encrypt_secrets;
+    use rust_sanitize::secrets::encrypt_secrets;
 
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err((

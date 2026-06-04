@@ -127,6 +127,8 @@ will be asked to add them before merge.
   patterns, not free-text NLP redaction).
 - A reversible pseudonymization tool.
 - A tool for operating on data in transit (it reads files or stdin; it does
-  not run as a proxy or network service).
+  not run as a network proxy or man-in-the-middle interceptor). The optional
+  HTTP daemon mode (`sanitize-mcp --http`) is a local-only control interface
+  for AI tooling and does not process data in transit.
 - An encryption tool (secrets files use AES-256-GCM for the pattern store,
   but the sanitized output itself is not encrypted).

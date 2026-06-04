@@ -2,9 +2,9 @@
 //!
 //! Run with: `cargo run --example basic`
 
-use sanitize_engine::category::Category;
-use sanitize_engine::generator::HmacGenerator;
-use sanitize_engine::store::MappingStore;
+use rust_sanitize::category::Category;
+use rust_sanitize::generator::HmacGenerator;
+use rust_sanitize::store::MappingStore;
 use std::sync::Arc;
 
 fn main() {

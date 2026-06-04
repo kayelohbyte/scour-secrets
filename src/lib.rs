@@ -37,9 +37,9 @@
 //! ## Example: Store-Level Replacement
 //!
 //! ```rust
-//! use sanitize_engine::category::Category;
-//! use sanitize_engine::generator::HmacGenerator;
-//! use sanitize_engine::store::MappingStore;
+//! use rust_sanitize::category::Category;
+//! use rust_sanitize::generator::HmacGenerator;
+//! use rust_sanitize::store::MappingStore;
 //! use std::sync::Arc;
 //!
 //! // Create a deterministic generator with a fixed seed.
@@ -61,10 +61,10 @@
 //! ## Example: Streaming Scanner
 //!
 //! ```rust
-//! use sanitize_engine::category::Category;
-//! use sanitize_engine::generator::HmacGenerator;
-//! use sanitize_engine::scanner::{ScanConfig, ScanPattern, StreamScanner};
-//! use sanitize_engine::store::MappingStore;
+//! use rust_sanitize::category::Category;
+//! use rust_sanitize::generator::HmacGenerator;
+//! use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
+//! use rust_sanitize::store::MappingStore;
 //! use std::sync::Arc;
 //!
 //! // Build patterns.
@@ -94,7 +94,7 @@
 //! surrounding lines for LLM-friendly triage:
 //!
 //! ```rust
-//! use sanitize_engine::log_context::{extract_context, LogContextConfig};
+//! use rust_sanitize::log_context::{extract_context, LogContextConfig};
 //!
 //! let sanitized = "INFO  request received\n\
 //!                  ERROR disk full on /dev/sda1\n\

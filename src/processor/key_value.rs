@@ -672,17 +672,15 @@ fn emit_replaced(
     value: &str,
     output: &mut String,
 ) {
-    let ws = leading_whitespace(after_delim);
-    output.push_str(raw_key);
-    output.push_str(delimiter);
-    output.push_str(ws);
-    if let Some(q) = quote_char {
-        output.push(q);
-        output.push_str(value);
-        output.push(q);
-    } else {
-        output.push_str(value);
-    }
+    emit_replaced_with_suffix(
+        raw_key,
+        delimiter,
+        after_delim,
+        quote_char,
+        value,
+        "",
+        output,
+    );
 }
 
 /// Like [`emit_replaced`] but appends a `suffix` after the closing quote.

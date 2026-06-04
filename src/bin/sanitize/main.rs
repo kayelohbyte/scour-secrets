@@ -76,7 +76,7 @@ mod scanner_builder;
 use cli_args::{Cli, SubCommand};
 
 use clap::Parser;
-use sanitize_engine::ArchiveFilter;
+use rust_sanitize::ArchiveFilter;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -87,8 +87,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub(crate) static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 /// Check whether a graceful shutdown has been requested.
+///
+/// Uses `Acquire` to pair with the `SeqCst` store in the signal handler,
+/// ensuring the write is visible on weakly-ordered architectures (ARM, POWER).
 pub(crate) fn is_interrupted() -> bool {
-    INTERRUPTED.load(Ordering::Relaxed)
+    INTERRUPTED.load(Ordering::Acquire)
 }
 
 fn run() -> Result<(), (String, i32)> {
@@ -159,7 +162,7 @@ mod tests {
     use crate::progress::{ProgressContext, ProgressMode, ProgressPolicy};
     use crate::scanner_builder::build_default_patterns;
     use clap::Parser;
-    use sanitize_engine::secrets::entries_to_patterns;
+    use rust_sanitize::secrets::entries_to_patterns;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::tempdir;
@@ -647,7 +650,7 @@ mod tests {
 
     #[test]
     fn guided_profiles_use_known_processor_names() {
-        use sanitize_engine::processor::ProcessorRegistry;
+        use rust_sanitize::processor::ProcessorRegistry;
         let registry = ProcessorRegistry::with_builtins();
 
         for preset in [
