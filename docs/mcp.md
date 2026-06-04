@@ -144,7 +144,8 @@ After=network.target
 User=sanitize-svc
 ExecStart=/usr/local/bin/sanitize-mcp --http
 EnvironmentFile=/etc/sanitize-mcp/env
-Restart=on-failure
+Restart=always
+RestartSec=1
 
 [Install]
 WantedBy=multi-user.target
@@ -207,7 +208,7 @@ OpenCode (`~/.config/opencode/opencode.json`, global scope):
 
 For Codex, add a remote MCP entry pointing to the same URL with the same header. The daemon runs outside Codex's OS sandbox, so it can access any files `sanitize-svc` has permission to read.
 
-> **Single-session limit:** The HTTP daemon maintains one active MCP session at a time. If the AI tool disconnects (restart, crash), the daemon must also be restarted before a new session can be established. The service manager (`launchd`/`systemd`/NSSM) handles this automatically via `KeepAlive`/`Restart=on-failure`/`AppExit Default Restart`.
+> **Single-session limit:** The HTTP daemon maintains one active MCP session at a time. When the AI tool disconnects cleanly (sends the MCP DELETE request), the daemon exits and the service manager restarts it automatically — the next connection gets a fresh session. This covers the common case: Claude Code, OpenCode, and most clients send DELETE on shutdown or session end. Unclean disconnects (process crash, kill signal) leave the daemon in a stuck state; the service manager cannot detect these without a health-check probe, so a manual `launchctl kickstart`/`systemctl restart`/`nssm restart` is required after an unclean exit.
 
 > **Security notes:**
 > - The token is the only access control. Treat it like a password — rotate by updating the service config, reloading the daemon, and updating your client configs.

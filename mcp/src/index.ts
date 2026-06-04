@@ -1891,6 +1891,12 @@ if (!isNaN(httpPort)) {
   const expectedAuth = `Bearer ${token}`;
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
+    onsessionclosed: () => {
+      // Client sent DELETE — exit cleanly so the service manager restarts the
+      // daemon and it can accept a new session on reconnect.
+      console.error("sanitize-mcp: session closed, restarting for reconnection");
+      Deno.exit(0);
+    },
   });
   await server.connect(transport);
 

@@ -1524,14 +1524,14 @@ await session.close();
     });
 
     // Note: WebStandardStreamableHTTPServerTransport is single-session by design.
-    // Once the session is closed the transport does not accept a new initialize.
-    // Reconnection requires a daemon restart; multi-session support is a future concern.
+    // The daemon exits via onsessionclosed when the client sends DELETE, allowing
+    // the service manager to restart it for a fresh session on reconnect.
 
   } catch (e) {
     console.log(`  ${RED}✗${RESET} daemon startup failed: ${(e as Error).message}`);
     failed++;
   } finally {
-    daemon?.kill("SIGTERM");
+    try { daemon?.kill("SIGTERM"); } catch { /* already exited via onsessionclosed */ }
     await daemon?.status.catch(() => {});
   }
 }
