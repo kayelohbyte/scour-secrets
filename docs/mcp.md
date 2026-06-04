@@ -18,6 +18,306 @@ SANITIZE_BIN=/usr/local/bin/sanitize \
 
 ---
 
+## Keeping Secrets Out of the Context Window
+
+This is the core purpose of the MCP integration. The `files` parameter takes a **file path**, not file contents. `sanitize-mcp` opens and processes the file as a subprocess — raw bytes never enter the MCP transport or the LLM context window. The agent passes a path string and receives sanitized text back. It never sees the original.
+
+```
+Agent                    MCP server          Sanitize binary
+  │                          │                     │
+  │── files: ["/path"]  ────▶│                     │
+  │   secrets_file: "/s.yaml"│── spawns process ──▶│ opens /path
+  │                          │                     │ opens /s.yaml
+  │                          │                     │ processes bytes
+  │◀── sanitized text ───────│◀── sanitized text ──│ (raw bytes stay here)
+```
+
+This applies to **all path-type parameters**: `files`, `secrets_file`, and `profile`. The agent never sees your pattern definitions or detection rules, only the sanitized output. A compromised context cannot exfiltrate either.
+
+### Blocking Direct File Reads by AI Tool
+
+The MCP path prevents the agent from reading raw content *through the sanitize tool*. A separate concern is whether the agent can read the same file directly through its own file-browsing tools. The answer depends on which tool you're using.
+
+| Tool | Direct file reads | Built-in path deny | MCP subprocess affected by deny |
+|------|------------------|-------------------|--------------------------------|
+| Claude Code | Yes | ✓ `PreToolUse` hook (verified) | No — hook only intercepts built-in Read tool |
+| OpenCode | Yes | ✓ `permission.read` deny rules | No — rules apply to agent reads, not subprocesses |
+| Cursor | Yes | ✓ Enforcement hooks (enterprise) | No — hooks intercept agent reads only |
+| OpenAI Codex | Yes | ✓ TOML deny rules (OS-enforced) | **Yes** — Seatbelt/bubblewrap applies to all child processes |
+| VS Code (Copilot) | Yes | ✗ | N/A |
+| ChatGPT / Gemini | No direct filesystem access | ✗ | N/A — files must be explicitly uploaded |
+
+For **Claude Code, OpenCode, and Cursor**: deny rules block the agent's direct file reads but leave MCP subprocess calls unaffected — sanitize-mcp can be spawned on-demand and will still access the files.
+
+For **OpenAI Codex**: deny rules are enforced by the OS sandbox (Seatbelt on macOS, bubblewrap on Linux). All child processes inherit the sandbox, including an on-demand `sanitize-mcp`. To allow sanitize-mcp to access denied files, run it as a **persistent daemon outside the Codex sandbox** — connect Codex to the already-running MCP server rather than having Codex spawn it.
+
+For **VS Code**: OS-level file permissions (service-user model) are the only mechanism.
+
+For **ChatGPT and Gemini**: no ambient filesystem access — control what you explicitly upload.
+
+### File System Permissions (All Tools)
+
+Own sensitive files by a dedicated service user so the agent's login process cannot open them directly:
+
+```bash
+sudo useradd -r -s /sbin/nologin sanitize-svc
+sudo chown sanitize-svc:sanitize-svc /var/data/sensitive.log
+sudo chmod 0600 /var/data/sensitive.log
+```
+
+The agent process (running as your login user) cannot open the file. For `sanitize-mcp` to open it, the server must also run as `sanitize-svc` — which requires the **persistent daemon** setup below. When AI tools spawn `sanitize-mcp` on demand it inherits the login user's permissions, so on-demand mode cannot access files owned exclusively by the service user.
+
+For multi-user deployments a shared group is more practical:
+
+```bash
+sudo groupadd sanitize-readers
+sudo usermod -aG sanitize-readers sanitize-svc
+sudo chown root:sanitize-readers /var/data/sensitive.log
+sudo chmod 0640 /var/data/sensitive.log
+```
+
+### Running as a Persistent Daemon
+
+Run `sanitize-mcp` as a system service with `--http`. The server binds to `127.0.0.1` only on port **6277** by default and requires a bearer token on every request — set via `SANITIZE_MCP_HTTP_TOKEN`. AI tools connect to the already-running server rather than spawning it, so the daemon's user and file permissions are independent of the AI tool. Pass `--http <n>` to bind to a different port; update the port in your client config to match.
+
+**Generate a token:**
+
+```bash
+openssl rand -hex 32
+# e.g. a3f8c2...  — store this; you'll need it in both the service file and your MCP client config
+```
+
+**macOS — launchd plist** (`/Library/LaunchDaemons/com.sanitize.mcp.plist`):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>             <string>com.sanitize.mcp</string>
+  <key>UserName</key>          <string>sanitize-svc</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/sanitize-mcp</string>
+    <string>--http</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SANITIZE_BIN</key>             <string>/usr/local/bin/sanitize</string>
+    <key>SANITIZE_SECRETS_DIR</key>     <string>/var/sanitize/secrets</string>
+    <key>SANITIZE_MCP_HTTP_TOKEN</key>  <string>YOUR_TOKEN_HERE</string>
+  </dict>
+  <key>RunAtLoad</key>         <true/>
+  <key>KeepAlive</key>         <true/>
+  <key>StandardErrorPath</key> <string>/var/log/sanitize-mcp.log</string>
+</dict>
+</plist>
+```
+
+```bash
+# Restrict the plist — it contains the token
+sudo chmod 0600 /Library/LaunchDaemons/com.sanitize.mcp.plist
+sudo launchctl load /Library/LaunchDaemons/com.sanitize.mcp.plist
+```
+
+**Linux — systemd unit** (`/etc/systemd/system/sanitize-mcp.service`):
+
+Store secrets in a separate environment file rather than inline in the unit — the unit file is world-readable via `systemctl show`, the env file is not:
+
+```bash
+sudo mkdir -p /etc/sanitize-mcp
+sudo tee /etc/sanitize-mcp/env > /dev/null <<'EOF'
+SANITIZE_BIN=/usr/local/bin/sanitize
+SANITIZE_SECRETS_DIR=/var/sanitize/secrets
+SANITIZE_MCP_HTTP_TOKEN=YOUR_TOKEN_HERE
+EOF
+sudo chmod 0600 /etc/sanitize-mcp/env
+```
+
+```ini
+[Unit]
+Description=sanitize-mcp daemon
+After=network.target
+
+[Service]
+User=sanitize-svc
+ExecStart=/usr/local/bin/sanitize-mcp --http
+EnvironmentFile=/etc/sanitize-mcp/env
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now sanitize-mcp
+```
+
+**Windows — NSSM** ([nssm.cc](https://nssm.cc) or `scoop install nssm`):
+
+NSSM wraps any executable as a Windows service and handles env vars, stdout/stderr, and auto-restart.
+
+```powershell
+nssm install sanitize-mcp "C:\Program Files\sanitize\sanitize-mcp.exe"
+nssm set sanitize-mcp AppParameters "--http"
+nssm set sanitize-mcp AppEnvironmentExtra `
+  "SANITIZE_BIN=C:\Program Files\sanitize\sanitize.exe" `
+  "SANITIZE_SECRETS_DIR=C:\ProgramData\sanitize\secrets" `
+  "SANITIZE_MCP_HTTP_TOKEN=YOUR_TOKEN_HERE"
+nssm set sanitize-mcp AppStderr "C:\ProgramData\sanitize\logs\sanitize-mcp.log"
+nssm set sanitize-mcp Start SERVICE_AUTO_START
+nssm start sanitize-mcp
+```
+
+NSSM stores env vars in `HKLM\SYSTEM\CurrentControlSet\Services\sanitize-mcp\Parameters\AppEnvironment`, which requires admin privileges to read.
+
+**Connecting AI tools to the daemon** — use a `url` with an `Authorization` header instead of a `command`. Put this in **user-scope config only** — never in project-scope config that gets committed to version control.
+
+Claude Code (`~/.claude/claude.json`, user scope):
+
+```json
+{
+  "mcpServers": {
+    "rust-sanitize": {
+      "url": "http://127.0.0.1:6277/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN_HERE"
+      }
+    }
+  }
+}
+```
+
+OpenCode (`~/.config/opencode/opencode.json`, global scope):
+
+```json
+{
+  "mcp": {
+    "rust-sanitize": {
+      "type": "remote",
+      "url": "http://127.0.0.1:6277/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN_HERE"
+      }
+    }
+  }
+}
+```
+
+For Codex, add a remote MCP entry pointing to the same URL with the same header. The daemon runs outside Codex's OS sandbox, so it can access any files `sanitize-svc` has permission to read.
+
+> **Single-session limit:** The HTTP daemon maintains one active MCP session at a time. If the AI tool disconnects (restart, crash), the daemon must also be restarted before a new session can be established. The service manager (`launchd`/`systemd`/NSSM) handles this automatically via `KeepAlive`/`Restart=on-failure`/`AppExit Default Restart`.
+
+> **Security notes:**
+> - The token is the only access control. Treat it like a password — rotate by updating the service config, reloading the daemon, and updating your client configs.
+> - The server binds to `127.0.0.1` only and is not reachable from the network.
+> - The token travels in plaintext over loopback. This is acceptable for local use (sniffing loopback requires root). For remote deployment, put a TLS-terminating reverse proxy (e.g. Caddy) in front.
+> - Do not put the token in project-scope `.mcp.json` — it will end up in version control.
+> - Service configuration files containing the token must be mode `0600` (shown above for macOS and Linux).
+> - **What the daemon logs:** only a startup message (`sanitize-mcp daemon ready on 127.0.0.1:<port>`) and unhandled error class names. It never logs request bodies, file paths, file content, or the `Authorization` header. The sanitize subprocess is audited separately — its output is always the redacted result, never raw secrets.
+
+### OpenCode: Block Direct Reads with `permission.read`
+
+OpenCode has a built-in `permission.read` system that supports path-pattern deny rules. Add entries to `opencode.json` in your project root (or `~/.config/opencode/opencode.json` for global scope):
+
+```json
+{
+  "permission": {
+    "read": {
+      "*": "allow",
+      "/var/sanitize/secrets/**": "deny",
+      "/var/data/sensitive/**": "deny"
+    }
+  }
+}
+```
+
+Rules are evaluated by pattern match with **last match winning** — place the catch-all `"*": "allow"` first, then specific deny patterns after. Supports `*` (any characters) and `?` (single character) wildcards.
+
+MCP tool calls pass file paths to the sanitize subprocess and are not subject to `permission.read` rules — the agent cannot read the raw file, but the sanitize tool processes it normally.
+
+### Cursor: Block Direct Reads with Enforcement Hooks (Enterprise)
+
+Cursor's enterprise tier supports enforcement hooks that intercept the agent loop at four points, including **before file reading**. Hooks are bash scripts that receive JSON context on stdin and return a structured response. A hook that outputs `"permission": "deny"` and exits with code `3` blocks the read.
+
+The hook pattern mirrors Claude Code's approach: inspect the incoming file path and deny if it matches a restricted prefix. Refer to [Cursor's enterprise documentation](https://cursor.com/docs/enterprise/llm-safety-and-controls) for the exact JSON field names and registration syntax, as these are enterprise-tier specifics.
+
+> **Note:** `.cursorignore` is explicitly not a security boundary — Cursor's own documentation states it is a convenience feature for excluding files from indexing, not for preventing access. Do not rely on it to protect sensitive files.
+
+### OpenAI Codex: Block Reads with OS-Enforced TOML Deny Rules
+
+Codex uses a TOML permission profile with `deny` rules enforced at the OS level — Seatbelt on macOS, bubblewrap on Linux, sandbox users on Windows. Add deny rules to your permission profile:
+
+```toml
+[permissions.project-edit.filesystem]
+"/var/sanitize/secrets" = "deny"
+"/var/data/sensitive" = "deny"
+
+[permissions.project-edit.filesystem.":workspace_roots"]
+"." = "write"
+"**/*.env" = "deny"
+```
+
+`deny` blocks both reads and writes. Narrower rules take precedence over broader ones at the same path level.
+
+**Important:** because enforcement is OS-level, all child processes inherit the sandbox — including `sanitize-mcp` if Codex spawns it on demand. To allow sanitize-mcp to access denied paths, run it as a **persistent daemon** and connect Codex to the already-running server via HTTP. See [Running as a Persistent Daemon](#running-as-a-persistent-daemon).
+
+Refer to the [Codex permissions documentation](https://developers.openai.com/codex/permissions#filesystem-permissions) for the full profile schema and platform-specific notes.
+
+### Claude Code: Block Direct Reads with a PreToolUse Hook
+
+For Claude Code, a `PreToolUse` hook intercepts `Read` tool calls before they execute. MCP tool calls run in a separate subprocess channel and are not affected — the hook only blocks the agent's built-in file reader. Add this to `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -c \"\nimport json, sys, os\nd = json.load(sys.stdin)\npath = os.path.realpath(d.get('tool_input', {}).get('file_path', ''))\nblocked = [\n  '/var/sanitize/secrets',\n  '/var/data/sensitive',\n]\nif any(path.startswith(b) for b in blocked):\n    print(json.dumps({'decision': 'block', 'reason': 'Path is restricted — pass it to the sanitize MCP tool instead.'}))\n    sys.exit(2)\n\""
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The hook receives the tool call as JSON on stdin, resolves the path (following symlinks via `os.path.realpath`), and exits with code `2` to block if it falls under a restricted prefix. The `reason` string is shown to the agent. Update the `blocked` list to match your deployment paths. Changes take effect on the next session start.
+
+This has been verified on macOS and Linux: `Read` calls to blocked paths are rejected with the reason message, while the sanitize CLI processes the same paths successfully through Bash or the MCP tool.
+
+On **Linux** you can additionally use `sandbox.filesystem.denyRead` (requires `sandbox.enabled: true`), which uses bubblewrap to enforce read restrictions at the OS level.
+
+### Recommended Storage Locations
+
+| Location | Notes |
+|----------|-------|
+| `/var/data/<service>/` | Outside project tree; own by a service user |
+| `~/sensitive/` | Outside version-controlled directories |
+| `/run/secrets/` | Docker secrets mount; tmpfs, readable only by container user |
+| `/mnt/secrets/` | Kubernetes `hostPath` volume or CSI secrets store |
+
+Avoid storing sensitive source files inside the project directory — editors and agents routinely scan and index everything reachable under the workspace root.
+
+### Namespace Secrets Directory Permissions
+
+The `SANITIZE_SECRETS_DIR` namespace layout enforces permission checks at load time: the `.password` file for each namespace must be `0600` or `0400` or the server will refuse to start. Apply the same ownership model to the parent directory so agents cannot enumerate namespaces:
+
+```bash
+sudo chown -R sanitize-svc:sanitize-svc /var/sanitize/secrets/
+sudo chmod 0750 /var/sanitize/secrets/           # sanitize-svc can enter; agent user cannot
+sudo chmod 0700 /var/sanitize/secrets/acme-corp/ # namespace dirs: service user only
+sudo chmod 0600 /var/sanitize/secrets/acme-corp/secrets.yaml
+sudo chmod 0600 /var/sanitize/secrets/acme-corp/.password
+```
+
+---
+
 ## IDE & Editor Setup
 
 All configurations assume `sanitize-mcp` is at `/usr/local/bin/sanitize-mcp` and `sanitize` is at `/usr/local/bin/sanitize`. Adjust paths to match your installation.
@@ -150,6 +450,7 @@ require("avante").setup({
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SANITIZE_BIN` | `sanitize` | Path to the `sanitize` binary. |
+| `SANITIZE_MCP_HTTP_TOKEN` | _(unset)_ | Bearer token required when running in HTTP daemon mode (`--http`). Must be set; the server refuses to start without it when `--http` is used. |
 | `SANITIZE_MCP_MAX_CONTENT_BYTES` | `524288` (512 KB) | Per-call inline content size limit. |
 | `SANITIZE_MCP_TIMEOUT_MS` | `60000` (60 s) | Subprocess timeout — kills the CLI and returns an error if exceeded. |
 | `SANITIZE_MCP_THREADS` | _(unset = CLI default = logical CPUs)_ | Worker thread cap for every invocation — useful on shared hosts. |
@@ -621,3 +922,4 @@ Pass `namespace` in `sanitize` or `scan` tool calls. The server loads only that 
 ```
 
 An explicit `profile` parameter overrides the namespace's `profile.yaml` when both are present.
+

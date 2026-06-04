@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-run --allow-env --allow-read --allow-write
+#!/usr/bin/env -S deno run --allow-run --allow-env --allow-read --allow-write --allow-net
 /**
  * Comprehensive direct MCP feature tests.
  *
@@ -98,6 +98,145 @@ async function startSession(extraEnv: Record<string, string> = {}): Promise<McpS
   await s.send("initialize", {
     protocolVersion: "2024-11-05", capabilities: {},
     clientInfo: { name: "direct-test", version: "1.0" },
+  });
+  await s.notify("notifications/initialized");
+  return s;
+}
+
+// ---------------------------------------------------------------------------
+// HTTP daemon helpers
+// ---------------------------------------------------------------------------
+
+async function getFreePort(): Promise<number> {
+  const l = Deno.listen({ port: 0, hostname: "127.0.0.1" });
+  const port = (l.addr as Deno.NetAddr).port;
+  l.close();
+  return port;
+}
+
+async function startHttpDaemon(port: number, token: string): Promise<Deno.ChildProcess> {
+  const child = new Deno.Command(Deno.execPath(), {
+    args: [
+      "run",
+      "--allow-run", "--allow-env", "--allow-read", "--allow-write", "--allow-net",
+      MCP_SCRIPT, "--http", String(port),
+    ],
+    stdin: "null", stdout: "null", stderr: "null",
+    env: { ...Deno.env.toObject(), SANITIZE_BIN, SANITIZE_LOG: "error", SANITIZE_MCP_HTTP_TOKEN: token },
+  }).spawn();
+
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` },
+        body: "{}",
+      });
+      await r.body?.cancel();
+      return child;
+    } catch {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+  child.kill("SIGTERM");
+  throw new Error(`HTTP daemon did not start within 5 s on port ${port}`);
+}
+
+class HttpMcpSession {
+  private sessionId: string | null = null;
+  private idCtr = 9000;
+
+  constructor(private baseUrl: string, private token: string) {}
+
+  private reqHeaders(): Record<string, string> {
+    const h: Record<string, string> = {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/event-stream",
+      "Authorization": `Bearer ${this.token}`,
+    };
+    if (this.sessionId) h["Mcp-Session-Id"] = this.sessionId;
+    return h;
+  }
+
+  async send(method: string, params?: unknown): Promise<unknown> {
+    const id = this.idCtr++;
+    const res = await fetch(`${this.baseUrl}/mcp`, {
+      method: "POST",
+      headers: this.reqHeaders(),
+      body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+    });
+    if (res.status !== 200) { await res.body?.cancel(); throw new Error(`HTTP ${res.status}`); }
+    const sid = res.headers.get("Mcp-Session-Id");
+    if (sid) this.sessionId = sid;
+
+    const text = await res.text();
+    // Response is either plain JSON or SSE (data: {...} lines); parse both uniformly.
+    for (const line of text.split("\n")) {
+      const src = line.startsWith("data: ") ? line.slice(6) : line.trim();
+      if (!src) continue;
+      let msg: { id?: number; result?: unknown; error?: unknown } | null = null;
+      try { msg = JSON.parse(src); } catch { continue; }
+      if (msg?.id !== id) continue;
+      if (msg.error) throw new Error(JSON.stringify(msg.error));
+      return msg.result;
+    }
+    throw new Error(`No response for id=${id} in: ${text.slice(0, 300)}`);
+  }
+
+  async notify(method: string, params?: unknown): Promise<void> {
+    const res = await fetch(`${this.baseUrl}/mcp`, {
+      method: "POST",
+      headers: this.reqHeaders(),
+      body: JSON.stringify({ jsonrpc: "2.0", method, params }),
+    });
+    await res.body?.cancel();
+  }
+
+  async close(): Promise<void> {
+    if (this.sessionId) {
+      await fetch(`${this.baseUrl}/mcp`, {
+        method: "DELETE",
+        headers: this.reqHeaders(),
+      }).catch(() => {});
+    }
+  }
+}
+
+// Read from a stream for up to maxMs, stopping early when stopOn substring appears.
+async function readStreamFor(
+  stream: ReadableStream<Uint8Array>,
+  maxMs: number,
+  stopOn?: string,
+): Promise<string> {
+  const dec = new TextDecoder();
+  let text = "";
+  const reader = stream.getReader();
+  const deadline = Date.now() + maxMs;
+  try {
+    while (Date.now() < deadline) {
+      const remaining = Math.max(1, deadline - Date.now());
+      const result = await Promise.race([
+        reader.read(),
+        new Promise<{ done: true; value: undefined }>((r) =>
+          setTimeout(() => r({ done: true, value: undefined }), remaining)
+        ),
+      ]);
+      if (result.done) break;
+      if (result.value) text += dec.decode(result.value);
+      if (stopOn && text.includes(stopOn)) break;
+    }
+  } finally {
+    reader.cancel().catch(() => {});
+  }
+  return text;
+}
+
+async function startHttpMcpSession(baseUrl: string, token: string): Promise<HttpMcpSession> {
+  const s = new HttpMcpSession(baseUrl, token);
+  await s.send("initialize", {
+    protocolVersion: "2024-11-05", capabilities: {},
+    clientInfo: { name: "http-test", version: "1.0" },
   });
   await s.notify("notifications/initialized");
   return s;
@@ -216,7 +355,7 @@ test("sanitize", "replaces email with realistic substitute", async (s) => {
     name: "sanitize",
     arguments: {
       content: "Contact alice@example.com for help.",
-      patterns: [{ name: "email", pattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}", category: "email" }],
+      patterns: [{ name: "email", pattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}", category: "email", kind: "regex" }],
     },
   }));
   not(r, "alice@example.com");
@@ -228,7 +367,7 @@ test("sanitize", "replaces IPv4 address", async (s) => {
     name: "sanitize",
     arguments: {
       content: "Request from 203.0.113.42 denied.",
-      patterns: [{ name: "ip", pattern: "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", category: "ipv4" }],
+      patterns: [{ name: "ip", pattern: "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", category: "ipv4", kind: "regex" }],
     },
   }));
   not(r, "203.0.113.42");
@@ -253,7 +392,7 @@ test("sanitize", "kind:allow passes value through unchanged", async (s) => {
     arguments: {
       content: "host: localhost\nhost2: prod.example.com",
       patterns: [
-        { name: "host", pattern: "\\b[a-z0-9.-]+\\.[a-z]{2,}\\b", category: "hostname" },
+        { name: "host", pattern: "\\b[a-z0-9.-]+\\.[a-z]{2,}\\b", category: "hostname", kind: "regex" },
         { name: "allow_localhost", pattern: "localhost", category: "hostname", kind: "allow" },
       ],
     },
@@ -429,7 +568,7 @@ test("sanitize", "format csv replaces values in cells", async (s) => {
       content: input,
       format: "csv",
       patterns: [
-        { name: "email", pattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}", category: "email" },
+        { name: "email", pattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}", category: "email", kind: "regex" },
       ],
     },
   }));
@@ -444,7 +583,7 @@ test("sanitize", "format jsonl replaces values across lines", async (s) => {
     arguments: {
       content: input,
       format: "jsonl",
-      patterns: [{ name: "email", pattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}", category: "email" }],
+      patterns: [{ name: "email", pattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}", category: "email", kind: "regex" }],
     },
   }));
   not(r, "alice@corp.com");
@@ -558,28 +697,6 @@ test("sanitize", "error: path traversal in secrets_file rejected", async (s) => 
   has(toolText(r), "'..'");
 });
 
-test("sanitize", "error: use_default combined with secrets_file rejected", async (s) => {
-  const r = await s.send("tools/call", {
-    name: "sanitize",
-    arguments: { content: "x", use_default: true, secrets_file: "relative/path.yaml" },
-  });
-  ok(toolIsError(r), "must be isError:true");
-  has(toolText(r), "use_default");
-});
-
-test("sanitize", "error: use_default combined with patterns rejected", async (s) => {
-  const r = await s.send("tools/call", {
-    name: "sanitize",
-    arguments: {
-      content: "x",
-      use_default: true,
-      patterns: [{ name: "p", pattern: "x", category: "generic" }],
-    },
-  });
-  ok(toolIsError(r), "must be isError:true");
-  has(toolText(r), "use_default");
-});
-
 test("sanitize", "error: content too large rejected", async (s) => {
   const r = await s.send("tools/call", {
     name: "sanitize",
@@ -617,8 +734,8 @@ test("scan", "returns report with match counts", async (s) => {
     arguments: {
       content: "user = alice@corp.com\nip = 10.0.0.1",
       patterns: [
-        { name: "email", pattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}", category: "email" },
-        { name: "ip", pattern: "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", category: "ipv4" },
+        { name: "email", pattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}", category: "email", kind: "regex" },
+        { name: "ip", pattern: "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b", category: "ipv4", kind: "regex" },
       ],
     },
   })));
@@ -696,15 +813,6 @@ test("scan", "error: absolute secrets_file rejected", async (s) => {
   const r = await s.send("tools/call", { name: "scan", arguments: { content: "x", secrets_file: "/etc/passwd" } });
   ok(toolIsError(r), "must be isError:true");
   has(toolText(r), "relative path");
-});
-
-test("scan", "error: use_default combined with secrets_file rejected", async (s) => {
-  const r = await s.send("tools/call", {
-    name: "scan",
-    arguments: { content: "x", use_default: true, secrets_file: "relative/path.yaml" },
-  });
-  ok(toolIsError(r), "must be isError:true");
-  has(toolText(r), "use_default");
 });
 
 test("scan", "error: content too large rejected", async (s) => {
@@ -1285,6 +1393,148 @@ for (const { group, name, fn } of tests) {
 }
 
 await session.close();
+
+// ===========================================================================
+// HTTP daemon mode
+// ===========================================================================
+
+{
+  console.log(`\n${CYAN}${BOLD}http daemon${RESET}`);
+
+  const port = await getFreePort();
+  const token = "test-http-daemon-token-abc123";
+  const baseUrl = `http://127.0.0.1:${port}`;
+
+  // Helper: run a single HTTP daemon test, updating shared passed/failed counts.
+  async function httpTest(name: string, fn: () => Promise<void>) {
+    try {
+      await fn();
+      console.log(`  ${GREEN}✓${RESET} ${name}`);
+      passed++;
+    } catch (e) {
+      console.log(`  ${RED}✗${RESET} ${name}`);
+      console.log(`    ${RED}${(e as Error).message}${RESET}`);
+      failed++;
+    }
+  }
+
+  // --- onListen: startup message goes to stderr, not stdout ---
+  await httpTest("startup message in stderr, nothing in stdout", async () => {
+    const listenPort = await getFreePort();
+    const proc = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run", "--allow-run", "--allow-env", "--allow-read", "--allow-write", "--allow-net",
+        MCP_SCRIPT, "--http", String(listenPort),
+      ],
+      stdin: "null", stdout: "piped", stderr: "piped",
+      env: { ...Deno.env.toObject(), SANITIZE_BIN, SANITIZE_LOG: "error", SANITIZE_MCP_HTTP_TOKEN: token },
+    }).spawn();
+
+    const stderr = await readStreamFor(proc.stderr, 4_000, "ready");
+    const stdout = await readStreamFor(proc.stdout, 500);
+    proc.kill("SIGTERM");
+    await proc.status.catch(() => {});
+
+    // stderr must contain our custom message with host and port
+    has(stderr, "127.0.0.1");
+    has(stderr, String(listenPort));
+    // Deno's default "Listening on ..." must NOT appear on stdout
+    ok(!stdout.includes("Listening"), `expected empty stdout, got: ${JSON.stringify(stdout)}`);
+  });
+
+  // --- startup without token exits non-zero ---
+  await httpTest("refuses to start without SANITIZE_MCP_HTTP_TOKEN", async () => {
+    const result = await new Deno.Command(Deno.execPath(), {
+      args: ["run", "--allow-run", "--allow-env", "--allow-read", "--allow-write", "--allow-net",
+        MCP_SCRIPT, "--http", String(port)],
+      stdin: "null", stdout: "null", stderr: "null",
+      env: { ...Deno.env.toObject(), SANITIZE_BIN, SANITIZE_LOG: "error" }, // no token
+    }).output();
+    ok(result.code !== 0, `expected non-zero exit code, got ${result.code}`);
+  });
+
+  // --- start daemon for the remaining tests ---
+  let daemon: Deno.ChildProcess | null = null;
+  try {
+    daemon = await startHttpDaemon(port, token);
+
+    await httpTest("401 without Authorization header", async () => {
+      const res = await fetch(`${baseUrl}/mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      await res.body?.cancel();
+      ok(res.status === 401, `expected 401, got ${res.status}`);
+    });
+
+    await httpTest("401 with wrong token", async () => {
+      const res = await fetch(`${baseUrl}/mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer wrong-token" },
+        body: "{}",
+      });
+      await res.body?.cancel();
+      ok(res.status === 401, `expected 401, got ${res.status}`);
+    });
+
+    await httpTest("404 for unknown path", async () => {
+      const res = await fetch(`${baseUrl}/health`, {
+        method: "GET",
+        headers: { "Authorization": `Bearer ${token}` },
+      });
+      await res.body?.cancel();
+      ok(res.status === 404, `expected 404, got ${res.status}`);
+    });
+
+    // --- onError: guard responses contain no stack traces ---
+    // transport.handleRequest never throws via external requests (it handles all
+    // protocol errors internally and returns Responses). The onError wiring is
+    // defensive; what we can verify is that all rejection responses (401, 404)
+    // are plain strings with no stack frames or error details.
+    await httpTest("error responses contain no stack traces or raw data", async () => {
+      const res401 = await fetch(`${baseUrl}/mcp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const body401 = await res401.text();
+      ok(!body401.includes("at "), `401 body must not contain stack frames: ${body401}`);
+      ok(!body401.includes("Error:"), `401 body must not contain Error: ${body401}`);
+
+      const res404 = await fetch(`${baseUrl}/notfound`, {
+        headers: { "Authorization": `Bearer ${token}` },
+      });
+      const body404 = await res404.text();
+      ok(!body404.includes("at "), `404 body must not contain stack frames: ${body404}`);
+    });
+
+    await httpTest("MCP tool call succeeds with valid token", async () => {
+      const hs = await startHttpMcpSession(baseUrl, token);
+      const r = toolText(await hs.send("tools/call", {
+        name: "sanitize",
+        arguments: {
+          content: "password: hunter2",
+          patterns: [{ name: "pw", pattern: "hunter2", category: "generic", kind: "literal" }],
+        },
+      }));
+      not(r, "hunter2");
+      has(r, "password");
+      await hs.close();
+    });
+
+    // Note: WebStandardStreamableHTTPServerTransport is single-session by design.
+    // Once the session is closed the transport does not accept a new initialize.
+    // Reconnection requires a daemon restart; multi-session support is a future concern.
+
+  } catch (e) {
+    console.log(`  ${RED}✗${RESET} daemon startup failed: ${(e as Error).message}`);
+    failed++;
+  } finally {
+    daemon?.kill("SIGTERM");
+    await daemon?.status.catch(() => {});
+  }
+}
 
 console.log(
   `\n${BOLD}${passed + failed} tests${RESET}: ${GREEN}${passed} passed${RESET}` +

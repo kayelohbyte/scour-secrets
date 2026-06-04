@@ -6,6 +6,10 @@
  * processing stays inside the audited Rust implementation. TypeScript is
  * responsible only for MCP protocol framing.
  *
+ * Flags:
+ *   --http [port]                   listen on HTTP at http://127.0.0.1:<port>/mcp instead of stdio.
+ *                                   Port defaults to 6277 when omitted. Requires SANITIZE_MCP_HTTP_TOKEN to be set.
+ *
  * Environment variables:
  *   SANITIZE_BIN                    path to the `sanitize` binary (default: "sanitize")
  *   SANITIZE_MCP_MAX_CONTENT_BYTES  per-call content size limit in bytes (default: 524288)
@@ -13,6 +17,7 @@
  *   SANITIZE_MCP_THREADS            worker thread cap for every sanitize invocation (default: unset = CLI default = logical CPUs)
  *   SANITIZE_MCP_MAX_ARCHIVE_DEPTH  default maximum archive nesting depth (default: 5; matches CLI default)
  *   SANITIZE_SECRETS_DIR            base directory for namespace resolution (required for `namespace` param)
+ *   SANITIZE_MCP_HTTP_TOKEN         bearer token required for HTTP daemon mode (must be set when using --http)
  *   SANITIZE_MCP_FILES_DENYLIST     comma-separated glob patterns for file paths that the `files` param must never match
  *                                   (e.g. "secrets/**,*.key,*.pem"). Patterns without '/' also match the basename.
  *
@@ -26,6 +31,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp";
 import { basename, join, resolve } from "@std/path";
 import { globToRegExp } from "@std/path/glob-to-regexp";
 import { z } from "zod";
@@ -76,6 +82,7 @@ const FILES_DENYLIST: RegExp[] = (() => {
 
 // Keep in sync with version field in Cargo.toml.
 const SERVER_VERSION = "0.11.0";
+const DEFAULT_HTTP_PORT = 6277;
 
 const NO_STRUCTURED_HANDOFF_ARG = "--no-structured-handoff";
 const TEMP_PREFIX = "sanitize-mcp-";
@@ -417,7 +424,7 @@ interface InlinePattern {
 }
 
 function yamlQuoteString(s: string): string {
-  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t') + '"';
+  return '"' + s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\0/g, '\\0').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t') + '"';
 }
 
 function buildSecretsJson(patterns: InlinePattern[]): string {
@@ -1092,7 +1099,8 @@ async function toolBuildSecrets(params: {
     let content: string;
 
     if (params.preset) {
-      const args = ["template", "--preset", params.preset, "--output", params.output_path, "--overwrite"];
+      const args = ["template", "--preset", params.preset, "--output", params.output_path];
+      if (params.overwrite) args.push("--overwrite");
       const result = await runSanitize(args, null);
       if (result.exitCode !== 0) {
         throw new Error(`sanitize template failed: ${safeStderr(result)}`);
@@ -1111,7 +1119,7 @@ async function toolBuildSecrets(params: {
       content += "\n  # Custom entries\n";
       for (const e of params.entries) {
         const kind = e.kind ?? "literal";
-        const patEscaped = e.pattern.replace(/'/g, "''");
+        const patEscaped = e.pattern.replace(/\0/g, '').replace(/'/g, "''");
         content += `  - label: ${yamlQuoteString(e.label)}\n`;
         content += `    kind: ${kind}\n`;
         content += `    pattern: '${patEscaped}'\n`;
@@ -1186,11 +1194,14 @@ async function toolTestPattern(params: {
     args.push(...params.values);
 
     const result = await runSanitize(args, null, env);
-    // Exit code 1 with "some values did not match" is informational — the JSON is still valid.
-    const isPartialMatch =
-      result.exitCode === 1 &&
-      result.stderr.includes("some values did not match any pattern");
-    if (result.exitCode !== 0 && !isPartialMatch) {
+    // Exit code 1 means some values didn't match — the JSON output is still valid.
+    // Detect this by attempting to parse stdout; a real error produces no JSON.
+    if (result.exitCode !== 0) {
+      if (result.exitCode === 1) {
+        try {
+          return JSON.parse(result.stdout);
+        } catch { /* fall through */ }
+      }
       throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
     }
     return JSON.parse(result.stdout);
@@ -1850,5 +1861,62 @@ server.tool(
 // Start
 // ---------------------------------------------------------------------------
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+const httpFlagIdx = Deno.args.indexOf("--http");
+let httpPort = NaN;
+if (httpFlagIdx !== -1) {
+  const nextArg = Deno.args[httpFlagIdx + 1];
+  if (nextArg !== undefined && !nextArg.startsWith("-")) {
+    const parsed = parseInt(nextArg, 10);
+    if (isNaN(parsed)) {
+      console.error(`error: --http requires a numeric port, got "${nextArg}"`);
+      Deno.exit(1);
+    }
+    httpPort = parsed;
+  } else {
+    httpPort = DEFAULT_HTTP_PORT;
+  }
+}
+
+if (!isNaN(httpPort)) {
+  if (httpPort < 1 || httpPort > 65535) {
+    console.error(`error: --http port must be between 1 and 65535, got ${httpPort}`);
+    Deno.exit(1);
+  }
+  const token = Deno.env.get("SANITIZE_MCP_HTTP_TOKEN");
+  if (!token) {
+    console.error("error: SANITIZE_MCP_HTTP_TOKEN must be set when using --http");
+    Deno.exit(1);
+  }
+
+  const expectedAuth = `Bearer ${token}`;
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: () => crypto.randomUUID(),
+  });
+  await server.connect(transport);
+
+  Deno.serve({
+    hostname: "127.0.0.1",
+    port: httpPort,
+    onListen: ({ port }) => {
+      // Explicit startup message to stderr; suppresses Deno's default stdout line.
+      console.error(`sanitize-mcp daemon ready on 127.0.0.1:${port}`);
+    },
+    onError: (err) => {
+      // Log only the error class name — never the message or stack, which may
+      // contain JSON-RPC payload data (file paths, etc.).
+      console.error(`sanitize-mcp: unhandled error: ${(err as Error).name}`);
+      return new Response("Internal Server Error", { status: 500 });
+    },
+  }, (req) => {
+    if (new URL(req.url).pathname !== "/mcp") {
+      return new Response("Not Found", { status: 404 });
+    }
+    if (req.headers.get("Authorization") !== expectedAuth) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+    return transport.handleRequest(req);
+  });
+} else {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}
