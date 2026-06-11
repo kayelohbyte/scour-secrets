@@ -41,17 +41,7 @@ impl Processor for YamlProcessor {
         store: &MappingStore,
     ) -> Result<Vec<u8>> {
         // Guard against alias bombs: reject inputs above YAML_INPUT_SIZE.
-        if content.len() > YAML_INPUT_SIZE {
-            return Err(SanitizeError::InputTooLarge {
-                size: content.len(),
-                limit: YAML_INPUT_SIZE,
-            });
-        }
-
-        let text = std::str::from_utf8(content).map_err(|e| SanitizeError::ParseError {
-            format: "YAML".into(),
-            message: format!("invalid UTF-8: {}", e),
-        })?;
+        let text = crate::processor::check_size_and_decode(content, "YAML", YAML_INPUT_SIZE)?;
 
         let mut value: Value =
             serde_yaml_ng::from_str(text).map_err(|e| SanitizeError::ParseError {

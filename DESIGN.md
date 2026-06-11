@@ -90,8 +90,15 @@ worst-case memory analysis. Do not remove limits. See
 ## 8. The strategy trait is the extension point
 
 Library users extend the tool through the `Strategy` trait in `src/strategy.rs`.
-The CLI's category-aware formatters in `src/generator.rs` are separate and
-optimized for the built-in use case.
+`Strategy::replace` receives the `Category`, the original value, and 32 bytes of
+entropy, and must return a deterministic replacement. The `StrategyGenerator`
+adapter handles entropy production (HMAC-deterministic or CSPRNG-random) so
+strategies remain pure functions of their inputs.
+
+The built-in `CategoryAwareStrategy` delegates to the same category-aware
+formatters as the CLI — email-shaped for emails, IP-shaped for IPs, and so on.
+Use it when you want CLI-quality replacements through the `Strategy` path, or
+as a reference for what category-aware output looks like.
 
 Before adding a new built-in category or formatter, consider whether a
 user-defined strategy covers the need. The bar for a new built-in is:

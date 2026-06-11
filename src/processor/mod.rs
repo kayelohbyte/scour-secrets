@@ -157,6 +157,27 @@ pub trait Processor: Send + Sync {
 // Helpers shared across processors
 // ---------------------------------------------------------------------------
 
+/// Validate the content size and decode it as UTF-8, returning a `&str`.
+///
+/// Used by the tree-based processors (JSON, YAML, TOML, JSONL) to share the
+/// identical "reject if too large, then decode" preamble without copy-pasting it.
+pub(crate) fn check_size_and_decode<'a>(
+    content: &'a [u8],
+    format: &str,
+    size_limit: usize,
+) -> Result<&'a str> {
+    if content.len() > size_limit {
+        return Err(SanitizeError::InputTooLarge {
+            size: content.len(),
+            limit: size_limit,
+        });
+    }
+    std::str::from_utf8(content).map_err(|e| SanitizeError::ParseError {
+        format: format.into(),
+        message: format!("invalid UTF-8: {e}"),
+    })
+}
+
 /// Replace a value through the mapping store using a field rule's category.
 ///
 /// Returns the original `value` unchanged when it is shorter than

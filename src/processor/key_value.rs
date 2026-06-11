@@ -285,81 +285,23 @@ fn process_line(
                             };
                             return Ok(());
                         }
-                        let raw_value = after_delim.trim();
-                        let (quote_char, inner) = detect_quotes(raw_value);
+                        let (quote_char, inner) = detect_quotes(after_delim.trim());
                         let processed = process_sub_content(inner, rule, cfg.store)?;
-                        emit_replaced(
-                            raw_key,
-                            cfg.delimiter,
-                            after_delim,
-                            quote_char,
-                            &processed,
-                            output,
-                        );
+                        emit_replaced(raw_key, cfg.delimiter, after_delim, quote_char, &processed, output);
                         output.push('\n');
                         return Ok(());
                     }
-                    let raw_value = after_delim.trim();
-                    let (quote_char, inner) = detect_quotes(raw_value);
-                    let (sanitize_inner, suffix) = match cfg.value_strip_suffix {
-                        Some(sfx) if inner.ends_with(sfx) => {
-                            (&inner[..inner.len() - sfx.len()], sfx)
-                        }
-                        _ => (inner, ""),
-                    };
+                    let (quote_char, inner) = detect_quotes(after_delim.trim());
+                    let (sanitize_inner, suffix) = strip_value_suffix(inner, cfg.value_strip_suffix);
                     let replaced = replace_value(sanitize_inner, rule, cfg.store)?;
-                    if suffix.is_empty() {
-                        emit_replaced(
-                            raw_key,
-                            cfg.delimiter,
-                            after_delim,
-                            quote_char,
-                            &replaced,
-                            output,
-                        );
-                    } else {
-                        emit_replaced_with_suffix(
-                            raw_key,
-                            cfg.delimiter,
-                            after_delim,
-                            quote_char,
-                            &replaced,
-                            suffix,
-                            output,
-                        );
-                    }
+                    emit_kv_replacement(raw_key, cfg.delimiter, after_delim, quote_char, &replaced, suffix, output);
                     output.push('\n');
                     return Ok(());
                 } else if let Some(sig) = find_field_signal(key, &cfg.profile.field_name_signals) {
-                    let raw_value = after_delim.trim();
-                    let (quote_char, inner) = detect_quotes(raw_value);
-                    let (sanitize_inner, suffix) = match cfg.value_strip_suffix {
-                        Some(sfx) if inner.ends_with(sfx) => {
-                            (&inner[..inner.len() - sfx.len()], sfx)
-                        }
-                        _ => (inner, ""),
-                    };
+                    let (quote_char, inner) = detect_quotes(after_delim.trim());
+                    let (sanitize_inner, suffix) = strip_value_suffix(inner, cfg.value_strip_suffix);
                     if let Some(replaced) = replace_by_signal(sanitize_inner, sig, cfg.store)? {
-                        if suffix.is_empty() {
-                            emit_replaced(
-                                raw_key,
-                                cfg.delimiter,
-                                after_delim,
-                                quote_char,
-                                &replaced,
-                                output,
-                            );
-                        } else {
-                            emit_replaced_with_suffix(
-                                raw_key,
-                                cfg.delimiter,
-                                after_delim,
-                                quote_char,
-                                &replaced,
-                                suffix,
-                                output,
-                            );
-                        }
+                        emit_kv_replacement(raw_key, cfg.delimiter, after_delim, quote_char, &replaced, suffix, output);
                         output.push('\n');
                         return Ok(());
                     }
@@ -420,6 +362,40 @@ fn process_line(
 }
 
 // ---------------------------------------------------------------------------
+// Shared value-replacement helpers
+// ---------------------------------------------------------------------------
+
+/// Strip `cfg.value_strip_suffix` from the end of `inner` if present.
+/// Returns `(value_to_replace, suffix_that_was_stripped)`.
+fn strip_value_suffix<'a>(inner: &'a str, strip_suffix: Option<&'a str>) -> (&'a str, &'a str) {
+    match strip_suffix {
+        Some(sfx) if inner.ends_with(sfx) => (&inner[..inner.len() - sfx.len()], sfx),
+        _ => (inner, ""),
+    }
+}
+
+/// Emit a replaced key-value pair to `output`, choosing `emit_replaced` or
+/// `emit_replaced_with_suffix` depending on whether a suffix was stripped.
+/// Does **not** push a trailing newline — the caller decides.
+fn emit_kv_replacement(
+    raw_key: &str,
+    delimiter: &str,
+    after_delim: &str,
+    quote_char: Option<char>,
+    replaced: &str,
+    suffix: &str,
+    output: &mut String,
+) {
+    if suffix.is_empty() {
+        emit_replaced(raw_key, delimiter, after_delim, quote_char, replaced, output);
+    } else {
+        emit_replaced_with_suffix(
+            raw_key, delimiter, after_delim, quote_char, replaced, suffix, output,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Comment-body sanitization
 // ---------------------------------------------------------------------------
 
@@ -428,7 +404,6 @@ fn process_line(
 /// lines. Returns `Some(sanitized_body)` — without a trailing newline — when a
 /// field rule matched and the value was replaced; `None` when nothing matched
 /// and the line should be preserved verbatim.
-#[allow(clippy::too_many_lines)]
 fn try_sanitize_kv_body(body: &str, cfg: &KvConfig<'_>) -> Result<Option<String>> {
     let body_trimmed = body.trim_start();
     let indent_len = body.len() - body_trimmed.len();
@@ -439,64 +414,18 @@ fn try_sanitize_kv_body(body: &str, cfg: &KvConfig<'_>) -> Result<Option<String>
         let after_delim = &body_trimmed[delim_pos + cfg.delimiter.len()..];
         let key = body_trimmed[..delim_pos].trim();
         if let Some(rule) = find_matching_rule(key, cfg.profile) {
-            let raw_value = after_delim.trim();
-            let (quote_char, inner) = detect_quotes(raw_value);
-            let (sanitize_inner, suffix) = match cfg.value_strip_suffix {
-                Some(sfx) if inner.ends_with(sfx) => (&inner[..inner.len() - sfx.len()], sfx),
-                _ => (inner, ""),
-            };
+            let (quote_char, inner) = detect_quotes(after_delim.trim());
+            let (sanitize_inner, suffix) = strip_value_suffix(inner, cfg.value_strip_suffix);
             let replaced = replace_value(sanitize_inner, rule, cfg.store)?;
             let mut out = String::new();
-            if suffix.is_empty() {
-                emit_replaced(
-                    raw_key,
-                    cfg.delimiter,
-                    after_delim,
-                    quote_char,
-                    &replaced,
-                    &mut out,
-                );
-            } else {
-                emit_replaced_with_suffix(
-                    raw_key,
-                    cfg.delimiter,
-                    after_delim,
-                    quote_char,
-                    &replaced,
-                    suffix,
-                    &mut out,
-                );
-            }
+            emit_kv_replacement(raw_key, cfg.delimiter, after_delim, quote_char, &replaced, suffix, &mut out);
             return Ok(Some(out));
         } else if let Some(sig) = find_field_signal(key, &cfg.profile.field_name_signals) {
-            let raw_value = after_delim.trim();
-            let (quote_char, inner) = detect_quotes(raw_value);
-            let (sanitize_inner, suffix) = match cfg.value_strip_suffix {
-                Some(sfx) if inner.ends_with(sfx) => (&inner[..inner.len() - sfx.len()], sfx),
-                _ => (inner, ""),
-            };
+            let (quote_char, inner) = detect_quotes(after_delim.trim());
+            let (sanitize_inner, suffix) = strip_value_suffix(inner, cfg.value_strip_suffix);
             if let Some(replaced) = replace_by_signal(sanitize_inner, sig, cfg.store)? {
                 let mut out = String::new();
-                if suffix.is_empty() {
-                    emit_replaced(
-                        raw_key,
-                        cfg.delimiter,
-                        after_delim,
-                        quote_char,
-                        &replaced,
-                        &mut out,
-                    );
-                } else {
-                    emit_replaced_with_suffix(
-                        raw_key,
-                        cfg.delimiter,
-                        after_delim,
-                        quote_char,
-                        &replaced,
-                        suffix,
-                        &mut out,
-                    );
-                }
+                emit_kv_replacement(raw_key, cfg.delimiter, after_delim, quote_char, &replaced, suffix, &mut out);
                 return Ok(Some(out));
             }
         }

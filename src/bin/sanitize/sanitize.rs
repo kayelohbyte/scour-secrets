@@ -313,7 +313,7 @@ fn load_run_resources(
                 pattern: pattern.to_string(),
                 kind: kind.to_string(),
                 category: "auth_token".to_string(),
-                label: Some(format!("quick:{pattern}")),
+                label: Some(format!("quick:{p}")),
                 values: vec![],
                 min_length: None,
                 max_length: None,
@@ -322,8 +322,12 @@ fn load_run_resources(
             }
         }).collect();
         let (patterns, errors) = entries_to_patterns(&quick_entries);
-        for (i, e) in &errors {
-            return Err((format!("invalid --quick pattern at position {i}: {e}"), 1));
+        if !errors.is_empty() {
+            let msgs: Vec<String> = errors
+                .iter()
+                .map(|(i, e)| format!("position {i}: {e}"))
+                .collect();
+            return Err((format!("invalid --quick pattern(s): {}", msgs.join("; ")), 1));
         }
         base_patterns.extend(patterns);
     }
@@ -359,12 +363,12 @@ fn load_run_resources(
         if all_allow_patterns.is_empty() {
             None
         } else {
-            let (matcher, al_warnings) =
+            let al_result =
                 rust_sanitize::allowlist::AllowlistMatcher::new(all_allow_patterns);
-            for w in &al_warnings {
+            for w in &al_result.warnings {
                 warn!(warning = %w, "allowlist pattern warning");
             }
-            let matcher = Arc::new(matcher);
+            let matcher = Arc::new(al_result.matcher);
             info!(patterns = matcher.pattern_count(), "allowlist loaded");
             Some(matcher)
         };

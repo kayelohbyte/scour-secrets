@@ -11,7 +11,7 @@
 
 use rust_sanitize::category::Category;
 use rust_sanitize::generator::{HmacGenerator, RandomGenerator};
-use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use rust_sanitize::scanner::{ScanConfig, ScanPattern, SecretsLoadResult, StreamScanner};
 use rust_sanitize::secrets::{
     encrypt_secrets, load_plaintext_secrets, load_secrets_auto, looks_encrypted, parse_secrets,
     SecretsFormat,
@@ -273,7 +273,7 @@ fn plaintext_load_bad_regex_returns_warnings() {
 #[test]
 fn plaintext_secrets_replace_email() {
     let store = make_hmac_store();
-    let (scanner, _, _) = StreamScanner::from_plaintext_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_plaintext_secrets(
         sample_json().as_bytes(),
         Some(SecretsFormat::Json),
         store,
@@ -293,7 +293,7 @@ fn plaintext_secrets_replace_email() {
 #[test]
 fn plaintext_secrets_replace_literal() {
     let store = make_hmac_store();
-    let (scanner, _, _) = StreamScanner::from_plaintext_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_plaintext_secrets(
         sample_json().as_bytes(),
         Some(SecretsFormat::Json),
         store,
@@ -313,7 +313,7 @@ fn plaintext_secrets_replace_literal() {
 #[test]
 fn plaintext_secrets_same_value_same_replacement() {
     let store = make_hmac_store();
-    let (scanner, _, _) = StreamScanner::from_plaintext_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_plaintext_secrets(
         sample_json().as_bytes(),
         Some(SecretsFormat::Json),
         store,
@@ -334,7 +334,7 @@ fn plaintext_secrets_same_value_same_replacement() {
 #[test]
 fn plaintext_secrets_no_match_passes_through() {
     let store = make_hmac_store();
-    let (scanner, _, _) = StreamScanner::from_plaintext_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_plaintext_secrets(
         sample_json().as_bytes(),
         Some(SecretsFormat::Json),
         store,
@@ -358,7 +358,7 @@ fn plaintext_deterministic_same_seed_same_output() {
     let build_scanner = || {
         let gen = Arc::new(HmacGenerator::new([99u8; 32]));
         let store = Arc::new(MappingStore::new(gen, None));
-        let (scanner, _, _) = StreamScanner::from_plaintext_secrets(
+        let SecretsLoadResult { scanner, .. } = StreamScanner::from_plaintext_secrets(
             sample_json().as_bytes(),
             Some(SecretsFormat::Json),
             store,
@@ -385,7 +385,7 @@ fn plaintext_deterministic_different_seeds_different_output() {
     let build_scanner_with_seed = |seed: [u8; 32]| {
         let gen = Arc::new(HmacGenerator::new(seed));
         let store = Arc::new(MappingStore::new(gen, None));
-        let (scanner, _, _) = StreamScanner::from_plaintext_secrets(
+        let SecretsLoadResult { scanner, .. } = StreamScanner::from_plaintext_secrets(
             sample_json().as_bytes(),
             Some(SecretsFormat::Json),
             store,
@@ -414,7 +414,7 @@ fn plaintext_deterministic_different_seeds_different_output() {
 #[test]
 fn plaintext_random_mode_replaces_correctly() {
     let store = make_random_store();
-    let (scanner, _, _) = StreamScanner::from_plaintext_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_plaintext_secrets(
         sample_json().as_bytes(),
         Some(SecretsFormat::Json),
         store,
@@ -463,7 +463,7 @@ fn plaintext_and_encrypted_produce_same_patterns() {
 #[test]
 fn plaintext_secrets_detects_matches_for_fail_on_match() {
     let store = make_hmac_store();
-    let (scanner, _, _) = StreamScanner::from_plaintext_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_plaintext_secrets(
         sample_json().as_bytes(),
         Some(SecretsFormat::Json),
         store,
@@ -482,7 +482,7 @@ fn plaintext_secrets_detects_matches_for_fail_on_match() {
 
     // Input without secrets.
     let store2 = make_hmac_store();
-    let (scanner2, _, _) = StreamScanner::from_plaintext_secrets(
+    let SecretsLoadResult { scanner: scanner2, .. } = StreamScanner::from_plaintext_secrets(
         sample_json().as_bytes(),
         Some(SecretsFormat::Json),
         store2,
@@ -535,7 +535,7 @@ fn plaintext_secrets_with_extra_patterns() {
     let extra = ScanPattern::from_regex(r"\b\d{3}-\d{2}-\d{4}\b", Category::Ssn, "ssn").unwrap();
 
     let store = make_hmac_store();
-    let (scanner, _, _) = StreamScanner::from_plaintext_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_plaintext_secrets(
         sample_json().as_bytes(),
         Some(SecretsFormat::Json),
         store,
@@ -564,7 +564,7 @@ fn plaintext_secrets_concurrent_scans() {
     use std::thread;
 
     let store = make_hmac_store();
-    let (scanner, _, _) = StreamScanner::from_plaintext_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_plaintext_secrets(
         sample_json().as_bytes(),
         Some(SecretsFormat::Json),
         Arc::clone(&store),
@@ -616,7 +616,7 @@ fn file_backed_plaintext_secrets() {
     // Load directly — no encryption step.
     let data = fs::read(&secrets_path).unwrap();
     let store = make_hmac_store();
-    let (scanner, warnings, _allow) = StreamScanner::from_plaintext_secrets(
+    let SecretsLoadResult { scanner, warnings, .. } = StreamScanner::from_plaintext_secrets(
         &data,
         Some(SecretsFormat::Json),
         store,
@@ -667,7 +667,7 @@ fn load_auto_toml_plaintext() {
 #[test]
 fn plaintext_secrets_large_file_processing() {
     let store = make_hmac_store();
-    let (scanner, _, _) = StreamScanner::from_plaintext_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_plaintext_secrets(
         sample_json().as_bytes(),
         Some(SecretsFormat::Json),
         store,
@@ -696,4 +696,36 @@ fn plaintext_secrets_large_file_processing() {
     assert_eq!(stats.matches_found, 60);
     let out_str = String::from_utf8_lossy(&output);
     assert!(!out_str.contains("SUPER_SECRET_TOKEN_XYZ"));
+}
+
+#[test]
+fn plaintext_load_allow_entries_populate_allow_patterns() {
+    let secrets_yaml = b"\
+- kind: allow\n  pattern: 'safe-value'\n\
+- kind: allow\n  values: ['also-safe', 'another-safe']\n\
+- pattern: 'catch-me'\n  kind: literal\n  category: auth_token\n";
+
+    let store = make_hmac_store();
+    let SecretsLoadResult { warnings, allow_patterns, .. } = StreamScanner::from_plaintext_secrets(
+        secrets_yaml,
+        Some(SecretsFormat::Yaml),
+        store,
+        default_scan_config(),
+        vec![],
+    )
+    .unwrap();
+
+    assert!(warnings.is_empty(), "no warnings expected; got: {warnings:?}");
+    assert!(
+        allow_patterns.contains(&"safe-value".to_string()),
+        "allow_patterns must include single-pattern allow entry; got: {allow_patterns:?}"
+    );
+    assert!(
+        allow_patterns.contains(&"also-safe".to_string()),
+        "allow_patterns must include first values-list entry; got: {allow_patterns:?}"
+    );
+    assert!(
+        allow_patterns.contains(&"another-safe".to_string()),
+        "allow_patterns must include second values-list entry; got: {allow_patterns:?}"
+    );
 }

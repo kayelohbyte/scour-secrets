@@ -251,4 +251,18 @@ mod tests {
         let text = String::from_utf8(output).unwrap();
         assert!(!text.contains("abc123"));
     }
+
+    #[test]
+    fn input_too_large_returns_error() {
+        let store = make_store();
+        // One byte over the limit — only the length is checked before any parsing.
+        let content = vec![b'\n'; DEFAULT_INPUT_SIZE + 1];
+        let err = IniProcessor
+            .process(&content, &wildcard_profile(), &store)
+            .unwrap_err();
+        assert!(
+            matches!(err, SanitizeError::InputTooLarge { .. }),
+            "oversized input must return InputTooLarge; got: {err:?}",
+        );
+    }
 }

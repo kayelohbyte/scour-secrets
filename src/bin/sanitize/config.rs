@@ -428,6 +428,14 @@ pub(crate) fn run_init(args: &InitArgs) -> Result<(), (String, i32)> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::{Mutex, OnceLock};
+
+    /// Serialise tests that read/write process-global env vars so they
+    /// can't race each other when `cargo test` runs them in parallel.
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_MUTEX.get_or_init(Mutex::default).lock().unwrap()
+    }
 
     // ── find_project_config_from ─────────────────────────────────────────────
 
@@ -516,6 +524,7 @@ mod tests {
 
     #[test]
     fn load_settings_skips_when_env_var_set() {
+        let _guard = env_lock();
         std::env::set_var("SANITIZE_NO_SETTINGS", "1");
         let s = load_settings();
         std::env::remove_var("SANITIZE_NO_SETTINGS");
@@ -525,6 +534,7 @@ mod tests {
 
     #[test]
     fn load_settings_returns_default_when_file_missing() {
+        let _guard = env_lock();
         // Point XDG_CONFIG_HOME to an empty temp dir so no settings file exists.
         let dir = tempfile::tempdir().unwrap();
         std::env::remove_var("SANITIZE_NO_SETTINGS");
@@ -536,6 +546,7 @@ mod tests {
 
     #[test]
     fn load_settings_parses_valid_yaml() {
+        let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join("sanitize");
         fs::create_dir_all(&config_dir).unwrap();
@@ -554,6 +565,7 @@ mod tests {
 
     #[test]
     fn load_settings_returns_default_on_malformed_yaml() {
+        let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join("sanitize");
         fs::create_dir_all(&config_dir).unwrap();

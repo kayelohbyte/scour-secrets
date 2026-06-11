@@ -13,14 +13,17 @@
 use rust_sanitize::category::Category;
 use rust_sanitize::generator::HmacGenerator;
 use rust_sanitize::processor::csv_proc::CsvProcessor;
+use rust_sanitize::processor::env_proc::EnvProcessor;
+use rust_sanitize::processor::ini_proc::IniProcessor;
 use rust_sanitize::processor::json_proc::JsonProcessor;
 use rust_sanitize::processor::key_value::KeyValueProcessor;
 use rust_sanitize::processor::profile::{FieldRule, FileTypeProfile};
 use rust_sanitize::processor::registry::ProcessorRegistry;
+use rust_sanitize::processor::toml_proc::TomlProcessor;
 use rust_sanitize::processor::xml_proc::XmlProcessor;
 use rust_sanitize::processor::yaml_proc::YamlProcessor;
 use rust_sanitize::processor::Processor;
-use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use rust_sanitize::scanner::{ScanConfig, ScanPattern, SecretsLoadResult, StreamScanner};
 use rust_sanitize::secrets::{encrypt_secrets, SecretsFormat};
 use rust_sanitize::store::MappingStore;
 use std::sync::Arc;
@@ -479,7 +482,7 @@ fn processor_with_encrypted_secrets_shared_store() {
     let store = make_store();
 
     // Build a scanner from encrypted secrets (for fallback).
-    let scanner = StreamScanner::from_encrypted_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_encrypted_secrets(
         &encrypted,
         password,
         Some(SecretsFormat::Json),
@@ -487,8 +490,7 @@ fn processor_with_encrypted_secrets_shared_store() {
         ScanConfig::default(),
         vec![],
     )
-    .unwrap()
-    .0;
+    .unwrap();
 
     // Also process a structured JSON config through the processor.
     let json_proc = JsonProcessor;
@@ -770,4 +772,234 @@ fn xml_html_entities_roundtrip() {
         }
         buf.clear();
     }
+}
+
+// ===========================================================================
+// TOML processor integration tests
+// ===========================================================================
+
+#[test]
+fn toml_replaces_targeted_values_preserves_structure() {
+    let store = make_store();
+    let proc = TomlProcessor;
+    let content = b"[database]\nhost = \"db-prod.corp.com\"\npassword = \"s3cret!\"\nport = 5432\n\n[smtp]\nuser = \"admin@corp.com\"\npassword = \"smtp-pass\"\n";
+    let profile = FileTypeProfile::new(
+        "toml",
+        vec![
+            FieldRule::new("database.password"),
+            FieldRule::new("smtp.user").with_category(Category::Email),
+            FieldRule::new("smtp.password"),
+        ],
+    );
+    let output = proc.process(content, &profile, &store).unwrap();
+    let text = String::from_utf8(output).unwrap();
+
+    // Targeted values replaced.
+    assert!(!text.contains("s3cret!"), "db password must be replaced");
+    assert!(!text.contains("admin@corp.com"), "smtp user must be replaced");
+    assert!(!text.contains("smtp-pass"), "smtp password must be replaced");
+
+    // Untargeted values preserved.
+    assert!(text.contains("db-prod.corp.com"), "host must be preserved");
+    assert!(text.contains("5432"), "port must be preserved");
+
+    // Output is valid TOML.
+    text.parse::<toml::Value>()
+        .expect("sanitized output must be valid TOML");
+}
+
+#[test]
+fn toml_via_registry_dispatch() {
+    let reg = ProcessorRegistry::with_builtins();
+    let store = make_store();
+    let content = b"[server]\napi_key = \"sk-secret-123\"\nhost = \"internal.corp.com\"\n";
+    let profile = FileTypeProfile::new("toml", vec![FieldRule::new("server.api_key")]);
+
+    let result = reg.process(content, &profile, &store).unwrap();
+    assert!(result.is_some(), "registry must dispatch to TOML processor");
+    let text = String::from_utf8(result.unwrap()).unwrap();
+    assert!(!text.contains("sk-secret-123"));
+    assert!(text.contains("internal.corp.com"), "untargeted field preserved");
+}
+
+#[test]
+fn toml_replacement_is_deterministic() {
+    let content = b"[auth]\ntoken = \"secret-token-abc\"\n";
+    let profile = FileTypeProfile::new("toml", vec![FieldRule::new("auth.token")]);
+
+    let store1 = make_store();
+    let store2 = make_store();
+    let out1 = TomlProcessor.process(content, &profile, &store1).unwrap();
+    let out2 = TomlProcessor.process(content, &profile, &store2).unwrap();
+    assert_eq!(out1, out2, "identical seed + input must produce identical output");
+}
+
+// ===========================================================================
+// ENV processor integration tests
+// ===========================================================================
+
+#[test]
+fn env_replaces_targeted_values_preserves_keys_and_structure() {
+    let store = make_store();
+    let proc = EnvProcessor;
+    let content =
+        b"# App config\nDATABASE_URL=postgres://user:s3cret@prod-db/app\nAPI_KEY=sk-abc123\nDEBUG=false\n";
+    let profile = FileTypeProfile::new(
+        "env",
+        vec![
+            FieldRule::new("DATABASE_URL"),
+            FieldRule::new("API_KEY"),
+        ],
+    );
+    let output = proc.process(content, &profile, &store).unwrap();
+    let text = String::from_utf8(output).unwrap();
+
+    // Secrets replaced.
+    assert!(!text.contains("s3cret"), "DATABASE_URL value must be replaced");
+    assert!(!text.contains("sk-abc123"), "API_KEY value must be replaced");
+
+    // Keys and unrelated values preserved.
+    assert!(text.contains("DATABASE_URL="), "key must be preserved");
+    assert!(text.contains("API_KEY="), "key must be preserved");
+    assert!(text.contains("DEBUG=false"), "untargeted line must be unchanged");
+    assert!(text.contains("# App config"), "comment must be preserved");
+}
+
+#[test]
+fn env_via_registry_dispatch() {
+    let reg = ProcessorRegistry::with_builtins();
+    let store = make_store();
+    let content = b"SECRET_KEY=hunter2\nPUBLIC_HOST=example.com\n";
+    let profile = FileTypeProfile::new("env", vec![FieldRule::new("SECRET_KEY")]);
+
+    let result = reg.process(content, &profile, &store).unwrap();
+    assert!(result.is_some(), "registry must dispatch to ENV processor");
+    let text = String::from_utf8(result.unwrap()).unwrap();
+    assert!(!text.contains("hunter2"));
+    assert!(text.contains("PUBLIC_HOST=example.com"), "untargeted line preserved");
+}
+
+#[test]
+fn env_export_prefix_preserved_after_replacement() {
+    let store = make_store();
+    let content = b"export TOKEN=my-secret-token\nHOST=localhost\n";
+    let profile = FileTypeProfile::new("env", vec![FieldRule::new("TOKEN")]);
+    let output = EnvProcessor.process(content, &profile, &store).unwrap();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("export TOKEN="), "export prefix must survive");
+    assert!(!text.contains("my-secret-token"), "value must be replaced");
+}
+
+// ===========================================================================
+// INI processor integration tests
+// ===========================================================================
+
+#[test]
+fn ini_replaces_targeted_values_preserves_sections_and_keys() {
+    let store = make_store();
+    let proc = IniProcessor;
+    let content = b"[database]\nhost = db.corp.com\npassword = hunter2\nport = 5432\n\n[smtp]\nuser = ops@corp.com\npassword = mail-secret\n";
+    let profile = FileTypeProfile::new(
+        "ini",
+        vec![
+            FieldRule::new("database.password"),
+            FieldRule::new("smtp.user").with_category(Category::Email),
+            FieldRule::new("smtp.password"),
+        ],
+    );
+    let output = proc.process(content, &profile, &store).unwrap();
+    let text = String::from_utf8(output).unwrap();
+
+    // Targeted values replaced.
+    assert!(!text.contains("hunter2"), "db password must be replaced");
+    assert!(!text.contains("ops@corp.com"), "smtp user must be replaced");
+    assert!(!text.contains("mail-secret"), "smtp password must be replaced");
+
+    // Structure preserved.
+    assert!(text.contains("[database]"), "section header must be preserved");
+    assert!(text.contains("[smtp]"), "section header must be preserved");
+    assert!(text.contains("host = db.corp.com"), "untargeted value preserved");
+    assert!(text.contains("port = 5432"), "untargeted value preserved");
+}
+
+#[test]
+fn ini_via_registry_dispatch() {
+    let reg = ProcessorRegistry::with_builtins();
+    let store = make_store();
+    let content = b"[auth]\napi_key = topsecret\nregion = us-east-1\n";
+    let profile = FileTypeProfile::new("ini", vec![FieldRule::new("auth.api_key")]);
+
+    let result = reg.process(content, &profile, &store).unwrap();
+    assert!(result.is_some(), "registry must dispatch to INI processor");
+    let text = String::from_utf8(result.unwrap()).unwrap();
+    assert!(!text.contains("topsecret"));
+    assert!(text.contains("region = us-east-1"), "untargeted value preserved");
+}
+
+#[test]
+fn ini_comments_and_blank_lines_unchanged() {
+    let store = make_store();
+    let content = b"; Global config\n# Another comment\n\n[section]\nkey = value\n";
+    let profile = FileTypeProfile::new("ini", vec![FieldRule::new("section.key")]);
+    let output = IniProcessor.process(content, &profile, &store).unwrap();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains("; Global config"), "semicolon comment preserved");
+    assert!(text.contains("# Another comment"), "hash comment preserved");
+    assert!(!text.contains("value"), "targeted value replaced");
+}
+
+#[test]
+fn ini_colon_delimiter_value_replaced() {
+    let store = make_store();
+    let content = b"[database]\nhost: db.corp.com\npassword: hunter2\nport: 5432\n";
+    let profile = FileTypeProfile::new(
+        "ini",
+        vec![FieldRule::new("database.password")],
+    );
+    let output = IniProcessor.process(content, &profile, &store).unwrap();
+    let text = String::from_utf8(output).unwrap();
+    assert!(!text.contains("hunter2"), "colon-delimited password must be replaced");
+    assert!(text.contains("host: db.corp.com"), "untargeted colon-value preserved");
+    assert!(text.contains("port: 5432"), "untargeted port preserved");
+    assert!(text.contains("[database]"), "section header preserved");
+}
+
+#[test]
+fn ini_global_key_before_section_replaced() {
+    let store = make_store();
+    let content = b"api_key = globaltoken\ndebug = false\n\n[section]\nother = value\n";
+    let profile = FileTypeProfile::new(
+        "ini",
+        vec![FieldRule::new("api_key")],
+    );
+    let output = IniProcessor.process(content, &profile, &store).unwrap();
+    let text = String::from_utf8(output).unwrap();
+    assert!(!text.contains("globaltoken"), "global key value must be replaced");
+    assert!(text.contains("debug = false"), "untargeted global key preserved");
+    assert!(text.contains("[section]"), "section header preserved");
+    assert!(text.contains("other = value"), "section value preserved");
+}
+
+#[test]
+fn xml_depth_limit_exceeded_returns_error() {
+    use std::fmt::Write as FmtWrite;
+    let store = make_store();
+    // 260 levels of nesting exceeds the XML depth cap (256).
+    let mut open = String::new();
+    let mut close = String::new();
+    for i in 0..260usize {
+        write!(open, "<l{i}>").unwrap();
+    }
+    for i in (0..260usize).rev() {
+        write!(close, "</l{i}>").unwrap();
+    }
+    let content = format!("{open}secret{close}");
+    let profile = FileTypeProfile::new("xml", vec![]);
+    let err = XmlProcessor
+        .process(content.as_bytes(), &profile, &store)
+        .unwrap_err();
+    assert!(
+        matches!(err, rust_sanitize::SanitizeError::RecursionDepthExceeded(_)),
+        "exceeding depth limit must return RecursionDepthExceeded; got: {err:?}",
+    );
 }

@@ -43,17 +43,7 @@ impl Processor for TomlProcessor {
         profile: &FileTypeProfile,
         store: &MappingStore,
     ) -> Result<Vec<u8>> {
-        if content.len() > DEFAULT_INPUT_SIZE {
-            return Err(SanitizeError::InputTooLarge {
-                size: content.len(),
-                limit: DEFAULT_INPUT_SIZE,
-            });
-        }
-
-        let text = std::str::from_utf8(content).map_err(|e| SanitizeError::ParseError {
-            format: "TOML".into(),
-            message: format!("invalid UTF-8: {}", e),
-        })?;
+        let text = crate::processor::check_size_and_decode(content, "TOML", DEFAULT_INPUT_SIZE)?;
 
         let mut value: Value = toml::from_str(text).map_err(|e| SanitizeError::ParseError {
             format: "TOML".into(),

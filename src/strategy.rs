@@ -1,6 +1,6 @@
 //! Pluggable replacement strategies.
 //!
-//! This module provides the [`Strategy`] trait and five built-in
+//! This module provides the [`Strategy`] trait and six built-in
 //! implementations that can be composed with the mapping engine via
 //! [`StrategyGenerator`], an adapter that implements
 //! [`ReplacementGenerator`].
@@ -60,7 +60,7 @@
 //!
 //! 1. Create a struct implementing [`Strategy`].
 //! 2. Return a unique name from [`Strategy::name`].
-//! 3. Implement [`Strategy::replace`] as a pure function of `(original, entropy)`.
+//! 3. Implement [`Strategy::replace`] as a pure function of `(category, original, entropy)`.
 //! 4. Wrap it in a [`StrategyGenerator`] to use with `MappingStore`.
 //!
 //! Third-party crates can implement `Strategy` without modifying this crate,
@@ -94,10 +94,10 @@ pub trait Strategy: Send + Sync {
     ///
     /// # Contract
     ///
-    /// - Must be deterministic: same `(original, entropy)` → same output.
+    /// - Must be deterministic: same `(category, original, entropy)` → same output.
     /// - Must not perform I/O or access external mutable state.
     /// - Returned value should be clearly synthetic / non-sensitive.
-    fn replace(&self, original: &str, entropy: &[u8; 32]) -> String;
+    fn replace(&self, category: &Category, original: &str, entropy: &[u8; 32]) -> String;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +183,7 @@ impl StrategyGenerator {
 impl ReplacementGenerator for StrategyGenerator {
     fn generate(&self, category: &Category, original: &str) -> String {
         let entropy = self.entropy(category, original);
-        self.strategy.replace(original, &entropy)
+        self.strategy.replace(category, original, &entropy)
     }
 }
 
@@ -209,6 +209,14 @@ fn xorshift64_seed(entropy: &[u8; 32]) -> u64 {
         state = 0xDEAD_BEEF_CAFE_BABE;
     }
     state
+}
+
+/// Advance a xorshift64 PRNG state by one step.
+#[inline]
+fn xorshift64_step(state: &mut u64) {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
 }
 
 // ---------------------------------------------------------------------------
@@ -251,7 +259,7 @@ impl Strategy for RandomString {
         "random_string"
     }
 
-    fn replace(&self, _original: &str, entropy: &[u8; 32]) -> String {
+    fn replace(&self, _category: &Category, _original: &str, entropy: &[u8; 32]) -> String {
         const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz\
                                   ABCDEFGHIJKLMNOPQRSTUVWXYZ\
                                   0123456789";
@@ -259,10 +267,7 @@ impl Strategy for RandomString {
         let mut state = xorshift64_seed(entropy);
 
         for _ in 0..self.len {
-            // xorshift64
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
+            xorshift64_step(&mut state);
             #[allow(clippy::cast_possible_truncation)]
             // truncation is intentional for index mapping
             let idx = (state as usize) % CHARSET.len();
@@ -301,7 +306,7 @@ impl Strategy for RandomUuid {
         "random_uuid"
     }
 
-    fn replace(&self, _original: &str, entropy: &[u8; 32]) -> String {
+    fn replace(&self, _category: &Category, _original: &str, entropy: &[u8; 32]) -> String {
         // Take the first 16 bytes to form a UUID.
         let mut bytes = [0u8; 16];
         bytes.copy_from_slice(&entropy[..16]);
@@ -352,7 +357,7 @@ impl Strategy for FakeIp {
         "fake_ip"
     }
 
-    fn replace(&self, original: &str, entropy: &[u8; 32]) -> String {
+    fn replace(&self, _category: &Category, original: &str, entropy: &[u8; 32]) -> String {
         // Preserve dots; replace every other character with a deterministic
         // digit so the output has the same byte length as the original.
         let mut buf = String::with_capacity(original.len());
@@ -397,7 +402,7 @@ impl Strategy for PreserveLength {
         "preserve_length"
     }
 
-    fn replace(&self, original: &str, entropy: &[u8; 32]) -> String {
+    fn replace(&self, _category: &Category, original: &str, entropy: &[u8; 32]) -> String {
         const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 
         let target_len = original.len();
@@ -408,9 +413,7 @@ impl Strategy for PreserveLength {
         let mut state = xorshift64_seed(entropy);
         let mut result = String::with_capacity(target_len);
         for _ in 0..target_len {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
+            xorshift64_step(&mut state);
             #[allow(clippy::cast_possible_truncation)]
             // truncation is intentional for index mapping
             let idx = (state as usize) % CHARSET.len();
@@ -464,7 +467,7 @@ impl Strategy for HmacHash {
         "hmac_hash"
     }
 
-    fn replace(&self, original: &str, _entropy: &[u8; 32]) -> String {
+    fn replace(&self, _category: &Category, original: &str, _entropy: &[u8; 32]) -> String {
         use std::fmt::Write;
 
         type HmacSha256 = Hmac<Sha256>;
@@ -481,6 +484,43 @@ impl Strategy for HmacHash {
             let _ = write!(hex, "{:02x}", b);
         }
         hex[..self.output_len].to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 6. CategoryAwareStrategy
+// ---------------------------------------------------------------------------
+
+/// Built-in strategy that delegates to the same category-aware formatters
+/// used by the CLI.
+///
+/// Replacements are shaped to match their category: email-shaped for emails,
+/// IP-shaped for IPs, JWT-shaped for JWTs, and so on — identical output
+/// quality to what [`HmacGenerator`](crate::generator::HmacGenerator)
+/// produces. Use this strategy when you want full structured replacement
+/// behaviour through the [`Strategy`] / [`StrategyGenerator`] path.
+pub struct CategoryAwareStrategy;
+
+impl CategoryAwareStrategy {
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for CategoryAwareStrategy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Strategy for CategoryAwareStrategy {
+    fn name(&self) -> &'static str {
+        "category_aware"
+    }
+
+    fn replace(&self, category: &Category, original: &str, entropy: &[u8; 32]) -> String {
+        crate::generator::format_replacement(category, entropy, original)
     }
 }
 
@@ -517,10 +557,11 @@ mod tests {
             Box::new(FakeIp::new()),
             Box::new(PreserveLength::new()),
             Box::new(HmacHash::new([42u8; 32])),
+            Box::new(CategoryAwareStrategy::new()),
         ];
         for s in &strategies {
-            let a = s.replace("hello world", &entropy);
-            let b = s.replace("hello world", &entropy);
+            let a = s.replace(&Category::AuthToken, "hello world", &entropy);
+            let b = s.replace(&Category::AuthToken, "hello world", &entropy);
             assert_eq!(a, b, "strategy '{}' must be deterministic", s.name());
         }
     }
@@ -534,10 +575,11 @@ mod tests {
             Box::new(RandomUuid::new()),
             Box::new(FakeIp::new()),
             Box::new(PreserveLength::new()),
+            Box::new(CategoryAwareStrategy::new()),
         ];
         for s in &strategies {
-            let a = s.replace("test", &e1);
-            let b = s.replace("test", &e2);
+            let a = s.replace(&Category::AuthToken, "test", &e1);
+            let b = s.replace(&Category::AuthToken, "test", &e2);
             assert_ne!(
                 a,
                 b,
@@ -552,7 +594,7 @@ mod tests {
     #[test]
     fn random_string_default_length() {
         let s = RandomString::new();
-        let out = s.replace("anything", &test_entropy());
+        let out = s.replace(&Category::AuthToken, "anything", &test_entropy());
         assert_eq!(out.len(), 16);
         assert!(
             out.chars().all(|c| c.is_ascii_alphanumeric()),
@@ -564,7 +606,7 @@ mod tests {
     #[test]
     fn random_string_custom_length() {
         let s = RandomString::with_length(8);
-        let out = s.replace("anything", &test_entropy());
+        let out = s.replace(&Category::AuthToken, "anything", &test_entropy());
         assert_eq!(out.len(), 8);
     }
 
@@ -581,7 +623,7 @@ mod tests {
     #[test]
     fn random_uuid_format() {
         let s = RandomUuid::new();
-        let out = s.replace("anything", &test_entropy());
+        let out = s.replace(&Category::AuthToken, "anything", &test_entropy());
         // 8-4-4-4-12 = 36 chars
         assert_eq!(out.len(), 36, "UUID must be 36 chars: {}", out);
         let parts: Vec<&str> = out.split('-').collect();
@@ -608,7 +650,7 @@ mod tests {
     fn fake_ip_format() {
         let s = FakeIp::new();
         let input = "192.168.1.1";
-        let out = s.replace(input, &test_entropy());
+        let out = s.replace(&Category::IpV4, input, &test_entropy());
         // Length preserved.
         assert_eq!(
             out.len(),
@@ -644,7 +686,7 @@ mod tests {
     fn preserve_length_matches() {
         let s = PreserveLength::new();
         for input in &["a", "hello", "this is a fairly long string indeed", ""] {
-            let out = s.replace(input, &test_entropy());
+            let out = s.replace(&Category::AuthToken, input, &test_entropy());
             assert_eq!(
                 out.len(),
                 input.len(),
@@ -657,7 +699,7 @@ mod tests {
     #[test]
     fn preserve_length_characters() {
         let s = PreserveLength::new();
-        let out = s.replace("hello!", &test_entropy());
+        let out = s.replace(&Category::AuthToken, "hello!", &test_entropy());
         assert!(
             out.chars().all(|c| c.is_ascii_alphanumeric()),
             "output must be alphanumeric: {}",
@@ -670,8 +712,8 @@ mod tests {
     #[test]
     fn hmac_hash_deterministic_with_key() {
         let s = HmacHash::new([42u8; 32]);
-        let a = s.replace("secret", &[0u8; 32]);
-        let b = s.replace("secret", &[0xFF; 32]);
+        let a = s.replace(&Category::AuthToken, "secret", &[0u8; 32]);
+        let b = s.replace(&Category::AuthToken, "secret", &[0xFF; 32]);
         // Entropy is ignored — result depends only on key + original.
         assert_eq!(a, b, "HmacHash must ignore entropy");
     }
@@ -679,7 +721,7 @@ mod tests {
     #[test]
     fn hmac_hash_default_length() {
         let s = HmacHash::new([0u8; 32]);
-        let out = s.replace("test", &[0u8; 32]);
+        let out = s.replace(&Category::AuthToken, "test", &[0u8; 32]);
         assert_eq!(out.len(), 32, "default output is 32 hex chars");
         assert!(
             out.chars().all(|c| c.is_ascii_hexdigit()),
@@ -691,7 +733,7 @@ mod tests {
     #[test]
     fn hmac_hash_custom_length() {
         let s = HmacHash::with_output_len([0u8; 32], 12);
-        let out = s.replace("test", &[0u8; 32]);
+        let out = s.replace(&Category::AuthToken, "test", &[0u8; 32]);
         assert_eq!(out.len(), 12);
     }
 
@@ -699,16 +741,16 @@ mod tests {
     fn hmac_hash_different_keys() {
         let s1 = HmacHash::new([1u8; 32]);
         let s2 = HmacHash::new([2u8; 32]);
-        let a = s1.replace("test", &[0u8; 32]);
-        let b = s2.replace("test", &[0u8; 32]);
+        let a = s1.replace(&Category::AuthToken, "test", &[0u8; 32]);
+        let b = s2.replace(&Category::AuthToken, "test", &[0u8; 32]);
         assert_ne!(a, b, "different keys must produce different output");
     }
 
     #[test]
     fn hmac_hash_different_inputs() {
         let s = HmacHash::new([42u8; 32]);
-        let a = s.replace("alice", &[0u8; 32]);
-        let b = s.replace("bob", &[0u8; 32]);
+        let a = s.replace(&Category::AuthToken, "alice", &[0u8; 32]);
+        let b = s.replace(&Category::AuthToken, "bob", &[0u8; 32]);
         assert_ne!(a, b);
     }
 
@@ -776,6 +818,7 @@ mod tests {
         assert_send_sync::<FakeIp>();
         assert_send_sync::<PreserveLength>();
         assert_send_sync::<HmacHash>();
+        assert_send_sync::<CategoryAwareStrategy>();
         assert_send_sync::<StrategyGenerator>();
     }
 
@@ -787,6 +830,7 @@ mod tests {
             Box::new(FakeIp::new()),
             Box::new(PreserveLength::new()),
             Box::new(HmacHash::new([0u8; 32])),
+            Box::new(CategoryAwareStrategy::new()),
         ];
         let mut names: Vec<&str> = strategies.iter().map(|s| s.name()).collect();
         let len_before = names.len();
@@ -829,6 +873,59 @@ mod tests {
         assert_eq!(store.len(), 2000);
     }
 
+    // ---- CategoryAwareStrategy ----
+
+    #[test]
+    fn category_aware_email_shaped() {
+        let s = CategoryAwareStrategy::new();
+        let input = "alice@corp.com";
+        let out = s.replace(&Category::Email, input, &test_entropy());
+        assert_eq!(out.len(), input.len(), "length must be preserved");
+        assert!(out.contains('@'), "output must be email-shaped");
+        assert!(out.ends_with("@corp.com"), "domain must be preserved");
+    }
+
+    #[test]
+    fn category_aware_length_preserved_across_categories() {
+        let s = CategoryAwareStrategy::new();
+        let cases = [
+            (Category::Email, "alice@corp.com"),
+            (Category::IpV4, "192.168.1.1"),
+            (Category::AuthToken, "ghp_abc123secrettoken"),
+            (Category::Hostname, "db-prod.internal"),
+        ];
+        for (cat, input) in &cases {
+            let out = s.replace(cat, input, &test_entropy());
+            assert_eq!(out.len(), input.len(), "length mismatch for {:?}", cat);
+            assert_ne!(out, *input, "output must differ from input for {:?}", cat);
+        }
+    }
+
+    #[test]
+    fn category_aware_random_mode_consistent_within_run() {
+        // EntropyMode::Random produces fresh entropy each call, but the
+        // MappingStore dedup cache must still guarantee per-run consistency.
+        let gen = Arc::new(StrategyGenerator::new(
+            Box::new(CategoryAwareStrategy::new()),
+            EntropyMode::Random,
+        ));
+        let store = crate::store::MappingStore::new(gen, None);
+        let r1 = store.get_or_insert(&Category::Email, "alice@corp.com").unwrap();
+        let r2 = store.get_or_insert(&Category::Email, "alice@corp.com").unwrap();
+        assert_eq!(r1, r2, "store cache must return same replacement within run");
+        assert!(r1.contains('@'), "replacement must be email-shaped");
+        assert_eq!(r1.len(), "alice@corp.com".len(), "length must be preserved");
+    }
+
+    #[test]
+    fn category_aware_deterministic() {
+        let s = CategoryAwareStrategy::new();
+        let entropy = test_entropy();
+        let a = s.replace(&Category::Email, "alice@corp.com", &entropy);
+        let b = s.replace(&Category::Email, "alice@corp.com", &entropy);
+        assert_eq!(a, b, "category_aware must be deterministic");
+    }
+
     // ---- Property tests: structural invariants on generated values ----
 
     mod property {
@@ -841,7 +938,37 @@ mod tests {
             MappingStore::new(gen, None)
         }
 
+        fn category_aware_store() -> MappingStore {
+            let gen = Arc::new(StrategyGenerator::new(
+                Box::new(CategoryAwareStrategy::new()),
+                EntropyMode::Deterministic { key: [77u8; 32] },
+            ));
+            MappingStore::new(gen, None)
+        }
+
         proptest! {
+            #[test]
+            fn category_aware_length_preserved(s in "[a-z0-9]{1,64}") {
+                let store = category_aware_store();
+                let out = store.get_or_insert(&Category::AuthToken, &s).unwrap();
+                prop_assert_eq!(out.len(), s.len());
+            }
+
+            #[test]
+            fn category_aware_email_shaped(
+                local in "[a-z]{3,8}",
+                domain in "[a-z]{3,8}",
+                tld in "[a-z]{2,4}",
+            ) {
+                let input = format!("{local}@{domain}.{tld}");
+                let store = category_aware_store();
+                let out = store.get_or_insert(&Category::Email, &input).unwrap();
+                prop_assert_eq!(out.len(), input.len());
+                prop_assert!(out.contains('@'));
+                let after_at = out.split('@').nth(1).unwrap_or("");
+                prop_assert!(after_at.contains('.'));
+            }
+
             #[test]
             fn email_output_is_email_shaped(
                 local in "[a-z]{3,8}",

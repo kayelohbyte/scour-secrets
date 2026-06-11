@@ -276,3 +276,93 @@ fn allow_flag_passes_value_through_unchanged() {
         "non-allowed IP 10.0.0.1 should have been replaced; got:\n{result}"
     );
 }
+
+/// Two-pass pipeline: a value extracted from a structured file in Phase 1
+/// must also be replaced in a plain-text file processed in Phase 2.
+///
+/// Phase 1: config.yaml is parsed structurally; `database.password` is
+///          extracted and seeds the store.
+/// Phase 2: app.log is scanned as plain text with the augmented scanner
+///          that now includes the discovered password as a literal.
+#[test]
+fn two_pass_profile_seeds_plain_text_scan() {
+    let dir = tempdir().unwrap();
+    let outdir = dir.path().join("out");
+    fs::create_dir_all(&outdir).unwrap();
+
+    let password = "supersecret-twopass-unique-db";
+
+    let config = dir.path().join("config.yaml");
+    fs::write(
+        &config,
+        format!("database:\n  password: {password}\n  host: db.internal\n"),
+    )
+    .unwrap();
+
+    let log = dir.path().join("app.log");
+    fs::write(
+        &log,
+        format!("INFO  connect\nERROR auth failed using {password}\nINFO  retry\n"),
+    )
+    .unwrap();
+
+    let secrets = dir.path().join("secrets.json");
+    fs::write(&secrets, b"[]").unwrap();
+
+    // Profile: process *.yaml files as YAML, target database.password.
+    let profile = dir.path().join("profile.json");
+    fs::write(
+        &profile,
+        r#"[{"processor":"yaml","extensions":[".yaml"],"fields":[{"pattern":"database.password"}]}]"#,
+    )
+    .unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+        .args([
+            config.to_str().unwrap(),
+            log.to_str().unwrap(),
+            "-s",
+            secrets.to_str().unwrap(),
+            "--profile",
+            profile.to_str().unwrap(),
+            "--output",
+            outdir.to_str().unwrap(),
+        ])
+        .env("SANITIZE_LOG", "error")
+        .env("SANITIZE_NO_SETTINGS", "1")
+        .output()
+        .unwrap();
+
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let config_out = fs::read_to_string(outdir.join("config-sanitized.yaml")).unwrap();
+    let log_out = fs::read_to_string(outdir.join("app-sanitized.log")).unwrap();
+
+    assert!(
+        !config_out.contains(password),
+        "config output must not contain original password"
+    );
+    assert!(
+        !log_out.contains(password),
+        "log output must not contain original password — two-pass seeding failed"
+    );
+
+    // Extract the replacement that appeared in the config, then verify the
+    // log uses the exact same string (cross-file consistency).
+    let replacement = config_out
+        .lines()
+        .find(|l| l.contains("password:"))
+        .and_then(|l| l.splitn(2, ':').nth(1))
+        .map(str::trim)
+        .expect("config output must have a password: line");
+
+    assert!(
+        log_out.contains(replacement),
+        "log must use the same replacement as config (two-pass cross-file seeding); \
+         replacement={replacement:?}, log:\n{log_out}"
+    );
+}

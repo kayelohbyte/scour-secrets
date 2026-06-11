@@ -53,6 +53,58 @@ fn merge_entropy_counts(stats: &mut ScanStats, label_counts: HashMap<String, u64
     }
 }
 
+/// Run entropy scanning on `bytes` in-place, merging label counts into `stats`.
+/// Returns the (potentially modified) bytes; does nothing when entropy configs
+/// is empty, which is the common case.
+fn apply_entropy_inplace(
+    bytes: Vec<u8>,
+    stats: &mut ScanStats,
+    fp: FileProcessor<'_>,
+) -> Vec<u8> {
+    if fp.entropy_configs.is_empty() {
+        return bytes;
+    }
+    let (out, lc) = entropy_scan_bytes(&bytes, fp.entropy_configs, fp.store);
+    merge_entropy_counts(stats, lc);
+    out
+}
+
+/// Complete a buffered scan: record the result to the report, run
+/// context extraction, write or collect the output, and return
+/// `had_matches`.
+///
+/// Called from every code path that already has the full sanitized
+/// bytes in memory (structured path, `scan_plain_scanner` buffered
+/// branches, etc.).
+fn finalize_buffered_scan(
+    output_bytes: &[u8],
+    stats: &ScanStats,
+    label: &str,
+    method: &str,
+    output_path: Option<&Path>,
+    cli: &crate::cli_args::Cli,
+    fp: FileProcessor<'_>,
+) -> Result<bool, String> {
+    let had_matches = stats.matches_found > 0;
+
+    if let Some(rb) = fp.report_builder {
+        rb.record_file(FileReport::from_scan_stats(label.to_string(), stats, method));
+    }
+
+    if cli.dry_run {
+        tracing::info!(
+            matches = stats.matches_found,
+            replacements = stats.replacements_applied,
+            "dry-run complete"
+        );
+        return Ok(had_matches);
+    }
+
+    maybe_extract_context(output_bytes, label, cli, fp.report_builder);
+    write_or_collect(output_bytes, label, output_path, fp.llm_collector)?;
+    Ok(had_matches)
+}
+
 fn accumulate_entropy_histogram(
     acc: &Arc<Mutex<Vec<EntropyBuckets>>>,
     buf: &[u8],
@@ -292,7 +344,7 @@ fn try_structured_processing(
 fn build_format_preserving_scanner(
     base_scanner: &Arc<StreamScanner>,
     store: &Arc<MappingStore>,
-    snapshot: usize,
+    snapshot: rust_sanitize::store::StoreSnapshot,
 ) -> Result<StreamScanner, rust_sanitize::error::SanitizeError> {
     let extra: Vec<ScanPattern> = store
         .iter_since(snapshot)
@@ -555,24 +607,11 @@ impl<'a> FileProcessor<'a> {
                 }
 
                 let (mut output_bytes, mut stats) = scanner_fallback(fp.scanner, &input_bytes)?;
-                let (ent_out, ent_lc) =
-                    entropy_scan_bytes(&output_bytes, fp.entropy_configs, fp.store);
-                output_bytes = ent_out;
-                merge_entropy_counts(&mut stats, ent_lc);
-                if stats.matches_found > 0 {
-                    had_matches = true;
-                }
-                if let Some(rb) = fp.report_builder {
-                    rb.record_file(FileReport::from_scan_stats(
-                        "<stdin>".to_string(),
-                        &stats,
-                        "scanner",
-                    ));
-                }
-                maybe_extract_context(&output_bytes, "<stdin>", cli, fp.report_builder);
-                if !cli.dry_run {
-                    write_or_collect(&output_bytes, "<stdin>", output_path, fp.llm_collector)?;
-                }
+                output_bytes = apply_entropy_inplace(output_bytes, &mut stats, fp);
+                had_matches = finalize_buffered_scan(
+                    &output_bytes, &stats, "<stdin>", "scanner",
+                    output_path, cli, fp,
+                )?;
                 Ok(had_matches)
             });
         }
@@ -1150,63 +1189,16 @@ impl<'a> FileProcessor<'a> {
                 }
             };
 
-            let (output_bytes, fallback_stats) = {
-                let (ent_out, ent_lc) =
-                    entropy_scan_bytes(&output_bytes, fp.entropy_configs, fp.store);
-                let stats = fallback_stats.map(|mut s| {
-                    merge_entropy_counts(&mut s, ent_lc);
-                    s
-                });
-                (ent_out, stats)
-            };
+            let mut stats = fallback_stats.unwrap_or_default();
+            let output_bytes = apply_entropy_inplace(output_bytes, &mut stats, fp);
+            // Normalise bytes_processed/bytes_output to the file's actual sizes.
+            stats.bytes_processed = input_bytes.len() as u64;
+            stats.bytes_output = output_bytes.len() as u64;
 
-            let replacements = fallback_stats
-                .as_ref()
-                .map_or(0, |s| s.replacements_applied);
-            if replacements > 0 {
-                had_matches = true;
-            }
-            if let Some(rb) = fp.report_builder {
-                let stats = fallback_stats
-                    .map(|mut s| {
-                        s.matches_found = replacements;
-                        s.replacements_applied = replacements;
-                        s.bytes_processed = input_bytes.len() as u64;
-                        s.bytes_output = output_bytes.len() as u64;
-                        s
-                    })
-                    .unwrap_or_else(|| ScanStats {
-                        matches_found: replacements,
-                        replacements_applied: replacements,
-                        bytes_processed: input_bytes.len() as u64,
-                        bytes_output: output_bytes.len() as u64,
-                        ..Default::default()
-                    });
-                rb.record_file(FileReport::from_scan_stats(
-                    input.display().to_string(),
-                    &stats,
-                    method.as_str(),
-                ));
-            }
-            if cli.dry_run {
-                info!(
-                    matches = replacements,
-                    replacements = replacements,
-                    "dry-run complete"
-                );
-                return Ok(had_matches);
-            }
-            maybe_extract_context(
-                &output_bytes,
-                &input.display().to_string(),
-                cli,
-                fp.report_builder,
-            );
-            write_or_collect(
-                &output_bytes,
-                &input.display().to_string(),
-                output_path,
-                fp.llm_collector,
+            let label = input.display().to_string();
+            had_matches = finalize_buffered_scan(
+                &output_bytes, &stats, &label, method.as_str(),
+                output_path, cli, fp,
             )?;
             Ok(had_matches)
         })
@@ -1278,8 +1270,6 @@ impl<'a> FileProcessor<'a> {
             let label = format!("Scanning {}", input.display());
             let progress_label = label.clone();
             let llm_opt = fp.llm_collector.cloned();
-            let ent_cfgs = Arc::clone(fp.entropy_configs);
-            let store_arc = Arc::clone(fp.store);
             return with_progress_scope(fp.progress, &label, move |progress| {
                 if llm_opt.is_some() || entropy_active {
                     let reader = BufReader::new(
@@ -1298,30 +1288,17 @@ impl<'a> FileProcessor<'a> {
                     if crate::is_interrupted() {
                         return Err("interrupted — partial output discarded".into());
                     }
-                    if entropy_active {
-                        let (ent_out, ent_lc) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
-                        buf = ent_out;
-                        merge_entropy_counts(&mut stats, ent_lc);
-                    }
+                    buf = apply_entropy_inplace(buf, &mut stats, fp);
                     if stats.matches_found > 0 {
                         had_matches = true;
                     }
                     if let Some(rb) = fp.report_builder {
                         rb.record_file(
-                            FileReport::from_scan_stats(
-                                input.display().to_string(),
-                                &stats,
-                                method,
-                            )
-                            .with_match_locations(locs, locs_truncated),
+                            FileReport::from_scan_stats(input.display().to_string(), &stats, method)
+                                .with_match_locations(locs, locs_truncated),
                         );
                     }
-                    maybe_extract_context(
-                        &buf,
-                        &input.display().to_string(),
-                        cli,
-                        fp.report_builder,
-                    );
+                    maybe_extract_context(&buf, &input.display().to_string(), cli, fp.report_builder);
                     if llm_opt.is_some() {
                         maybe_collect_for_llm(&buf, &abs_label(input), llm_opt.as_ref());
                     } else {
@@ -1377,8 +1354,6 @@ impl<'a> FileProcessor<'a> {
         let label = format!("Scanning {}", input.display());
         let progress_label = label.clone();
         let llm_opt = fp.llm_collector.cloned();
-        let ent_cfgs = Arc::clone(fp.entropy_configs);
-        let store_arc = Arc::clone(fp.store);
         with_progress_scope(fp.progress, &label, move |progress| {
             let sz = file_size(input)?;
             let needs_buffer = (cli.extract_context || llm_opt.is_some() || entropy_active)
@@ -1397,11 +1372,7 @@ impl<'a> FileProcessor<'a> {
                     make_scan_callback(progress.clone(), &progress_label),
                     cli.max_match_locations,
                 )?;
-                if entropy_active {
-                    let (ent_out, ent_lc) = entropy_scan_bytes(&buf, &ent_cfgs, &store_arc);
-                    buf = ent_out;
-                    merge_entropy_counts(&mut stats, ent_lc);
-                }
+                buf = apply_entropy_inplace(buf, &mut stats, fp);
                 if stats.matches_found > 0 {
                     had_matches = true;
                 }

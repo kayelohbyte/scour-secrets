@@ -185,6 +185,45 @@ pub struct LogContextResult {
 }
 
 // ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/// Normalise keywords for comparison.
+///
+/// Returns each keyword as-is in case-sensitive mode, or lowercased otherwise.
+/// Both `extract_context` and `extract_context_reader` call this once at the
+/// top so the normalisation cost is paid only once per invocation.
+fn normalize_keywords(keywords: &[String], case_sensitive: bool) -> Vec<String> {
+    keywords
+        .iter()
+        .map(|kw| {
+            if case_sensitive {
+                kw.clone()
+            } else {
+                kw.to_lowercase()
+            }
+        })
+        .collect()
+}
+
+/// Return the index of the first keyword that appears in `line`, or `None`.
+///
+/// `normalised` is the pre-normalised keyword list from [`normalize_keywords`].
+/// When `case_sensitive` is false, `line` is lowercased before comparison.
+fn line_first_hit(line: &str, normalised: &[String], case_sensitive: bool) -> Option<usize> {
+    if case_sensitive {
+        normalised
+            .iter()
+            .position(|norm| line.contains(norm.as_str()))
+    } else {
+        let lower = line.to_lowercase();
+        normalised
+            .iter()
+            .position(|norm| lower.contains(norm.as_str()))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Core function
 // ---------------------------------------------------------------------------
 
@@ -203,19 +242,7 @@ pub fn extract_context(content: &str, config: &LogContextConfig) -> LogContextRe
     let lines: Vec<&str> = content.lines().collect();
     let total_lines = lines.len();
 
-    // Pre-normalise keywords once. Each pair is (normalised_for_comparison, original_index).
-    // We store the index so we can retrieve the original keyword string for output.
-    let normalised: Vec<String> = config
-        .keywords
-        .iter()
-        .map(|kw| {
-            if config.case_sensitive {
-                kw.clone()
-            } else {
-                kw.to_lowercase()
-            }
-        })
-        .collect();
+    let normalised = normalize_keywords(&config.keywords, config.case_sensitive);
 
     let mut matches: Vec<LogContextMatch> = Vec::new();
     let mut truncated = false;
@@ -226,17 +253,7 @@ pub fn extract_context(content: &str, config: &LogContextConfig) -> LogContextRe
             break;
         }
 
-        // Find the index of the first matching keyword.
-        let hit_idx = if config.case_sensitive {
-            normalised
-                .iter()
-                .position(|norm| line.contains(norm.as_str()))
-        } else {
-            let lower = line.to_lowercase();
-            normalised
-                .iter()
-                .position(|norm| lower.contains(norm.as_str()))
-        };
+        let hit_idx = line_first_hit(line, &normalised, config.case_sensitive);
 
         if let Some(idx) = hit_idx {
             let before_start = i.saturating_sub(config.context_lines);
@@ -318,18 +335,7 @@ pub fn extract_context_reader<R: io::BufRead>(
     let mut truncated = false;
     let mut total_lines: usize = 0;
 
-    // Pre-normalise keywords once (mirrors extract_context).
-    let normalised: Vec<String> = config
-        .keywords
-        .iter()
-        .map(|kw| {
-            if config.case_sensitive {
-                kw.clone()
-            } else {
-                kw.to_lowercase()
-            }
-        })
-        .collect();
+    let normalised = normalize_keywords(&config.keywords, config.case_sensitive);
 
     let mut line_buf = String::new();
     let mut reader = reader;
@@ -366,30 +372,13 @@ pub fn extract_context_reader<R: io::BufRead>(
         // Step 2: check if this line starts a new match.
         if !truncated {
             let effective_count = matches.len() + pending.len();
+            let hit_idx = line_first_hit(line, &normalised, config.case_sensitive);
             if effective_count >= config.max_matches {
-                // At the cap — check if this line would be a new match so we
-                // can set the truncated flag accurately.
-                let is_match = if config.case_sensitive {
-                    normalised.iter().any(|norm| line.contains(norm.as_str()))
-                } else {
-                    let lower = line.to_lowercase();
-                    normalised.iter().any(|norm| lower.contains(norm.as_str()))
-                };
-                if is_match {
+                // At the cap — if this line is a match, set the truncated flag.
+                if hit_idx.is_some() {
                     truncated = true;
                 }
-            } else {
-                let hit_idx = if config.case_sensitive {
-                    normalised
-                        .iter()
-                        .position(|norm| line.contains(norm.as_str()))
-                } else {
-                    let lower = line.to_lowercase();
-                    normalised
-                        .iter()
-                        .position(|norm| lower.contains(norm.as_str()))
-                };
-                if let Some(idx) = hit_idx {
+            } else if let Some(idx) = hit_idx {
                     let before: Vec<String> = before_buf.iter().cloned().collect();
                     if cap == 0 {
                         matches.push(LogContextMatch {
@@ -409,7 +398,6 @@ pub fn extract_context_reader<R: io::BufRead>(
                             remaining: cap,
                         });
                     }
-                }
             }
         }
 

@@ -450,8 +450,10 @@ pub struct MatchLocation {
 pub struct ScanStats {
     /// Total bytes read from the input.
     pub bytes_processed: u64,
-    /// Total bytes written to the output (may differ from `bytes_processed`
-    /// when replacements have different lengths than the originals).
+    /// Total bytes written to the output.
+    ///
+    /// Always equals `bytes_processed` for this engine because all
+    /// replacements are length-preserving by design.
     pub bytes_output: u64,
     /// Total number of matches found across all patterns.
     pub matches_found: u64,
@@ -542,12 +544,42 @@ pub struct StreamScanner {
     config: ScanConfig,
 }
 
-/// Return type for scanner factory methods that load a secrets file.
+/// Result of loading a secrets file into a [`StreamScanner`].
 ///
-/// Contains `(scanner, warnings, allow_patterns)` where `warnings` are
-/// non-fatal parse errors and `allow_patterns` are raw strings from
-/// `kind: allow` entries.
-type SecretsLoadResult = Result<(StreamScanner, Vec<(usize, SanitizeError)>, Vec<String>)>;
+/// Returned by [`StreamScanner::from_encrypted_secrets`] and
+/// [`StreamScanner::from_plaintext_secrets`].
+///
+/// The `#[must_use]` attribute guards against silently discarding
+/// `allow_patterns`, which would cause values that should be suppressed
+/// to be sanitized instead.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let SecretsLoadResult { scanner, warnings, allow_patterns } =
+///     StreamScanner::from_plaintext_secrets(bytes, None, store, config, vec![])?;
+///
+/// for (idx, err) in &warnings {
+///     eprintln!("secrets entry {idx} failed to compile: {err}");
+/// }
+///
+/// let (allowlist, al_warnings) = AllowlistMatcher::new(allow_patterns).into_parts();
+/// let store = MappingStore::new_with_allowlist(gen, None, Arc::new(allowlist));
+/// ```
+#[must_use = "use allow_patterns to build an AllowlistMatcher; check warnings for skipped patterns"]
+pub struct SecretsLoadResult {
+    /// The compiled scanner, ready to use.
+    pub scanner: StreamScanner,
+    /// Secrets-file entries that failed pattern compilation:
+    /// `(index_in_file, error)`. A non-empty list means some patterns were
+    /// silently skipped and the scanner covers less than the full file.
+    pub warnings: Vec<(usize, SanitizeError)>,
+    /// Raw strings from `kind: allow` entries in the secrets file.
+    /// Pass these to [`crate::allowlist::AllowlistMatcher::new`] and attach
+    /// the resulting matcher to a [`crate::store::MappingStore`] via
+    /// [`crate::store::MappingStore::new_with_allowlist`].
+    pub allow_patterns: Vec<String>,
+}
 
 impl StreamScanner {
     /// Create a new streaming scanner.
@@ -1025,12 +1057,12 @@ impl StreamScanner {
         store: Arc<MappingStore>,
         config: ScanConfig,
         extra_patterns: Vec<ScanPattern>,
-    ) -> SecretsLoadResult {
-        let ((mut patterns, warnings), allow) =
+    ) -> Result<SecretsLoadResult> {
+        let ((mut patterns, warnings), allow_patterns) =
             crate::secrets::load_encrypted_secrets(encrypted_bytes, password, format)?;
         patterns.extend(extra_patterns);
         let scanner = Self::new(patterns, store, config)?;
-        Ok((scanner, warnings, allow))
+        Ok(SecretsLoadResult { scanner, warnings, allow_patterns })
     }
 
     /// Create a scanner from a plaintext secrets file.
@@ -1054,12 +1086,12 @@ impl StreamScanner {
         store: Arc<MappingStore>,
         config: ScanConfig,
         extra_patterns: Vec<ScanPattern>,
-    ) -> SecretsLoadResult {
-        let ((mut patterns, warnings), allow) =
+    ) -> Result<SecretsLoadResult> {
+        let ((mut patterns, warnings), allow_patterns) =
             crate::secrets::load_plaintext_secrets(plaintext, format)?;
         patterns.extend(extra_patterns);
         let scanner = Self::new(patterns, store, config)?;
-        Ok((scanner, warnings, allow))
+        Ok(SecretsLoadResult { scanner, warnings, allow_patterns })
     }
 
     // ---- Internal helpers ----

@@ -39,6 +39,27 @@ use regex::Regex;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Result of building an [`AllowlistMatcher`].
+///
+/// Returned by [`AllowlistMatcher::new`] and
+/// [`AllowlistMatcher::new_case_sensitive`].
+///
+/// The `#[must_use]` attribute ensures callers don't silently discard
+/// [`warnings`](Self::warnings), which includes failed regex compilations
+/// (the pattern is **skipped** — values that should be suppressed will
+/// instead be sanitized) and metacharacter hints.
+#[must_use = "check .warnings for invalid or suspicious patterns"]
+pub struct AllowlistResult {
+    /// The compiled matcher, ready for use.
+    pub matcher: AllowlistMatcher,
+    /// Non-fatal build warnings. Includes:
+    /// - `regex:` patterns that failed to compile (pattern was skipped).
+    /// - Plain patterns containing regex metacharacters (`^`, `$`, `+`,
+    ///   `(`, `)`) that are matched literally; add the `regex:` prefix to
+    ///   use them as regexes.
+    pub warnings: Vec<String>,
+}
+
 /// Compiled allowlist that can be queried concurrently.
 ///
 /// Exact patterns are stored in a [`HashSet`] for O(1) lookup. Glob patterns
@@ -76,20 +97,28 @@ impl AllowlistMatcher {
     ///
     /// Each string is treated as a glob if it contains `*`, otherwise as an
     /// exact match. Patterns that look like regexes (contain `^`, `$`, `+`,
-    /// `(`, or `)`) are accepted but a warning message is returned alongside
-    /// the matcher so the caller can surface it to the user.
-    #[must_use]
-    pub fn new(patterns: Vec<String>) -> (Self, Vec<String>) {
-        Self::build(patterns, false)
+    /// `(`, or `)`) are accepted but a warning message is included in
+    /// [`AllowlistResult::warnings`] so the caller can surface it to the user.
+    ///
+    /// Always check [`AllowlistResult::warnings`]: a failed `regex:` pattern
+    /// is skipped silently, meaning values that should be suppressed will
+    /// instead be sanitized.
+    #[allow(clippy::new_ret_no_self)] // intentional: returns AllowlistResult, not Self
+    pub fn new(patterns: Vec<String>) -> AllowlistResult {
+        let (matcher, warnings) = Self::build(patterns, false);
+        AllowlistResult { matcher, warnings }
     }
 
     /// Build a case-sensitive [`AllowlistMatcher`] from a list of pattern strings.
     ///
     /// Use this when exact-case matching is required (e.g. allowlisting a
     /// known token value that must not match differently-cased substrings).
-    #[must_use]
-    pub fn new_case_sensitive(patterns: Vec<String>) -> (Self, Vec<String>) {
-        Self::build(patterns, true)
+    ///
+    /// Always check [`AllowlistResult::warnings`]: a failed `regex:` pattern
+    /// is skipped silently.
+    pub fn new_case_sensitive(patterns: Vec<String>) -> AllowlistResult {
+        let (matcher, warnings) = Self::build(patterns, true);
+        AllowlistResult { matcher, warnings }
     }
 
     fn build(patterns: Vec<String>, case_sensitive: bool) -> (Self, Vec<String>) {
@@ -254,14 +283,12 @@ mod tests {
     use super::*;
 
     fn matcher(pats: &[&str]) -> AllowlistMatcher {
-        let (m, _) = AllowlistMatcher::new(pats.iter().map(|s| (*s).to_string()).collect());
-        m
+        AllowlistMatcher::new(pats.iter().map(|s| (*s).to_string()).collect()).matcher
     }
 
     fn matcher_cs(pats: &[&str]) -> AllowlistMatcher {
-        let (m, _) =
-            AllowlistMatcher::new_case_sensitive(pats.iter().map(|s| (*s).to_string()).collect());
-        m
+        AllowlistMatcher::new_case_sensitive(pats.iter().map(|s| (*s).to_string()).collect())
+            .matcher
     }
 
     #[test]
@@ -330,8 +357,8 @@ mod tests {
 
     #[test]
     fn regex_char_warning() {
-        let (_, warnings) = AllowlistMatcher::new(vec!["^bad$".into()]);
-        assert!(!warnings.is_empty());
+        let result = AllowlistMatcher::new(vec!["^bad$".into()]);
+        assert!(!result.warnings.is_empty());
     }
 
     #[test]
@@ -425,7 +452,7 @@ mod tests {
     fn large_exact_list_all_match() {
         // Verify HashSet lookup works correctly across many entries.
         let words: Vec<String> = (0..500).map(|i| format!("word{i}")).collect();
-        let (m, _) = AllowlistMatcher::new(words.clone());
+        let m = AllowlistMatcher::new(words.clone()).matcher;
         for w in &words {
             assert!(m.is_allowed(w), "should allow {w}");
         }
@@ -489,12 +516,12 @@ mod tests {
 
     #[test]
     fn regex_invalid_pattern_produces_warning_and_is_skipped() {
-        let (m, warnings) = AllowlistMatcher::new(vec!["regex:[invalid".into()]);
-        assert!(!warnings.is_empty(), "invalid regex must produce a warning");
-        assert!(warnings[0].contains("failed to compile"));
+        let result = AllowlistMatcher::new(vec!["regex:[invalid".into()]);
+        assert!(!result.warnings.is_empty(), "invalid regex must produce a warning");
+        assert!(result.warnings[0].contains("failed to compile"));
         // Pattern is skipped — nothing is allowed.
-        assert!(!m.is_allowed("anything"));
-        assert_eq!(m.pattern_count(), 0);
+        assert!(!result.matcher.is_allowed("anything"));
+        assert_eq!(result.matcher.pattern_count(), 0);
     }
 
     #[test]
@@ -541,12 +568,12 @@ mod tests {
 
     #[test]
     fn metacharacter_warning_updated_to_suggest_regex_prefix() {
-        let (_, warnings) = AllowlistMatcher::new(vec!["^bad$".into()]);
-        assert!(!warnings.is_empty());
+        let result = AllowlistMatcher::new(vec!["^bad$".into()]);
+        assert!(!result.warnings.is_empty());
         assert!(
-            warnings[0].contains("regex:"),
+            result.warnings[0].contains("regex:"),
             "warning should suggest regex: prefix, got: {}",
-            warnings[0],
+            result.warnings[0],
         );
     }
 }

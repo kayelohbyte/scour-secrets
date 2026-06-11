@@ -15,7 +15,7 @@ impl Strategy for Redact {
         "redact"
     }
 
-    fn replace(&self, original: &str, _entropy: &[u8; 32]) -> String {
+    fn replace(&self, _category: &rust_sanitize::Category, original: &str, _entropy: &[u8; 32]) -> String {
         "X".repeat(original.len())
     }
 }

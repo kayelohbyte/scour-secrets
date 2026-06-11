@@ -7,6 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`IniProcessor`** — new structured processor for INI / CFG files (`*.ini`,
+  `*.cfg`). Handles `[section]` / `key = value` and `key: value` syntax,
+  preserves comments and blank lines, and strips inline comments to prevent
+  sensitive context leaking into output. Field rules use dot-path notation
+  (`database.password`, `*`, `global_key`). Register with processor name
+  `"ini"` in a profile.
+
+- **Fuzz targets for `IniProcessor` and `XmlProcessor`** — `fuzz_ini` and
+  `fuzz_xml` feed arbitrary bytes through the respective structured processors,
+  covering malformed input, deeply nested elements, crafted entity references,
+  binary content, and oversized values.
+
+- **`CategoryAwareStrategy`** — new built-in [`Strategy`] implementation that
+  delegates to the same category-aware formatters used by the CLI. Produces
+  email-shaped, IP-shaped, JWT-shaped, etc. replacements identical in quality
+  to `HmacGenerator`. Use it when you want full structured replacement behaviour
+  through the `Strategy` / `StrategyGenerator` path.
+
+- **`AllowlistResult` struct** — `AllowlistMatcher::new` and
+  `AllowlistMatcher::new_case_sensitive` now return `AllowlistResult { matcher,
+  warnings }` instead of a raw tuple. The struct is `#[must_use]`, so the
+  compiler warns when the return value (and therefore `warnings`) is silently
+  discarded. `warnings` includes failed `regex:` compilations (the pattern is
+  **skipped**) and metacharacter hints.
+
+- **`SecretsLoadResult` struct** — `StreamScanner::from_encrypted_secrets` and
+  `StreamScanner::from_plaintext_secrets` now return
+  `Result<SecretsLoadResult>` where `SecretsLoadResult` has named fields
+  `scanner`, `warnings`, and `allow_patterns`. Previously the return type was
+  an anonymous three-tuple. The struct is `#[must_use]` and its fields are
+  documented. Re-exported from the crate root.
+
+- **`StoreSnapshot` type** — `MappingStore::snapshot` now returns a
+  `StoreSnapshot` newtype instead of a bare `usize`. `MappingStore::iter_since`
+  accepts `StoreSnapshot`. This prevents accidentally passing an unrelated
+  integer (a count, an index, a capacity) to `iter_since`. Use
+  `StoreSnapshot::start()` (or `StoreSnapshot::default()`) to iterate all
+  entries, replacing the former `iter_since(0)`.
+
+### Changed
+
+- **`Strategy::replace` takes `category: &Category` as first argument** *(breaking)*
+  — strategies can now produce category-aware output. The five built-in strategies
+  that do not need category information ignore it via `_category`. Update any
+  custom `Strategy` implementations by adding `_category: &Category` as the first
+  parameter after `&self`.
+
+- **`MappingStore::clear` now takes `&self`** *(breaking)* — previously
+  `clear(&mut self)` was unusable on a shared `Arc<MappingStore>` (the typical
+  pattern). The method now uses `DashMap::clear()` internally, which holds
+  shard locks one at a time and triggers `ZeroizingString::drop` for every key.
+  Callers that bound `let mut store` solely for `clear()` can drop the `mut`.
+
+- **`MappingStore::snapshot` return type is `StoreSnapshot`** *(breaking)* —
+  see the new `StoreSnapshot` type above.
+
+- **`MappingStore::iter_since` parameter type is `StoreSnapshot`** *(breaking)*
+  — see the new `StoreSnapshot` type above.
+
+- **`AllowlistMatcher::new` / `new_case_sensitive` return `AllowlistResult`**
+  *(breaking)* — callers that destructured the old tuple
+  `let (matcher, warnings) = …` should change to
+  `let AllowlistResult { matcher, warnings, .. } = …` or access fields
+  directly (`.matcher`, `.warnings`).
+
+- **`StreamScanner::from_encrypted_secrets` /
+  `from_plaintext_secrets` return `Result<SecretsLoadResult>`** *(breaking)* —
+  callers that destructured the old tuple `let (scanner, warnings, allow) = …?`
+  should change to
+  `let SecretsLoadResult { scanner, warnings, allow_patterns } = …?`.
+
+### Internal
+
+- Extracted `xorshift64_step` helper in `strategy.rs` — the three-line
+  xorshift64 advance was previously inlined in both `RandomString::replace` and
+  `PreserveLength::replace`.
+
+- Extracted `normalize_keywords` and `line_first_hit` helpers in
+  `log_context.rs` — the keyword pre-normalisation block and line hit-detection
+  logic were previously duplicated between `extract_context` and
+  `extract_context_reader`. The `extract_context_reader` loop also computed the
+  same hit twice (once for the truncation check, once for the match path);
+  these are now a single call.
+
+- `MappingStore::Drop::drop` now delegates to `clear()` instead of duplicating
+  the map teardown logic.
+
 ## [0.12.0] - 2026-06-03
 
 ### Added

@@ -157,52 +157,53 @@ deployments without exposing credentials to clients.
 
 ---
 
-## 2. Replacement Strategies: Two Parallel Paths
+## 2. Replacement Strategies
 
-The crate provides **two distinct APIs** for generating sanitized replacements:
-
-### Path 1: Category-Aware Generators (Used by CLI)
-
-```rust
-HmacGenerator / RandomGenerator
-    → implements ReplacementGenerator trait
-    → calls format_replacement(category, hash, original)
-    → category-specific formatting (email, IP, JWT, etc.)
-```
-
-- **Used by:** CLI binary, streaming scanner
-- **Design:** Opinionated, category-aware formatters with length preservation
-- **Determinism:** HMAC-SHA256 for deterministic mode, OS CSPRNG for random mode
-- **Code:** `src/generator.rs` (lines 136-600+)
-
-### Path 2: Pluggable Strategy Trait (Public Library API)
+The `Strategy` trait is the single extension point for generating sanitized
+replacements. All paths — CLI, library, and custom — flow through the same
+interface.
 
 ```rust
 StrategyGenerator (adapter)
     → implements ReplacementGenerator trait
-    → delegates to dyn Strategy::replace(original, entropy)
-    → user-defined or built-in strategies (RandomString, FakeIp, etc.)
+    → produces entropy (HMAC-deterministic or CSPRNG-random)
+    → delegates to dyn Strategy::replace(category, original, entropy)
+    → built-in or user-defined strategy
 ```
 
-- **Used by:** Library consumers, third-party crates via public API
-- **Design:** Extensible, strategy pattern for custom replacement logic
-- **Determinism:** Entropy source (HMAC or CSPRNG) decoupled from strategy
-- **Code:** `src/strategy.rs`
+`StrategyGenerator` decouples *how entropy is produced* from *what the
+replacement looks like*. Strategies are pure functions of
+`(category, original, entropy)` — no I/O, no mutable state.
+
+### Built-in Strategies
+
+| Strategy | Output |
+|---|---|
+| `CategoryAwareStrategy` | Category-shaped: email → email, IP → IP, JWT → JWT. Same formatters as the CLI. |
+| `RandomString` | Fixed-length alphanumeric. |
+| `RandomUuid` | UUID v4 format. |
+| `FakeIp` | Dot positions preserved; digits replaced. |
+| `PreserveLength` | Exact byte length match, lowercase alphanumeric. |
+| `HmacHash` | Lowercase hex; carries own HMAC key, ignores entropy mode. |
+
+`CategoryAwareStrategy` is the recommended default for library consumers who
+want the same replacement quality as the CLI without wiring up `HmacGenerator`
+directly.
+
+### CLI Generators
+
+`HmacGenerator` and `RandomGenerator` in `src/generator.rs` implement
+`ReplacementGenerator` directly and call `format_replacement` without the
+`Strategy` indirection. They remain the primary path for the CLI binary and
+streaming scanner, where the category is always known at call time and the
+extra vtable call is unnecessary.
+
+`format_replacement` is `pub(crate)` — `CategoryAwareStrategy` delegates to it,
+giving library users access to identical output without duplicating the logic.
+
+- **Code:** `src/strategy.rs`, `src/generator.rs`
 - **Example:** `examples/custom_strategy.rs`
 - **Docs:** `docs/strategies.md`
-
-### Why Two Paths?
-
-1. **CLI simplicity:** Direct category formatters avoid indirection overhead for
-   the built-in use case (email → email-shaped replacement, IP → IP-shaped, etc.).
-2. **Library extensibility:** The `Strategy` trait allows users to plug in
-   custom replacement logic without forking the crate.
-3. **Historical:** The Strategy trait was part of the initial design. The
-   category-aware formatters (`format_replacement`) were later optimized for
-   the CLI and became the primary path.
-
-Both paths are maintained and tested. They share the same `MappingStore` and
-`ReplacementGenerator` interface, but diverge in how replacements are computed.
 
 ---
 

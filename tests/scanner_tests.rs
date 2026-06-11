@@ -10,6 +10,7 @@
 //! - Edge cases (empty input, no matches, very small chunks)
 
 use rust_sanitize::category::Category;
+use rust_sanitize::error::SanitizeError;
 use rust_sanitize::generator::HmacGenerator;
 use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
 use rust_sanitize::store::MappingStore;
@@ -504,6 +505,33 @@ fn scanner_with_strategy_generator() {
     assert!(!out_str.contains("SECRET_WXYZ9876"));
 }
 
+#[test]
+fn scanner_with_category_aware_strategy() {
+    use rust_sanitize::strategy::{CategoryAwareStrategy, EntropyMode, StrategyGenerator};
+
+    let gen = Arc::new(StrategyGenerator::new(
+        Box::new(CategoryAwareStrategy::new()),
+        EntropyMode::Deterministic { key: [42u8; 32] },
+    ));
+    let store = Arc::new(MappingStore::new(gen, None));
+
+    let pattern = ScanPattern::from_literal(
+        "alice@corp.com",
+        Category::Email,
+        "test_email",
+    ).unwrap();
+    let scanner = StreamScanner::new(vec![pattern], Arc::clone(&store), ScanConfig::new(128, 32)).unwrap();
+
+    let input = b"Contact alice@corp.com for help.";
+    let (output, stats) = scanner.scan_bytes(input).unwrap();
+    let out_str = String::from_utf8(output).unwrap();
+
+    assert_eq!(stats.replacements_applied, 1, "email must be replaced once");
+    assert!(!out_str.contains("alice@corp.com"), "original must not appear in output");
+    assert!(out_str.contains('@'), "replacement must be email-shaped");
+    assert_eq!(out_str.len(), input.len(), "byte length must be preserved");
+}
+
 // ===========================================================================
 // 9. Simulated multi-GB scan (logical, not actual)
 // ===========================================================================
@@ -567,4 +595,64 @@ fn overlapping_patterns_leftmost_longest_wins() {
     // The email pattern should capture the whole match.
     assert_eq!(stats.matches_found, 1);
     assert_eq!(*stats.pattern_counts.get("email").unwrap(), 1);
+}
+
+// ===========================================================================
+// 11. Capacity-exceeded error propagates cleanly
+// ===========================================================================
+
+/// A store capacity limit hit mid-scan must propagate as
+/// `SanitizeError::CapacityExceeded` rather than silently producing partial
+/// output or replacing fewer secrets than expected.
+#[test]
+fn capacity_exceeded_during_scan_returns_error() {
+    let gen = Arc::new(HmacGenerator::new([55u8; 32]));
+    // Allow only 2 unique mappings — a third distinct secret will overflow.
+    let store = Arc::new(MappingStore::new(gen, Some(2)));
+    let scanner = Arc::new(
+        StreamScanner::new(
+            vec![email_pattern()],
+            Arc::clone(&store),
+            ScanConfig::new(256, 32),
+        )
+        .unwrap(),
+    );
+
+    // Three distinct email addresses → three distinct store insertions needed.
+    let input = b"a@one.com b@two.com c@three.com";
+    let result = scanner.scan_bytes(input);
+
+    assert!(
+        result.is_err(),
+        "expected CapacityExceeded error, got Ok"
+    );
+    assert!(
+        matches!(result.unwrap_err(), SanitizeError::CapacityExceeded { .. }),
+        "error must be CapacityExceeded"
+    );
+}
+
+/// Scanning the same two secrets repeatedly must succeed: the store returns
+/// cached results and never exceeds the capacity.
+#[test]
+fn capacity_not_exceeded_for_repeated_secrets() {
+    let gen = Arc::new(HmacGenerator::new([55u8; 32]));
+    let store = Arc::new(MappingStore::new(gen, Some(2)));
+    let scanner = Arc::new(
+        StreamScanner::new(
+            vec![email_pattern()],
+            Arc::clone(&store),
+            ScanConfig::new(64, 16),
+        )
+        .unwrap(),
+    );
+
+    // The same two emails repeated many times — only 2 distinct insertions needed.
+    let input = b"a@one.com a@one.com b@two.com b@two.com a@one.com b@two.com";
+    let (_, stats) = scanner
+        .scan_bytes(input)
+        .expect("should succeed: only 2 distinct secrets");
+
+    assert_eq!(stats.matches_found, 6);
+    assert_eq!(store.len(), 2);
 }

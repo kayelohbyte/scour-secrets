@@ -139,7 +139,7 @@ impl ReplacementGenerator for RandomGenerator {
 /// Format a 32-byte hash into a length-preserving replacement whose
 /// byte length exactly matches `original.len()`. The shape is
 /// category-aware and deterministic for the same `(hash, original)` pair.
-fn format_replacement(category: &Category, hash: &[u8; 32], original: &str) -> String {
+pub(crate) fn format_replacement(category: &Category, hash: &[u8; 32], original: &str) -> String {
     let target = original.len();
     if target == 0 {
         return String::new();

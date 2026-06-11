@@ -117,120 +117,11 @@ impl SanitizeReport {
     /// # Errors
     ///
     /// Returns [`serde_json::Error`] if serialization fails.
-    #[allow(clippy::too_many_lines)]
     pub fn to_sarif(&self) -> serde_json::Result<String> {
         use serde_json::json;
 
-        // Collect unique named pattern IDs in sorted order → one SARIF rule each.
-        // When structured-processor-only runs produce matches without named patterns,
-        // add the synthetic "sensitive_value" rule to cover those results.
-        let needs_generic = self
-            .files
-            .iter()
-            .any(|f| f.matches > 0 && f.pattern_counts.is_empty());
-
-        let mut rule_ids: Vec<&str> = self
-            .summary
-            .pattern_counts
-            .keys()
-            .map(String::as_str)
-            .collect();
-        rule_ids.sort_unstable();
-        if needs_generic {
-            rule_ids.push("sensitive_value");
-        }
-
-        let rules: Vec<serde_json::Value> = rule_ids
-            .iter()
-            .map(|&id| {
-                let (short, full) = if id == "sensitive_value" {
-                    (
-                        "Sensitive value detected".to_owned(),
-                        "One or more sensitive values were detected during sanitization and \
-                         replaced with safe substitutes. No original values are stored. \
-                         Run with a secrets file for per-pattern breakdown."
-                            .to_owned(),
-                    )
-                } else {
-                    (
-                        format!("Sensitive value of type '{}' detected", id),
-                        format!(
-                            "A sensitive value of type '{}' was detected during sanitization \
-                             and replaced with a safe substitute. No original value is stored.",
-                            id
-                        ),
-                    )
-                };
-                json!({
-                    "id": id,
-                    "name": sarif_rule_name(id),
-                    "shortDescription": { "text": short },
-                    "fullDescription": { "text": full },
-                    "defaultConfiguration": { "level": sarif_level(id) },
-                    "properties": { "tags": ["security"] }
-                })
-            })
-            .collect();
-
-        // One SARIF result per (file, pattern) pair where count > 0.
-        // Files with matches but no named breakdown emit a single generic result.
-        let mut results: Vec<serde_json::Value> = Vec::new();
-        for f in &self.files {
-            let uri = path_to_sarif_uri(&f.path);
-            let location = json!([{
-                "physicalLocation": {
-                    "artifactLocation": { "uri": uri, "uriBaseId": "%SRCROOT%" }
-                }
-            }]);
-            if f.matches > 0 && f.pattern_counts.is_empty() {
-                results.push(json!({
-                    "ruleId": "sensitive_value",
-                    "level": "warning",
-                    "message": {
-                        "text": format!(
-                            "{} sensitive value(s) detected and sanitized.",
-                            f.matches
-                        )
-                    },
-                    "locations": location
-                }));
-            } else {
-                for (pattern, &count) in &f.pattern_counts {
-                    if count == 0 {
-                        continue;
-                    }
-                    // Emit startLine when we have location data for this pattern.
-                    let first_line = f.match_locations.as_ref().and_then(|ml| {
-                        ml.locations
-                            .iter()
-                            .find(|loc| loc.pattern == *pattern)
-                            .map(|loc| loc.line)
-                    });
-                    let loc = if let Some(line) = first_line {
-                        json!([{
-                            "physicalLocation": {
-                                "artifactLocation": { "uri": &uri, "uriBaseId": "%SRCROOT%" },
-                                "region": { "startLine": line }
-                            }
-                        }])
-                    } else {
-                        location.clone()
-                    };
-                    results.push(json!({
-                        "ruleId": pattern,
-                        "level": sarif_level(pattern),
-                        "message": {
-                            "text": format!(
-                                "{} sensitive value(s) of type '{}' detected and sanitized.",
-                                count, pattern
-                            )
-                        },
-                        "locations": loc
-                    }));
-                }
-            }
-        }
-
+        let rules = sarif_rules(self);
+        let results = sarif_results(self);
         let artifacts: Vec<serde_json::Value> = self
             .files
             .iter()
@@ -270,112 +161,19 @@ impl SanitizeReport {
     /// Includes a summary dashboard, per-pattern totals, and a per-file table.
     /// Dark mode is supported via `prefers-color-scheme`.
     #[must_use]
-    #[allow(clippy::too_many_lines, clippy::format_collect)]
     pub fn to_html(&self) -> String {
         let s = &self.summary;
         let m = &self.metadata;
-
-        // --- summary cards ---------------------------------------------------
-        let cards = format!(
-            r#"<div class="cards">
-  <div class="card"><div class="card-label">Files</div><div class="card-value">{}</div></div>
-  <div class="card"><div class="card-label">Matches</div><div class="card-value">{}</div></div>
-  <div class="card"><div class="card-label">Replacements</div><div class="card-value">{}</div></div>
-  <div class="card"><div class="card-label">Input</div><div class="card-value">{}</div></div>
-  <div class="card"><div class="card-label">Duration</div><div class="card-value">{} ms</div></div>
-</div>"#,
-            s.total_files,
-            s.total_matches,
-            s.total_replacements,
-            fmt_bytes(s.total_bytes_processed),
-            s.duration_ms,
-        );
-
-        // --- pattern breakdown table (only when there are matches) -----------
-        let patterns_section = if s.total_matches > 0 {
-            let mut sorted_patterns: Vec<(&String, &u64)> = s.pattern_counts.iter().collect();
-            sorted_patterns.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-            let rows: String = sorted_patterns
-                .iter()
-                .map(|(pat, count)| {
-                    format!("<tr><td>{}</td><td>{}</td></tr>\n", html_escape(pat), count)
-                })
-                .collect();
-            format!(
-                r#"<div class="section">
-<h2>Patterns detected</h2>
-<div class="table-wrap"><table>
-<thead><tr><th>Pattern</th><th>Total matches</th></tr></thead>
-<tbody>{}</tbody>
-</table></div></div>"#,
-                rows
-            )
-        } else {
-            String::new()
-        };
-
-        // --- per-file table --------------------------------------------------
         let has_locations = self.files.iter().any(|f| f.match_locations.is_some());
+
+        let cards = html_summary_cards(s);
+        let patterns_section = html_patterns_section(s);
         let file_rows: String = self
             .files
             .iter()
-            .map(|f| {
-                let badges: String = {
-                    let mut pairs: Vec<(&String, &u64)> = f.pattern_counts.iter().collect();
-                    pairs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
-                    pairs
-                        .iter()
-                        .filter(|(_, &c)| c > 0)
-                        .map(|(pat, count)| {
-                            format!(
-                                r#"<span class="badge {}">{}: {}</span>"#,
-                                sarif_badge_class(pat),
-                                html_escape(pat),
-                                count
-                            )
-                        })
-                        .collect()
-                };
-                let match_class = if f.matches > 0 { "count-positive" } else { "count-zero" };
-                let first_line_cell = if has_locations {
-                    match f.match_locations.as_ref().and_then(|ml| ml.locations.first()) {
-                        Some(loc) => {
-                            let truncated_marker = if f
-                                .match_locations
-                                .as_ref()
-                                .is_some_and(|ml| ml.truncated)
-                            {
-                                "<span title=\"more matches not shown\">…</span>"
-                            } else {
-                                ""
-                            };
-                            format!(
-                                "<td class=\"count-positive\">L{}{}</td>",
-                                loc.line, truncated_marker
-                            )
-                        }
-                        None => "<td class=\"count-zero\">—</td>".to_owned(),
-                    }
-                } else {
-                    String::new()
-                };
-                format!(
-                    "<tr><td><code>{}</code></td><td class=\"{}\">{}</td><td>{}</td>{}<td>{}</td></tr>\n",
-                    html_escape(&f.path),
-                    match_class,
-                    f.matches,
-                    html_escape(&f.method),
-                    first_line_cell,
-                    badges,
-                )
-            })
+            .map(|f| html_file_row(f, has_locations))
             .collect();
-
-        let first_line_header = if has_locations {
-            "<th>First match</th>"
-        } else {
-            ""
-        };
+        let first_line_header = if has_locations { "<th>First match</th>" } else { "" };
 
         format!(
             r#"<!DOCTYPE html>
@@ -441,6 +239,217 @@ footer{{margin-top:40px;padding-top:16px;border-top:1px solid var(--border);font
             file_rows = file_rows,
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// SARIF helpers
+// ---------------------------------------------------------------------------
+
+/// Build the SARIF `rules` array: one entry per named pattern plus an optional
+/// synthetic `"sensitive_value"` rule for files whose matches have no named breakdown.
+fn sarif_rules(report: &SanitizeReport) -> Vec<serde_json::Value> {
+    use serde_json::json;
+
+    let needs_generic = report
+        .files
+        .iter()
+        .any(|f| f.matches > 0 && f.pattern_counts.is_empty());
+
+    let mut rule_ids: Vec<&str> = report
+        .summary
+        .pattern_counts
+        .keys()
+        .map(String::as_str)
+        .collect();
+    rule_ids.sort_unstable();
+    if needs_generic {
+        rule_ids.push("sensitive_value");
+    }
+
+    rule_ids
+        .iter()
+        .map(|&id| {
+            let (short, full) = if id == "sensitive_value" {
+                (
+                    "Sensitive value detected".to_owned(),
+                    "One or more sensitive values were detected during sanitization and \
+                     replaced with safe substitutes. No original values are stored. \
+                     Run with a secrets file for per-pattern breakdown."
+                        .to_owned(),
+                )
+            } else {
+                (
+                    format!("Sensitive value of type '{}' detected", id),
+                    format!(
+                        "A sensitive value of type '{}' was detected during sanitization \
+                         and replaced with a safe substitute. No original value is stored.",
+                        id
+                    ),
+                )
+            };
+            json!({
+                "id": id,
+                "name": sarif_rule_name(id),
+                "shortDescription": { "text": short },
+                "fullDescription": { "text": full },
+                "defaultConfiguration": { "level": sarif_level(id) },
+                "properties": { "tags": ["security"] }
+            })
+        })
+        .collect()
+}
+
+/// Build the SARIF `results` array: one entry per (file, pattern) pair with a
+/// non-zero count, including the first known line number when available.
+fn sarif_results(report: &SanitizeReport) -> Vec<serde_json::Value> {
+    use serde_json::json;
+
+    let mut results = Vec::new();
+    for f in &report.files {
+        let uri = path_to_sarif_uri(&f.path);
+        let file_location = json!([{
+            "physicalLocation": {
+                "artifactLocation": { "uri": &uri, "uriBaseId": "%SRCROOT%" }
+            }
+        }]);
+
+        if f.matches > 0 && f.pattern_counts.is_empty() {
+            results.push(json!({
+                "ruleId": "sensitive_value",
+                "level": "warning",
+                "message": {
+                    "text": format!("{} sensitive value(s) detected and sanitized.", f.matches)
+                },
+                "locations": file_location
+            }));
+            continue;
+        }
+
+        for (pattern, &count) in &f.pattern_counts {
+            if count == 0 {
+                continue;
+            }
+            // Use startLine when we have location data for this pattern.
+            let first_line = f.match_locations.as_ref().and_then(|ml| {
+                ml.locations
+                    .iter()
+                    .find(|loc| loc.pattern == *pattern)
+                    .map(|loc| loc.line)
+            });
+            let loc = match first_line {
+                Some(line) => json!([{
+                    "physicalLocation": {
+                        "artifactLocation": { "uri": &uri, "uriBaseId": "%SRCROOT%" },
+                        "region": { "startLine": line }
+                    }
+                }]),
+                None => file_location.clone(),
+            };
+            results.push(json!({
+                "ruleId": pattern,
+                "level": sarif_level(pattern),
+                "message": {
+                    "text": format!(
+                        "{} sensitive value(s) of type '{}' detected and sanitized.",
+                        count, pattern
+                    )
+                },
+                "locations": loc
+            }));
+        }
+    }
+    results
+}
+
+// ---------------------------------------------------------------------------
+// HTML helpers
+// ---------------------------------------------------------------------------
+
+/// Render the five summary metric cards (files, matches, replacements, input, duration).
+fn html_summary_cards(s: &crate::report::ReportSummary) -> String {
+    format!(
+        r#"<div class="cards">
+  <div class="card"><div class="card-label">Files</div><div class="card-value">{}</div></div>
+  <div class="card"><div class="card-label">Matches</div><div class="card-value">{}</div></div>
+  <div class="card"><div class="card-label">Replacements</div><div class="card-value">{}</div></div>
+  <div class="card"><div class="card-label">Input</div><div class="card-value">{}</div></div>
+  <div class="card"><div class="card-label">Duration</div><div class="card-value">{} ms</div></div>
+</div>"#,
+        s.total_files,
+        s.total_matches,
+        s.total_replacements,
+        fmt_bytes(s.total_bytes_processed),
+        s.duration_ms,
+    )
+}
+
+/// Render the per-pattern breakdown table, sorted by match count descending.
+/// Returns an empty string when there are no matches (section is omitted).
+fn html_patterns_section(s: &crate::report::ReportSummary) -> String {
+    if s.total_matches == 0 {
+        return String::new();
+    }
+    let mut sorted: Vec<(&String, &u64)> = s.pattern_counts.iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    let rows: String = sorted
+        .iter()
+        .map(|(pat, count)| format!("<tr><td>{}</td><td>{}</td></tr>\n", html_escape(pat), count))
+        .collect();
+    format!(
+        r#"<div class="section">
+<h2>Patterns detected</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Pattern</th><th>Total matches</th></tr></thead>
+<tbody>{}</tbody>
+</table></div></div>"#,
+        rows
+    )
+}
+
+/// Render a single `<tr>` for the per-file table.
+/// `has_locations` controls whether the "First match" column is included.
+fn html_file_row(f: &FileReport, has_locations: bool) -> String {
+    let badges: String = {
+        let mut pairs: Vec<(&String, &u64)> = f.pattern_counts.iter().collect();
+        pairs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        pairs
+            .iter()
+            .filter(|(_, &c)| c > 0)
+            .map(|(pat, count)| {
+                format!(
+                    r#"<span class="badge {}">{}: {}</span>"#,
+                    sarif_badge_class(pat),
+                    html_escape(pat),
+                    count,
+                )
+            })
+            .collect()
+    };
+    let match_class = if f.matches > 0 { "count-positive" } else { "count-zero" };
+    let first_line_cell = if has_locations {
+        match f.match_locations.as_ref().and_then(|ml| ml.locations.first()) {
+            Some(loc) => {
+                let truncated = if f.match_locations.as_ref().is_some_and(|ml| ml.truncated) {
+                    r#"<span title="more matches not shown">…</span>"#
+                } else {
+                    ""
+                };
+                format!("<td class=\"count-positive\">L{}{}</td>", loc.line, truncated)
+            }
+            None => "<td class=\"count-zero\">—</td>".to_owned(),
+        }
+    } else {
+        String::new()
+    };
+    format!(
+        "<tr><td><code>{}</code></td><td class=\"{}\">{}</td><td>{}</td>{}<td>{}</td></tr>\n",
+        html_escape(&f.path),
+        match_class,
+        f.matches,
+        html_escape(&f.method),
+        first_line_cell,
+        badges,
+    )
 }
 
 // ---------------------------------------------------------------------------

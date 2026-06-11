@@ -50,6 +50,36 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use zeroize::Zeroize;
 
+/// An opaque cursor into the [`MappingStore`] insertion sequence.
+///
+/// Obtained from [`MappingStore::snapshot`] and passed to
+/// [`MappingStore::iter_since`]. Using a dedicated type prevents accidentally
+/// passing an unrelated `usize` (a count, an index, a capacity) to
+/// `iter_since`, which would silently yield the wrong subset of entries.
+///
+/// **Breaking change in 0.13.0:** `MappingStore::snapshot` previously returned
+/// `usize`; it now returns `StoreSnapshot`. Call sites should change
+/// `store.snapshot()` → the new type and `iter_since(n)` → `iter_since(snap)`.
+/// To iterate all entries use [`StoreSnapshot::start`] instead of the literal `0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreSnapshot(usize);
+
+impl StoreSnapshot {
+    /// A snapshot representing the beginning of the store (before any
+    /// insertions). Passing this to [`MappingStore::iter_since`] yields every
+    /// entry in the store — equivalent to the former `iter_since(0)`.
+    #[must_use]
+    pub fn start() -> Self {
+        Self(0)
+    }
+}
+
+impl Default for StoreSnapshot {
+    fn default() -> Self {
+        Self::start()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ZeroizingString — map key for the inner (per-category) DashMap
 // ---------------------------------------------------------------------------
@@ -310,14 +340,21 @@ impl MappingStore {
 
     /// Remove all mappings, zeroizing the original plaintexts.
     ///
-    /// This is useful for resetting the store between runs without
-    /// dropping and recreating it.
-    pub fn clear(&mut self) {
-        // Dropping the map entries triggers ZeroizingString::drop on each inner key.
-        // If any cloned Arcs are still live (e.g., in a concurrent thread's stack),
-        // those inner maps survive until the last Arc drops — but `clear` is only
-        // called after all workers have finished, so this is safe in practice.
-        drop(std::mem::take(&mut self.forward));
+    /// Takes `&self` so it is usable on a shared `Arc<MappingStore>`. Only
+    /// call this after all concurrent readers and writers have finished —
+    /// `DashMap::clear` acquires shard locks one at a time, so a concurrent
+    /// `get_or_insert` racing with `clear` will observe a partially-cleared
+    /// store.
+    ///
+    /// **Breaking change in 0.13.0:** the signature changed from
+    /// `clear(&mut self)` to `clear(&self)`.
+    pub fn clear(&self) {
+        // DashMap::clear() acquires each shard lock in turn and drops all
+        // entries, triggering ZeroizingString::drop for every key. Cloned
+        // Arc<InnerMap> refs held by concurrent threads survive until their
+        // last clone drops, but clear() is intended for post-run teardown
+        // only, so no concurrent access should be in flight.
+        self.forward.clear();
         self.len.store(0, Ordering::Release);
     }
 
@@ -325,30 +362,37 @@ impl MappingStore {
 
     /// Snapshot the current insertion count.
     ///
-    /// Returns an opaque `usize` that can be passed to [`Self::iter_since`] to
+    /// Returns a [`StoreSnapshot`] that can be passed to [`Self::iter_since`] to
     /// iterate only the entries added *after* this point — useful for
     /// finding which mappings a structured processor pass discovered without
     /// building a full `HashSet` of all existing keys.
     ///
     /// O(1), no allocation.
+    ///
+    /// **Breaking change in 0.13.0:** previously returned `usize`;
+    /// now returns [`StoreSnapshot`].
     #[must_use]
-    pub fn snapshot(&self) -> usize {
-        self.len.load(Ordering::Acquire)
+    pub fn snapshot(&self) -> StoreSnapshot {
+        StoreSnapshot(self.len.load(Ordering::Acquire))
     }
 
     /// Iterate over entries added at or after the given snapshot.
     ///
-    /// `snapshot` is the value returned by a previous call to [`Self::snapshot`].
-    /// Entries whose insertion index is ≥ `snapshot` are yielded; older
-    /// entries are skipped. Still O(n) in total store size, but avoids
-    /// allocating a `HashSet` of all prior keys.
+    /// `since` is the value returned by a previous call to [`Self::snapshot`].
+    /// Entries whose insertion index is ≥ `since` are yielded; older entries
+    /// are skipped. Still O(n) in total store size, but avoids allocating a
+    /// `HashSet` of all prior keys. Use [`StoreSnapshot::start`] to iterate
+    /// all entries.
+    ///
+    /// **Breaking change in 0.13.0:** the parameter type changed from `usize`
+    /// to [`StoreSnapshot`].
     ///
     /// Implementation note: the inner `.collect::<Vec<_>>()` inside the
     /// `flat_map` is required to release the DashMap shard lock before
     /// yielding items — it allocates one `Vec` per category shard visited.
     pub fn iter_since(
         &self,
-        snapshot: usize,
+        since: StoreSnapshot,
     ) -> impl Iterator<Item = (Category, CompactString, CompactString)> + '_ {
         self.forward.iter().flat_map(move |outer| {
             let cat = outer.key().clone();
@@ -357,7 +401,7 @@ impl MappingStore {
                 .iter()
                 .filter_map(move |inner| {
                     let (sanitized, idx) = inner.value();
-                    if *idx >= snapshot {
+                    if *idx >= since.0 {
                         Some((
                             cat.clone(),
                             CompactString::new(inner.key().0.as_str()),
@@ -399,12 +443,9 @@ impl MappingStore {
 }
 
 /// Zeroize original keys stored in the forward map on drop.
-/// Dropping the outer `DashMap` triggers `Arc::drop` for each inner map; when
-/// the last Arc drops, `ZeroizingString::drop` runs for every key, overwriting
-/// the plaintext before the memory is freed.
 impl Drop for MappingStore {
     fn drop(&mut self) {
-        drop(std::mem::take(&mut self.forward));
+        self.clear();
     }
 }
 
@@ -643,8 +684,22 @@ mod tests {
     }
 
     #[test]
+    fn clear_via_arc_shares_state() {
+        // The primary motivation for clear(&self) over clear(&mut self) is
+        // usability on Arc<MappingStore>. Verify that calling clear through a
+        // second Arc handle empties the store seen by the first handle.
+        let store = Arc::new(hmac_store(None));
+        let clone = Arc::clone(&store);
+        store.get_or_insert(&Category::Email, "a@a.com").unwrap();
+        assert_eq!(store.len(), 1);
+        clone.clear();
+        assert_eq!(store.len(), 0, "clear via Arc must empty the shared store");
+        assert!(store.is_empty());
+    }
+
+    #[test]
     fn clear_resets_store() {
-        let mut store = hmac_store(None);
+        let store = hmac_store(None);
         store.get_or_insert(&Category::Email, "a@a.com").unwrap();
         store.get_or_insert(&Category::IpV4, "1.2.3.4").unwrap();
         assert_eq!(store.len(), 2);
@@ -655,7 +710,7 @@ mod tests {
 
     #[test]
     fn clear_then_reinsert_works() {
-        let mut store = hmac_store(None);
+        let store = hmac_store(None);
         store.get_or_insert(&Category::Email, "a@a.com").unwrap();
         store.clear();
         let result = store.get_or_insert(&Category::Email, "a@a.com");
@@ -682,11 +737,25 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_default_and_start_are_equivalent() {
+        let store = hmac_store(None);
+        store.get_or_insert(&Category::Email, "a@a.com").unwrap();
+        store.get_or_insert(&Category::IpV4, "1.2.3.4").unwrap();
+        let via_start: Vec<_> = store.iter_since(StoreSnapshot::start()).collect();
+        let via_default: Vec<_> = store.iter_since(StoreSnapshot::default()).collect();
+        assert_eq!(
+            via_start.len(),
+            via_default.len(),
+            "default() must yield identical results to start()"
+        );
+    }
+
+    #[test]
     fn iter_since_zero_yields_all() {
         let store = hmac_store(None);
         store.get_or_insert(&Category::Email, "a@a.com").unwrap();
         store.get_or_insert(&Category::IpV4, "1.2.3.4").unwrap();
-        let all: Vec<_> = store.iter_since(0).collect();
+        let all: Vec<_> = store.iter_since(StoreSnapshot::start()).collect();
         assert_eq!(all.len(), 2);
     }
 
@@ -704,8 +773,8 @@ mod tests {
     #[test]
     fn allowlist_passes_value_through_unchanged() {
         use crate::allowlist::AllowlistMatcher;
-        let (matcher, _) =
-            AllowlistMatcher::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]);
+        let matcher =
+            AllowlistMatcher::new(vec!["localhost".to_string(), "127.0.0.1".to_string()]).matcher;
         let gen = Arc::new(HmacGenerator::new([42u8; 32]));
         let store = MappingStore::new_with_allowlist(gen, None, Arc::new(matcher));
 
@@ -721,7 +790,7 @@ mod tests {
     #[test]
     fn allowlist_still_replaces_non_listed() {
         use crate::allowlist::AllowlistMatcher;
-        let (matcher, _) = AllowlistMatcher::new(vec!["localhost".to_string()]);
+        let matcher = AllowlistMatcher::new(vec!["localhost".to_string()]).matcher;
         let gen = Arc::new(HmacGenerator::new([42u8; 32]));
         let store = MappingStore::new_with_allowlist(gen, None, Arc::new(matcher));
 

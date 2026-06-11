@@ -11,7 +11,7 @@
 
 use rust_sanitize::category::Category;
 use rust_sanitize::generator::HmacGenerator;
-use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use rust_sanitize::scanner::{ScanConfig, ScanPattern, SecretsLoadResult, StreamScanner};
 use rust_sanitize::secrets::{decrypt_secrets, encrypt_secrets, SecretsFormat};
 use rust_sanitize::store::MappingStore;
 use std::sync::Arc;
@@ -120,7 +120,7 @@ fn encrypted_secrets_scan_email() {
     let encrypted = encrypt_secrets(sample_json_secrets().as_bytes(), password).unwrap();
 
     let store = make_store();
-    let (scanner, warnings, _allow) = StreamScanner::from_encrypted_secrets(
+    let SecretsLoadResult { scanner, warnings, .. } = StreamScanner::from_encrypted_secrets(
         &encrypted,
         password,
         Some(SecretsFormat::Json),
@@ -149,7 +149,7 @@ fn encrypted_secrets_scan_literal() {
     let encrypted = encrypt_secrets(sample_json_secrets().as_bytes(), password).unwrap();
 
     let store = make_store();
-    let (scanner, _, _) = StreamScanner::from_encrypted_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_encrypted_secrets(
         &encrypted,
         password,
         Some(SecretsFormat::Json),
@@ -173,7 +173,7 @@ fn encrypted_secrets_scan_api_key() {
     let encrypted = encrypt_secrets(sample_json_secrets().as_bytes(), password).unwrap();
 
     let store = make_store();
-    let (scanner, _, _) = StreamScanner::from_encrypted_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_encrypted_secrets(
         &encrypted,
         password,
         Some(SecretsFormat::Json),
@@ -200,7 +200,7 @@ fn encrypted_secrets_same_value_same_replacement() {
     let encrypted = encrypt_secrets(sample_json_secrets().as_bytes(), password).unwrap();
 
     let store = make_store();
-    let (scanner, _, _) = StreamScanner::from_encrypted_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_encrypted_secrets(
         &encrypted,
         password,
         Some(SecretsFormat::Json),
@@ -231,7 +231,7 @@ fn encrypted_secrets_large_file() {
     let encrypted = encrypt_secrets(sample_json_secrets().as_bytes(), password).unwrap();
 
     let store = make_store();
-    let (scanner, _, _) = StreamScanner::from_encrypted_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_encrypted_secrets(
         &encrypted,
         password,
         Some(SecretsFormat::Json),
@@ -280,7 +280,7 @@ fn encrypted_secrets_concurrent_scans() {
     let encrypted = encrypt_secrets(sample_json_secrets().as_bytes(), password).unwrap();
 
     let store = make_store();
-    let (scanner, _, _) = StreamScanner::from_encrypted_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_encrypted_secrets(
         &encrypted,
         password,
         Some(SecretsFormat::Json),
@@ -332,7 +332,7 @@ fn encrypted_yaml_secrets_pipeline() {
     let encrypted = encrypt_secrets(sample_yaml_secrets().as_bytes(), password).unwrap();
 
     let store = make_store();
-    let (scanner, warnings, _allow) = StreamScanner::from_encrypted_secrets(
+    let SecretsLoadResult { scanner, warnings, .. } = StreamScanner::from_encrypted_secrets(
         &encrypted,
         password,
         Some(SecretsFormat::Yaml),
@@ -359,7 +359,7 @@ fn encrypted_toml_secrets_pipeline() {
     let encrypted = encrypt_secrets(sample_toml_secrets().as_bytes(), password).unwrap();
 
     let store = make_store();
-    let (scanner, warnings, _allow) = StreamScanner::from_encrypted_secrets(
+    let SecretsLoadResult { scanner, warnings, .. } = StreamScanner::from_encrypted_secrets(
         &encrypted,
         password,
         Some(SecretsFormat::Toml),
@@ -393,7 +393,7 @@ fn encrypted_secrets_with_extra_patterns() {
     let extra = ScanPattern::from_regex(r"\b\d{3}-\d{2}-\d{4}\b", Category::Ssn, "ssn").unwrap();
 
     let store = make_store();
-    let (scanner, _, _) = StreamScanner::from_encrypted_secrets(
+    let SecretsLoadResult { scanner, .. } = StreamScanner::from_encrypted_secrets(
         &encrypted,
         password,
         Some(SecretsFormat::Json),
@@ -420,7 +420,7 @@ fn encrypted_secrets_with_extra_patterns() {
 #[test]
 fn plaintext_secrets_scan() {
     let store = make_store();
-    let (scanner, warnings, _allow) = StreamScanner::from_plaintext_secrets(
+    let SecretsLoadResult { scanner, warnings, .. } = StreamScanner::from_plaintext_secrets(
         sample_json_secrets().as_bytes(),
         Some(SecretsFormat::Json),
         store,
@@ -469,7 +469,7 @@ fn encrypted_bad_pattern_in_secrets_returns_warnings() {
     let encrypted = encrypt_secrets(json.as_bytes(), "pw").unwrap();
 
     let store = make_store();
-    let (scanner, warnings, _allow) = StreamScanner::from_encrypted_secrets(
+    let SecretsLoadResult { scanner, warnings, .. } = StreamScanner::from_encrypted_secrets(
         &encrypted,
         "pw",
         Some(SecretsFormat::Json),
@@ -497,7 +497,7 @@ fn deterministic_replacement_across_scanner_instances() {
     let build_scanner = || {
         let gen = Arc::new(HmacGenerator::new([42u8; 32]));
         let store = Arc::new(MappingStore::new(gen, None));
-        let (scanner, _, _) = StreamScanner::from_encrypted_secrets(
+        let SecretsLoadResult { scanner, .. } = StreamScanner::from_encrypted_secrets(
             &encrypted,
             password,
             Some(SecretsFormat::Json),
@@ -560,7 +560,7 @@ fn file_backed_encrypt_decrypt() {
     // Decrypt from file.
     let enc_data = fs::read(&enc_path).unwrap();
     let store = make_store();
-    let (scanner, warnings, _allow) = StreamScanner::from_encrypted_secrets(
+    let SecretsLoadResult { scanner, warnings, .. } = StreamScanner::from_encrypted_secrets(
         &enc_data,
         "file-test",
         Some(SecretsFormat::Json),

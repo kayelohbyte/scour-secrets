@@ -1311,3 +1311,87 @@ fn tar_parallel_preserves_passthrough_content() {
     assert_eq!(by_name["clean3.txt"], "still clean");
     assert!(!by_name["secret.txt"].contains("alice@corp.com"));
 }
+
+// ===========================================================================
+// Zip-slip: end-to-end path traversal sanitization
+// ===========================================================================
+
+/// A zip archive containing entries with path-traversal names must be
+/// processed safely: the output archive must contain only sanitized paths
+/// with no `..` components, and the file content must still be sanitized.
+#[test]
+fn zip_slip_entry_path_sanitized_in_output() {
+    let proc = make_processor();
+
+    // Build a zip where every entry has a traversal path.
+    let traversal_entries: &[(&str, &[u8])] = &[
+        ("../../etc/passwd", b"alice@corp.com sensitive"),
+        ("../../../root/.ssh/id_rsa", b"TOP_SECRET_KEY_12345"),
+        ("/absolute/path/file.txt", b"other content"),
+        ("normal/safe.txt", b"safe@safe.com"),
+    ];
+    let input = make_zip(traversal_entries);
+
+    let mut writer = Cursor::new(Vec::new());
+    proc.process_zip(Cursor::new(&input[..]), &mut writer).unwrap();
+    let entries = read_zip(&writer.into_inner());
+
+    // No output entry path may contain `..` or start with `/`.
+    for (name, _) in &entries {
+        assert!(
+            !name.contains(".."),
+            "output entry must not contain '..': {name}"
+        );
+        assert!(
+            !name.starts_with('/'),
+            "output entry must not start with '/': {name}"
+        );
+    }
+
+    // Content must still be sanitized.
+    let by_name: std::collections::HashMap<&str, &str> =
+        entries.iter().map(|(n, c)| (n.as_str(), c.as_str())).collect();
+
+    // `../../etc/passwd` → sanitized to `etc/passwd`
+    assert!(
+        by_name.contains_key("etc/passwd"),
+        "traversal path must be sanitized to 'etc/passwd', got keys: {:?}",
+        by_name.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        !by_name["etc/passwd"].contains("alice@corp.com"),
+        "content in traversal entry must be sanitized"
+    );
+
+    // `../../../root/.ssh/id_rsa` → sanitized to `root/.ssh/id_rsa`
+    assert!(
+        by_name.contains_key("root/.ssh/id_rsa"),
+        "deep traversal must be sanitized"
+    );
+    assert!(
+        !by_name["root/.ssh/id_rsa"].contains("TOP_SECRET_KEY_12345"),
+        "literal secret in traversal entry must be sanitized"
+    );
+
+    // `/absolute/path/file.txt` → sanitized to `absolute/path/file.txt`
+    assert!(
+        by_name.contains_key("absolute/path/file.txt"),
+        "absolute path must be made relative"
+    );
+
+    // Normal entry untouched path-wise, content sanitized.
+    assert!(
+        by_name.contains_key("normal/safe.txt"),
+        "clean path must be preserved"
+    );
+    assert!(
+        !by_name["normal/safe.txt"].contains("safe@safe.com"),
+        "email in clean entry must be sanitized"
+    );
+}
+
+// Note: tar traversal-path sanitization is tested at the function level in
+// `src/processor/archive.rs` (see `sanitize_tar_entry_name` unit tests).
+// The `tar` crate itself refuses to construct archives with `..` path
+// components, so an end-to-end integration test would require crafting raw
+// tar bytes, which is out of scope here.

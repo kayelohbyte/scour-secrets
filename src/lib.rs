@@ -26,14 +26,6 @@
 //! The `MappingStore` uses `DashMap` (shard-level locking) for the forward
 //! dedup cache. All types are `Send + Sync`.
 //!
-//! ## Stability
-//!
-//! As of 0.8.0 the public API is considered stable and follows Semantic Versioning.
-//! Breaking changes require a major version bump. The core guarantees —
-//! one-way replacement, deterministic mode, and length preservation — are
-//! stable across all 1.x releases. Processor heuristics, default limit
-//! values, and report schema may change in minor releases (additive only).
-//!
 //! ## Example: Store-Level Replacement
 //!
 //! ```rust
@@ -165,14 +157,14 @@ pub use processor::{
     DEFAULT_FIELD_SIGNAL_THRESHOLD,
 };
 pub use report::{FileReport, ReportBuilder, ReportMetadata, SanitizeReport};
-pub use scanner::{ScanConfig, ScanPattern, ScanProgress, ScanStats, StreamScanner};
+pub use scanner::{MatchLocation, ScanConfig, ScanPattern, ScanProgress, ScanStats, SecretsLoadResult, StreamScanner};
 pub use secrets::{
     decrypt_secrets, encrypt_secrets, load_secrets_auto, looks_encrypted, SecretEntry,
     SecretsFormat,
 };
-pub use store::MappingStore;
+pub use store::{MappingStore, StoreSnapshot};
 pub use strategy::{
-    EntropyMode, FakeIp, HmacHash, PreserveLength, RandomString, RandomUuid, Strategy,
-    StrategyGenerator,
+    CategoryAwareStrategy, EntropyMode, FakeIp, HmacHash, PreserveLength, RandomString,
+    RandomUuid, Strategy, StrategyGenerator,
 };
 pub use strip_values::strip_values_from_text;

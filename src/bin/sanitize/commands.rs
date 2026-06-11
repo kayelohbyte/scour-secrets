@@ -359,10 +359,11 @@ pub(crate) fn run_test_pattern(args: &TestPatternArgs) -> Result<(), (String, i3
 pub(crate) fn run_allow_test(args: &AllowTestArgs) -> Result<(), (String, i32)> {
     use rust_sanitize::allowlist::AllowlistMatcher;
 
-    let (matcher, warnings) = AllowlistMatcher::new(args.allow.clone());
-    for w in &warnings {
+    let result = AllowlistMatcher::new(args.allow.clone());
+    for w in &result.warnings {
         eprintln!("warning: {w}");
     }
+    let matcher = result.matcher;
 
     let values: Vec<String> = if args.values.is_empty() {
         let mut buf = String::new();

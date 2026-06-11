@@ -30,3 +30,13 @@ doc = false
 name = "fuzz_archive"
 path = "fuzz_targets/fuzz_archive.rs"
 doc = false
+
+[[bin]]
+name = "fuzz_xml"
+path = "fuzz_targets/fuzz_xml.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_ini"
+path = "fuzz_targets/fuzz_ini.rs"
+doc = false

@@ -34,6 +34,7 @@
 
 use crate::error::{Result, SanitizeError};
 use crate::processor::json_proc::walk_json;
+use crate::processor::limits::DEFAULT_INPUT_SIZE;
 use crate::processor::{FileTypeProfile, Processor};
 use crate::store::MappingStore;
 use serde_json::Value;
@@ -135,11 +136,8 @@ impl Processor for JsonLinesProcessor {
         profile: &FileTypeProfile,
         store: &MappingStore,
     ) -> Result<Vec<u8>> {
-        // Validate UTF-8 upfront so the error points at the file, not a line.
-        std::str::from_utf8(content).map_err(|e| SanitizeError::ParseError {
-            format: "JSONL".into(),
-            message: format!("invalid UTF-8: {}", e),
-        })?;
+        // Validate size and UTF-8 upfront so the error points at the file.
+        crate::processor::check_size_and_decode(content, "JSONL", DEFAULT_INPUT_SIZE)?;
         let mut output = Vec::with_capacity(content.len());
         Self::process_lines(BufReader::new(content), &mut output, profile, store)?;
         Ok(output)

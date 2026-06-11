@@ -312,6 +312,8 @@ pub(crate) struct Cli {
 
     /// Add one-off literal or regex patterns for this run only (comma-separated).
     /// Prefix with `regex:` for a regex pattern; bare values are treated as literals.
+    /// To match a literal that contains a comma, repeat the flag: --quick a --quick b,c
+    /// Replacements use the auth_token format (__SANITIZED_…__) regardless of value shape.
     /// Example: --quick "tok-abc123,regex:sk-[A-Za-z0-9]{40}"
     #[arg(long, value_delimiter = ',', value_name = "PATTERN")]
     pub(crate) quick: Vec<String>,

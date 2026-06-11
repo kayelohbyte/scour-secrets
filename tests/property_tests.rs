@@ -6,6 +6,7 @@
 use proptest::prelude::*;
 use rust_sanitize::category::Category;
 use rust_sanitize::generator::{HmacGenerator, ReplacementGenerator};
+use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
 use rust_sanitize::store::MappingStore;
 use std::sync::Arc;
 
@@ -270,5 +271,71 @@ proptest! {
         let out = gen.generate(&Category::Ssn, &input);
         prop_assert!(out.starts_with("000-"));
         prop_assert_eq!(out.len(), 11);
+    }
+}
+
+// ─── Chunk-size independence ───────────────────────────────────────────────
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(100))]
+
+    /// Scanner output must be identical regardless of chunk size.
+    ///
+    /// Any streaming scanner that is correct for one chunk size must be correct
+    /// for all chunk sizes — the overlap/carry buffer exists specifically to
+    /// guarantee this. We verify it by scanning the same input with four
+    /// different chunk sizes and asserting byte-for-byte identical output.
+    #[test]
+    fn scanner_output_independent_of_chunk_size(
+        // ASCII filler around a fixed literal secret so we have guaranteed matches
+        // at known positions, including near chunk boundaries.
+        prefix in "[a-zA-Z0-9 ]{0,200}",
+        middle in "[a-zA-Z0-9 ]{0,200}",
+        suffix in "[a-zA-Z0-9 ]{0,200}",
+    ) {
+        const SECRET: &str = "TOP_SECRET_LITERAL_XYZ";
+        let input = format!("{prefix}{SECRET}{middle}{SECRET}{suffix}");
+        let input_bytes = input.as_bytes();
+
+        let gen = Arc::new(HmacGenerator::new([77u8; 32]));
+        let store = Arc::new(MappingStore::new(gen, None));
+        let pattern = ScanPattern::from_literal(SECRET, Category::Custom("s".into()), "s").unwrap();
+
+        // Reference output: use a large chunk so the whole input fits in one window.
+        let reference = {
+            let scanner = StreamScanner::new(
+                vec![pattern.clone()],
+                Arc::clone(&store),
+                ScanConfig::new(input_bytes.len().max(16) + 16, 8),
+            ).unwrap();
+            let (out, _) = scanner.scan_bytes(input_bytes).unwrap();
+            out
+        };
+
+        // Verify with progressively smaller chunk sizes that force the secret
+        // to straddle chunk boundaries at different offsets.
+        //
+        // The scanner contract requires overlap_size ≥ max_pattern_length.
+        // Use exactly SECRET.len() + 1 as overlap so the pattern is always
+        // catchable at boundaries, and skip any chunk_size that's too small
+        // to satisfy chunk_size > overlap.
+        let required_overlap = SECRET.len() + 1;
+        for &chunk_size in &[32usize, 64, 128, 256] {
+            if required_overlap >= chunk_size {
+                continue;
+            }
+            let overlap = required_overlap;
+            let scanner = StreamScanner::new(
+                vec![pattern.clone()],
+                Arc::clone(&store),
+                ScanConfig::new(chunk_size, overlap),
+            ).unwrap();
+            let (out, _) = scanner.scan_bytes(input_bytes).unwrap();
+            prop_assert_eq!(
+                &out, &reference,
+                "chunk_size={} produced different output for input {:?}",
+                chunk_size, input,
+            );
+        }
     }
 }
