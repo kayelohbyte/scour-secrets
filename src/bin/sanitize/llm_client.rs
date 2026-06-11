@@ -18,6 +18,55 @@ pub(crate) fn validate_endpoint_scheme(endpoint: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Remove ESC bytes from `s` to prevent terminal control-sequence injection.
+fn strip_terminal_escapes(s: &str) -> String {
+    s.replace('\x1b', "")
+}
+
+/// Read an SSE stream from `reader`, write extracted content to `writer`,
+/// and enforce a `limit`-byte cap on raw stream bytes consumed.
+///
+/// Returns an error if the stream exceeds `limit`, if a read error occurs,
+/// or if writing to `writer` fails. Stops cleanly on a `data: [DONE]` line.
+/// Non-`data:` lines (comments, event names, blanks) are silently skipped.
+fn process_sse_stream<R: BufRead, W: Write>(
+    reader: R,
+    writer: &mut W,
+    limit: usize,
+) -> Result<(), String> {
+    let mut total_bytes: usize = 0;
+    for line in reader.lines() {
+        let line = line.map_err(|e| format!("error reading LLM response stream: {e}"))?;
+        // Count raw line bytes before parsing to bound total stream consumption
+        // for malformed/adversarial responses that carry no content field.
+        total_bytes += line.len();
+        if total_bytes > limit {
+            return Err(format!(
+                "LLM response exceeded {} MB limit; aborting",
+                MAX_STREAM_BYTES / 1024 / 1024
+            ));
+        }
+        let Some(data) = line.strip_prefix("data: ") else {
+            continue;
+        };
+        if data.trim() == "[DONE]" {
+            break;
+        }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
+            if let Some(content) = val["choices"][0]["delta"]["content"].as_str() {
+                let safe = strip_terminal_escapes(content);
+                writer
+                    .write_all(safe.as_bytes())
+                    .map_err(|e| format!("failed to write LLM response: {e}"))?;
+                writer
+                    .flush()
+                    .map_err(|e| format!("failed to flush stdout: {e}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// POST a prompt to an OpenAI-compatible `/v1/chat/completions` endpoint
 /// and stream the response to stdout.
 ///
@@ -61,38 +110,101 @@ pub(crate) fn send_prompt(
 
     let reader = BufReader::new(response.into_reader());
     let stdout = std::io::stdout();
-    let mut total_bytes: usize = 0;
-
-    for line in reader.lines() {
-        let line = line.map_err(|e| format!("error reading LLM response stream: {e}"))?;
-        // Count raw line bytes before parsing to bound memory usage for
-        // malformed/adversarial responses that have no content field.
-        total_bytes += line.len();
-        if total_bytes > MAX_STREAM_BYTES {
-            return Err(format!(
-                "LLM response exceeded {} MB limit; aborting",
-                MAX_STREAM_BYTES / 1024 / 1024
-            ));
-        }
-        let Some(data) = line.strip_prefix("data: ") else {
-            continue;
-        };
-        if data.trim() == "[DONE]" {
-            break;
-        }
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(data) {
-            if let Some(content) = val["choices"][0]["delta"]["content"].as_str() {
-                // Strip ESC to prevent terminal control-sequence injection.
-                let safe = content.replace('\x1b', "");
-                let mut out = stdout.lock();
-                out.write_all(safe.as_bytes())
-                    .map_err(|e| format!("failed to write LLM response: {e}"))?;
-                out.flush()
-                    .map_err(|e| format!("failed to flush stdout: {e}"))?;
-            }
-        }
-    }
-
+    let mut out = stdout.lock();
+    process_sse_stream(reader, &mut out, MAX_STREAM_BYTES)?;
+    drop(out);
     println!();
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn sse_content_line(content: &str) -> String {
+        let json = serde_json::json!({"choices":[{"delta":{"content": content}}]});
+        format!("data: {json}\n")
+    }
+
+    // ---- strip_terminal_escapes ----
+
+    #[test]
+    fn strip_esc_removes_all_esc_bytes() {
+        assert_eq!(strip_terminal_escapes("\x1b[31mred\x1b[0m"), "[31mred[0m");
+        assert_eq!(strip_terminal_escapes("safe text"), "safe text");
+        assert_eq!(strip_terminal_escapes("\x1b"), "");
+        assert_eq!(strip_terminal_escapes("a\x1bb\x1bc"), "abc");
+    }
+
+    #[test]
+    fn strip_esc_empty_string() {
+        assert_eq!(strip_terminal_escapes(""), "");
+    }
+
+    // ---- process_sse_stream ----
+
+    #[test]
+    fn sse_extracts_content_from_stream() {
+        let input = format!(
+            "{}{}data: [DONE]\n",
+            sse_content_line("hello "),
+            sse_content_line("world"),
+        );
+        let mut out = Vec::new();
+        process_sse_stream(Cursor::new(input.as_bytes()), &mut out, MAX_STREAM_BYTES).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "hello world");
+    }
+
+    #[test]
+    fn sse_strips_esc_in_content() {
+        // ESC appears as  in JSON-encoded content.
+        let input = format!("{}data: [DONE]\n", sse_content_line("\x1b[31mred\x1b[0m"));
+        let mut out = Vec::new();
+        process_sse_stream(Cursor::new(input.as_bytes()), &mut out, MAX_STREAM_BYTES).unwrap();
+        let s = String::from_utf8(out).unwrap();
+        assert!(!s.contains('\x1b'), "ESC bytes must be stripped; got: {s:?}");
+        assert!(s.contains("[31mred[0m"), "non-ESC chars must be preserved; got: {s:?}");
+    }
+
+    #[test]
+    fn sse_stops_at_done() {
+        let input = format!(
+            "{}data: [DONE]\n{}",
+            sse_content_line("first"),
+            sse_content_line("should-not-appear"),
+        );
+        let mut out = Vec::new();
+        process_sse_stream(Cursor::new(input.as_bytes()), &mut out, MAX_STREAM_BYTES).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "first");
+    }
+
+    #[test]
+    fn sse_skips_non_data_lines() {
+        let input = format!(
+            "event: ping\n: comment\n\n{}data: [DONE]\n",
+            sse_content_line("ok"),
+        );
+        let mut out = Vec::new();
+        process_sse_stream(Cursor::new(input.as_bytes()), &mut out, MAX_STREAM_BYTES).unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "ok");
+    }
+
+    #[test]
+    fn sse_returns_error_when_stream_exceeds_limit() {
+        // Use a small limit so the test doesn't need to allocate 10 MB.
+        let limit = 500usize;
+        // Each filler line is ~100 bytes; 6 lines puts us over 500.
+        let filler = format!("non-data-line: {}\n", "x".repeat(90));
+        let input = filler.repeat(7);
+        let mut out = Vec::new();
+        let err =
+            process_sse_stream(Cursor::new(input.as_bytes()), &mut out, limit).unwrap_err();
+        assert!(err.contains("exceeded"), "error must mention exceeded; got: {err}");
+    }
+
 }
