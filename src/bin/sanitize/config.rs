@@ -5,115 +5,123 @@ use crate::hooks::{
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Per-user default flag values loaded from `~/.config/sanitize/settings.yaml`.
-/// Each field mirrors a CLI flag. A `None` / empty value means "not set" and
-/// the CLI default applies. An explicit CLI flag always wins over this file.
+/// Unified scan configuration loaded from any of the three config files:
+///
+/// - `~/.config/sanitize/settings.yaml`      — global per-user defaults
+/// - `<project>/.sanitize.yaml`              — per-project defaults (cwd-walk)
+/// - `<namespace-dir>/settings.yaml`         — per-namespace defaults (MCP only)
+///
+/// All fields are optional. An explicit CLI flag always wins over any layer.
+/// Lists (`app`, `allow`, `exclude_path`, `include_path`, `context_keywords`)
+/// are merged additively across all layers rather than replaced.
 #[derive(Debug, Default, serde::Deserialize)]
-pub(crate) struct Settings {
-    /// --app: app bundles to load on every run.
+pub(crate) struct SanitizeConfig {
+    // --- Additive lists -------------------------------------------------
+    /// App bundles to load. Merged across all layers; CLI `--app` appends further.
     #[serde(default)]
     pub(crate) app: Vec<String>,
-    /// --allow: values to pass through unchanged (exact strings or * globs).
+    /// Allow-list patterns (exact, glob, or `regex:<pat>`). Merged across layers.
     #[serde(default)]
     pub(crate) allow: Vec<String>,
-    /// --fail-on-match: exit 2 when any match is found.
+    /// Path glob patterns to exclude. Merged across layers.
     #[serde(default)]
+    pub(crate) exclude_path: Vec<String>,
+    /// Path glob patterns to include (directory walks only). Merged across layers.
+    #[serde(default)]
+    pub(crate) include_path: Vec<String>,
+    /// Extra context-extraction keywords. Merged with built-in defaults.
+    #[serde(default)]
+    pub(crate) context_keywords: Vec<String>,
+
+    // --- Source files (project / namespace only) -------------------------
+    /// Path to a secrets file, relative to the config file location.
+    pub(crate) secrets_file: Option<PathBuf>,
+    /// Treat the secrets file as AES-GCM encrypted.
+    pub(crate) encrypted_secrets: Option<bool>,
+    /// Path to a field-level profile YAML, relative to the config file location.
+    pub(crate) profile: Option<PathBuf>,
+
+    // --- Bool scan-behavior flags ----------------------------------------
+    /// Exit with code 2 when any match is found (`--fail-on-match`).
     pub(crate) fail_on_match: Option<bool>,
-    /// --strict: abort on the first error instead of skipping.
-    #[serde(default)]
+    /// Abort on the first processing error (`--strict`).
     pub(crate) strict: Option<bool>,
-    /// --no-structured-handoff: suppress the structured-to-scanner value handoff.
-    #[serde(default)]
+    /// Suppress structured-to-scanner value handoff (`--no-structured-handoff`).
     pub(crate) no_structured_handoff: Option<bool>,
-    /// --no-field-signal: disable the field-name heuristic.
-    #[serde(default)]
+    /// Disable the field-name signal heuristic (`--no-field-signal`).
     pub(crate) no_field_signal: Option<bool>,
-    /// --threads: worker thread count (null = auto-detect).
-    #[serde(default)]
+    /// Bypass all structured processors, streaming scanner only (`--force-text`).
+    pub(crate) force_text: Option<bool>,
+    /// Process binary entries inside archives (`--include-binary`).
+    pub(crate) include_binary: Option<bool>,
+    /// Walk hidden files and directories (`--hidden`).
+    pub(crate) hidden: Option<bool>,
+    /// Replace context_keywords entirely instead of merging (`--context-keywords-replace`).
+    pub(crate) context_keywords_replace: Option<bool>,
+    /// Case-sensitive keyword matching for context extraction (`--context-case-sensitive`).
+    pub(crate) context_case_sensitive: Option<bool>,
+    /// Extract keyword-matched log context after sanitization (`--extract-context`).
+    pub(crate) extract_context: Option<bool>,
+
+    // --- Option<T> parameters (None = CLI default applies) ---------------
+    /// Worker thread count; `null` = auto-detect (`--threads`).
     pub(crate) threads: Option<usize>,
-    /// --log-format: "human" or "json".
-    #[serde(default)]
+    /// Shannon entropy threshold for high-entropy token detection (`--entropy-threshold`).
+    pub(crate) entropy_threshold: Option<f64>,
+    /// Log output format: `"human"` or `"json"` (`--log-format`).
     pub(crate) log_format: Option<String>,
-    /// --log-level: "off", "error", "warn", "info", "debug", or "trace".
-    #[serde(default)]
+    /// Log level: off, error, warn, info, debug, trace (`--log-level`).
     pub(crate) log_level: Option<String>,
-    /// --no-progress: disable progress output.
-    #[serde(default)]
+
+    // --- Numeric fields with concrete CLI defaults -----------------------
+    /// Streaming chunk size in bytes; default 1 MiB (`--chunk-size`).
+    pub(crate) chunk_size: Option<usize>,
+    /// Max unique mapping cache entries; default 10 M (`--max-mappings`).
+    pub(crate) max_mappings: Option<usize>,
+    /// Max structured file size in bytes; default 256 MiB (`--max-structured-size`).
+    pub(crate) max_structured_size: Option<u64>,
+    /// Max recursive archive nesting depth; default 5 (`--max-archive-depth`).
+    pub(crate) max_archive_depth: Option<u32>,
+    /// Context lines captured before/after each keyword hit; default 10 (`--context-lines`).
+    pub(crate) context_lines: Option<usize>,
+    /// Max keyword matches returned per file; default 50 (`--max-context-matches`).
+    pub(crate) max_context_matches: Option<usize>,
+    /// Max match locations stored per run; default 500 (`--max-match-locations`).
+    pub(crate) max_match_locations: Option<usize>,
+    /// Progress reporting interval in ms; default 200 (`--progress-interval-ms`).
+    pub(crate) progress_interval_ms: Option<u64>,
+
+    // --- Display flags ---------------------------------------------------
+    /// Suppress all progress output (`--no-progress`).
     pub(crate) no_progress: Option<bool>,
+    /// Suppress non-error output (`--quiet`).
+    pub(crate) quiet: Option<bool>,
 }
 
-/// Load `~/.config/sanitize/settings.yaml` if it exists. Silently returns
-/// defaults when the file is absent or unreadable.
-/// Set `SANITIZE_NO_SETTINGS=1` to skip loading entirely (useful in CI).
-pub(crate) fn load_settings() -> Settings {
+// ---------------------------------------------------------------------------
+// Global settings (~/.config/sanitize/settings.yaml)
+// ---------------------------------------------------------------------------
+
+/// Load `~/.config/sanitize/settings.yaml`. Silently returns defaults when
+/// absent or unreadable. Set `SANITIZE_NO_SETTINGS=1` to skip entirely.
+pub(crate) fn load_settings() -> SanitizeConfig {
     if std::env::var("SANITIZE_NO_SETTINGS").as_deref() == Ok("1") {
-        return Settings::default();
+        return SanitizeConfig::default();
     }
     let path = global_settings_path();
-    if !path.exists() {
-        return Settings::default();
-    }
-    match fs::read_to_string(&path) {
-        Ok(text) => serde_yaml_ng::from_str(&text).unwrap_or_else(|e| {
-            eprintln!(
-                "warning: could not parse {}: {e} — ignoring settings",
-                path.display()
-            );
-            Settings::default()
-        }),
-        Err(e) => {
-            eprintln!(
-                "warning: could not read {}: {e} — ignoring settings",
-                path.display()
-            );
-            Settings::default()
-        }
-    }
+    load_yaml_config(&path, "settings")
 }
 
-// ── Project-level config (.sanitize.toml) ─────────────────────────────────────
+// ---------------------------------------------------------------------------
+// Project config (.sanitize.yaml)
+// ---------------------------------------------------------------------------
 
-/// Per-directory config loaded from a `.sanitize.toml` file found by walking
-/// up from the current working directory.  Applied after `settings.yaml` but
-/// before CLI flags, so project config overrides global defaults while CLI
-/// flags still win over everything.
-///
-/// Override the search entirely with `SANITIZE_CONFIG=/path/to/file.toml`.
-/// Set `SANITIZE_NO_CONFIG=1` to skip project config loading.
-#[derive(Debug, Default, serde::Deserialize)]
-pub(crate) struct ProjectConfig {
-    /// App bundles to load — additive with, not replacing, CLI `--app`.
-    #[serde(default)]
-    pub(crate) app: Vec<String>,
-    /// Allow-list values — additive with CLI `--allow`.
-    #[serde(default)]
-    pub(crate) allow: Vec<String>,
-    /// Path to a secrets file (relative to the `.sanitize.toml` location).
-    pub(crate) secrets_file: Option<PathBuf>,
-    /// Whether the secrets file is AES-GCM encrypted.
-    pub(crate) encrypted_secrets: Option<bool>,
-    /// Path to a profile YAML file (relative to the `.sanitize.toml` location).
-    pub(crate) profile: Option<PathBuf>,
-    /// Exit 2 when any match is found.
-    pub(crate) fail_on_match: Option<bool>,
-    /// Abort on the first error instead of skipping.
-    pub(crate) strict: Option<bool>,
-    /// Suppress auto-save of discovered literal values.
-    pub(crate) no_structured_handoff: Option<bool>,
-    /// Disable the field-name signal heuristic.
-    pub(crate) no_field_signal: Option<bool>,
-    /// Path-level exclude patterns (glob). Matched relative to the
-    /// `.sanitize.toml` location; patterns without `/` also match the basename.
-    #[serde(default)]
-    pub(crate) exclude: Vec<String>,
-}
-
-/// Search for `.sanitize.toml` starting from `dir` and walking upward.
+/// Search for `.sanitize.yaml` starting from `dir` and walking upward.
 /// Returns the path of the first file found, or `None`.
 pub(crate) fn find_project_config_from(dir: &Path) -> Option<PathBuf> {
     let mut current = dir.to_path_buf();
     loop {
-        let candidate = current.join(".sanitize.toml");
+        let candidate = current.join(".sanitize.yaml");
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -127,9 +135,9 @@ pub(crate) fn find_project_config_from(dir: &Path) -> Option<PathBuf> {
 /// Locate the project config to load.
 ///
 /// Resolution order:
-/// 1. `SANITIZE_NO_CONFIG=1` → skip entirely (returns `None`).
+/// 1. `SANITIZE_NO_CONFIG=1` → skip (returns `None`).
 /// 2. `SANITIZE_CONFIG=<path>` → use that file if it exists.
-/// 3. Walk up from CWD looking for `.sanitize.toml`.
+/// 3. Walk up from CWD looking for `.sanitize.yaml`.
 pub(crate) fn find_project_config() -> Option<PathBuf> {
     if std::env::var("SANITIZE_NO_CONFIG").as_deref() == Ok("1") {
         return None;
@@ -146,80 +154,159 @@ pub(crate) fn find_project_config() -> Option<PathBuf> {
     find_project_config_from(&cwd)
 }
 
-/// Parse a `.sanitize.toml` file.  Returns `(config, config_dir)` so that
-/// relative paths inside the file can be resolved against the file's location.
+/// Parse a `.sanitize.yaml` file. Returns `(config, config_dir)` so relative
+/// paths inside the file can be resolved against the file's location.
 /// Silently returns defaults on read or parse error.
-pub(crate) fn load_project_config(path: &Path) -> (ProjectConfig, PathBuf) {
+pub(crate) fn load_project_config(path: &Path) -> (SanitizeConfig, PathBuf) {
     let config_dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
-
-    let text = match fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!(
-                "warning: could not read {}: {e} — ignoring project config",
-                path.display()
-            );
-            return (ProjectConfig::default(), config_dir);
-        }
-    };
-    let cfg: ProjectConfig = match toml::from_str(&text) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!(
-                "warning: could not parse {}: {e} — ignoring project config",
-                path.display()
-            );
-            return (ProjectConfig::default(), config_dir);
-        }
-    };
-    (cfg, config_dir)
+    (load_yaml_config(path, "project config"), config_dir)
 }
 
-/// Template written to `settings.yaml` by `sanitize init-hook`.
-const SETTINGS_TEMPLATE: &str = "\
-# sanitize settings
-# Values here apply when the corresponding flag is not passed on the command
-# line. All fields are optional — uncomment and edit to activate.
+// ---------------------------------------------------------------------------
+// Shared YAML loader
+// ---------------------------------------------------------------------------
 
-# Load these app bundles on every run (--app).
+fn load_yaml_config(path: &Path, label: &str) -> SanitizeConfig {
+    if !path.exists() {
+        return SanitizeConfig::default();
+    }
+    match fs::read_to_string(path) {
+        Ok(text) => serde_yaml_ng::from_str(&text).unwrap_or_else(|e| {
+            eprintln!(
+                "warning: could not parse {} {}: {e} — ignoring",
+                label,
+                path.display()
+            );
+            SanitizeConfig::default()
+        }),
+        Err(e) => {
+            eprintln!(
+                "warning: could not read {} {}: {e} — ignoring",
+                label,
+                path.display()
+            );
+            SanitizeConfig::default()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Templates
+// ---------------------------------------------------------------------------
+
+/// Template written to `settings.yaml` by `sanitize init-hook`.
+pub(crate) const SETTINGS_TEMPLATE: &str = "\
+# sanitize settings  (~/.config/sanitize/settings.yaml)
+# Values here become defaults for every run. Explicit CLI flags always win.
+# All fields are optional — uncomment and edit to activate.
+
+# ── Pattern loading ──────────────────────────────────────────────────────────
+
+# App bundles to load on every run (--app). Additive with --app on the CLI.
 # app:
 #   - gitlab
 #   - kubernetes
 
-# Values that pass through unchanged, supports * glob patterns (--allow).
+# Values that pass through unchanged; supports * glob and regex:<pat> (--allow).
 # allow:
 #   - localhost
 #   - \"*.internal\"
 
-# Exit with code 2 when any secrets are found (--fail-on-match).
+# ── Path filtering ───────────────────────────────────────────────────────────
+
+# Glob patterns to skip when walking directories (--exclude-path).
+# exclude_path:
+#   - \"*.test.yaml\"
+#   - \"fixtures/**\"
+
+# Glob patterns to restrict directory walks to (--include-path).
+# include_path:
+#   - \"**/*.log\"
+#   - \"**/*.conf\"
+
+# ── Scan behavior ────────────────────────────────────────────────────────────
+
+# Exit with code 2 when any match is found (--fail-on-match).
 # fail_on_match: false
 
-# Abort on the first error instead of skipping and continuing (--strict).
+# Abort on the first processing error (--strict).
 # strict: false
 
 # Suppress the structured-to-scanner value handoff (--no-structured-handoff).
 # no_structured_handoff: false
 
 # Disable the field-name signal heuristic (--no-field-signal).
-# When active, key names matching sensitive keywords (password, secret, token, …)
-# are flagged by their value's Shannon entropy even without an explicit FieldRule.
-# Default thresholds: 3.0 bits/char for strong keywords, 3.5 for ambiguous ones.
-# Override per-signal with kind: field-name entries in your secrets file.
 # no_field_signal: false
 
-# Worker thread count — omit for auto-detect (--threads).
+# Bypass all structured processors; streaming scanner only (--force-text).
+# force_text: false
+
+# Process binary entries inside archives (--include-binary).
+# include_binary: false
+
+# Walk hidden files and directories (--hidden).
+# hidden: false
+
+# Shannon entropy threshold for high-entropy token detection (--entropy-threshold).
+# entropy_threshold: 4.5
+
+# ── Performance ──────────────────────────────────────────────────────────────
+
+# Worker thread count; omit for auto-detect (--threads).
 # threads: 4
 
-# Log format: \"human\" (default) or \"json\" for SIEM ingestion (--log-format).
+# Streaming chunk size in bytes (--chunk-size). Default: 1048576 (1 MiB).
+# chunk_size: 1048576
+
+# Max unique mapping cache entries (--max-mappings). Default: 10000000.
+# max_mappings: 10000000
+
+# Max structured file size in bytes (--max-structured-size). Default: 268435456.
+# max_structured_size: 268435456
+
+# Max recursive archive nesting depth (--max-archive-depth). Default: 5.
+# max_archive_depth: 5
+
+# ── Context extraction ───────────────────────────────────────────────────────
+
+# Enable keyword-matched log context extraction (--extract-context).
+# extract_context: false
+
+# Context lines captured before/after each hit (--context-lines). Default: 10.
+# context_lines: 10
+
+# Extra keywords to flag in addition to built-in defaults (--context-keywords).
+# context_keywords:
+#   - timeout
+#   - oomkilled
+
+# Replace built-in keyword list entirely (--context-keywords-replace).
+# context_keywords_replace: false
+
+# Case-sensitive keyword matching (--context-case-sensitive).
+# context_case_sensitive: false
+
+# Max keyword matches returned per file (--max-context-matches). Default: 50.
+# max_context_matches: 50
+
+# ── Display ──────────────────────────────────────────────────────────────────
+
+# Log output format: \"human\" (default) or \"json\" for SIEM ingestion (--log-format).
 # log_format: human
 
 # Log level: off, error, warn (default), info, debug, trace (--log-level).
-# Override with SANITIZE_LOG env var.
 # log_level: warn
 
-# Disable progress output (--no-progress).
+# Suppress progress output (--no-progress).
 # no_progress: false
+
+# Suppress non-error output entirely (--quiet).
+# quiet: false
 ";
+
+// ---------------------------------------------------------------------------
+// show-config
+// ---------------------------------------------------------------------------
 
 pub(crate) fn run_show_config() -> Result<(), (String, i32)> {
     let secrets_path = global_default_secrets_path();
@@ -247,60 +334,11 @@ pub(crate) fn run_show_config() -> Result<(), (String, i32)> {
         println!(" (not found — run 'sanitize init-hook' to create it)");
     } else {
         println!();
-
-        let settings = load_settings();
-
-        fn show<T: std::fmt::Display>(label: &str, val: Option<T>, default: &str, source: &str) {
-            match val {
-                Some(v) => println!("  {label:<22} {v}  ({source})"),
-                None => println!("  {label:<22} {default}  (default)"),
-            }
-        }
-        fn show_vec(label: &str, v: &[String], default: &str, source: &str) {
-            if v.is_empty() {
-                println!("  {label:<22} {default}  (default)");
-            } else {
-                println!("  {label:<22} {}  ({source})", v.join(", "));
-            }
-        }
-
-        show_vec("app:", &settings.app, "(none)", "from settings");
-        show_vec("allow:", &settings.allow, "(none)", "from settings");
-        show(
-            "fail_on_match:",
-            settings.fail_on_match,
-            "false",
-            "from settings",
-        );
-        show("strict:", settings.strict, "false", "from settings");
-        show(
-            "no_structured_handoff:",
-            settings.no_structured_handoff,
-            "false",
-            "from settings",
-        );
-        show("threads:", settings.threads, "(auto)", "from settings");
-        show(
-            "log_format:",
-            settings.log_format.as_deref().map(|s| s.to_string()),
-            "human",
-            "from settings",
-        );
-        show(
-            "log_level:",
-            settings.log_level.as_deref().map(|s| s.to_string()),
-            "warn",
-            "from settings",
-        );
-        show(
-            "no_progress:",
-            settings.no_progress,
-            "false",
-            "from settings",
-        );
+        let s = load_settings();
+        show_config_fields(&s, None);
     }
 
-    // ── project config (.sanitize.toml) ──────────────────────────────────────
+    // ── project config (.sanitize.yaml) ──────────────────────────────────────
     println!();
     if no_config {
         println!("Project config: (skipped — SANITIZE_NO_CONFIG=1)");
@@ -309,68 +347,83 @@ pub(crate) fn run_show_config() -> Result<(), (String, i32)> {
     match find_project_config() {
         None => {
             println!(
-                "Project config: (none — no .sanitize.toml found in this directory or its parents)"
+                "Project config: (none — no .sanitize.yaml found in this directory or its parents)"
             );
         }
         Some(ref path) => {
             println!("Project config: {}", path.display());
             let (pc, config_dir) = load_project_config(path);
-
-            fn show_opt_path(label: &str, val: Option<&Path>, base: &Path) {
-                match val {
-                    Some(p) => {
-                        let resolved = if p.is_absolute() {
-                            p.to_path_buf()
-                        } else {
-                            base.join(p)
-                        };
-                        println!("  {label:<22} {}", resolved.display());
-                    }
-                    None => println!("  {label:<22} (not set)"),
-                }
-            }
-
-            if pc.app.is_empty() {
-                println!("  {:<22} (not set)", "app:");
-            } else {
-                println!("  {:<22} {}", "app:", pc.app.join(", "));
-            }
-            if pc.allow.is_empty() {
-                println!("  {:<22} (not set)", "allow:");
-            } else {
-                println!("  {:<22} {}", "allow:", pc.allow.join(", "));
-            }
-            if pc.exclude.is_empty() {
-                println!("  {:<22} (none)", "exclude:");
-            } else {
-                println!("  {:<22}", "exclude:");
-                for pat in &pc.exclude {
-                    println!("    - {pat}");
-                }
-            }
-            show_opt_path("secrets_file:", pc.secrets_file.as_deref(), &config_dir);
-            match pc.encrypted_secrets {
-                Some(v) => println!("  {:<22} {v}", "encrypted_secrets:"),
-                None => println!("  {:<22} (not set)", "encrypted_secrets:"),
-            }
-            show_opt_path("profile:", pc.profile.as_deref(), &config_dir);
-            match pc.fail_on_match {
-                Some(v) => println!("  {:<22} {v}", "fail_on_match:"),
-                None => println!("  {:<22} (not set)", "fail_on_match:"),
-            }
-            match pc.strict {
-                Some(v) => println!("  {:<22} {v}", "strict:"),
-                None => println!("  {:<22} (not set)", "strict:"),
-            }
-            match pc.no_structured_handoff {
-                Some(v) => println!("  {:<22} {v}", "no_structured_handoff:"),
-                None => println!("  {:<22} (not set)", "no_structured_handoff:"),
-            }
+            show_config_fields(&pc, Some(&config_dir));
         }
     }
 
     Ok(())
 }
+
+fn show_config_fields(cfg: &SanitizeConfig, config_dir: Option<&Path>) {
+    fn list(label: &str, v: &[String]) {
+        if v.is_empty() {
+            println!("  {label:<26} (not set)");
+        } else {
+            println!("  {label:<26} {}", v.join(", "));
+        }
+    }
+    fn opt<T: std::fmt::Display>(label: &str, v: Option<T>) {
+        match v {
+            Some(ref val) => println!("  {label:<26} {val}"),
+            None => println!("  {label:<26} (not set)"),
+        }
+    }
+    fn path_field(label: &str, v: Option<&Path>, base: Option<&Path>) {
+        match v {
+            Some(p) => {
+                let resolved = if p.is_absolute() {
+                    p.to_path_buf()
+                } else if let Some(b) = base {
+                    b.join(p)
+                } else {
+                    p.to_path_buf()
+                };
+                println!("  {label:<26} {}", resolved.display());
+            }
+            None => println!("  {label:<26} (not set)"),
+        }
+    }
+
+    list("app:", &cfg.app);
+    list("allow:", &cfg.allow);
+    list("exclude_path:", &cfg.exclude_path);
+    list("include_path:", &cfg.include_path);
+    if config_dir.is_some() {
+        path_field("secrets_file:", cfg.secrets_file.as_deref(), config_dir);
+        opt("encrypted_secrets:", cfg.encrypted_secrets);
+        path_field("profile:", cfg.profile.as_deref(), config_dir);
+    }
+    opt("fail_on_match:", cfg.fail_on_match);
+    opt("strict:", cfg.strict);
+    opt("no_structured_handoff:", cfg.no_structured_handoff);
+    opt("no_field_signal:", cfg.no_field_signal);
+    opt("force_text:", cfg.force_text);
+    opt("include_binary:", cfg.include_binary);
+    opt("hidden:", cfg.hidden);
+    opt("entropy_threshold:", cfg.entropy_threshold);
+    opt("threads:", cfg.threads);
+    opt("chunk_size:", cfg.chunk_size);
+    opt("max_archive_depth:", cfg.max_archive_depth);
+    opt("extract_context:", cfg.extract_context);
+    opt("context_lines:", cfg.context_lines);
+    list("context_keywords:", &cfg.context_keywords);
+    opt("context_keywords_replace:", cfg.context_keywords_replace);
+    opt("max_context_matches:", cfg.max_context_matches);
+    opt("log_format:", cfg.log_format.as_deref().map(|s| s.to_string()));
+    opt("log_level:", cfg.log_level.as_deref().map(|s| s.to_string()));
+    opt("no_progress:", cfg.no_progress);
+    opt("quiet:", cfg.quiet);
+}
+
+// ---------------------------------------------------------------------------
+// init-hook
+// ---------------------------------------------------------------------------
 
 pub(crate) fn run_init(args: &InitArgs) -> Result<(), (String, i32)> {
     let settings_path = global_settings_path();
@@ -401,7 +454,6 @@ pub(crate) fn run_init(args: &InitArgs) -> Result<(), (String, i32)> {
         return Ok(());
     }
 
-    // ── settings.yaml ─────────────────────────────────────────────────────────
     if settings_path.exists() && !args.force {
         println!("Settings file already exists: {}", settings_path.display());
         println!("  Use --force to overwrite, or edit it directly.");
@@ -424,14 +476,16 @@ pub(crate) fn run_init(args: &InitArgs) -> Result<(), (String, i32)> {
     run_install_hook(&hook_args)
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use std::sync::{Mutex, OnceLock};
 
-    /// Serialise tests that read/write process-global env vars so they
-    /// can't race each other when `cargo test` runs them in parallel.
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
         ENV_MUTEX.get_or_init(Mutex::default).lock().unwrap()
@@ -442,7 +496,7 @@ mod tests {
     #[test]
     fn find_project_config_from_finds_in_same_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".sanitize.toml");
+        let config = dir.path().join(".sanitize.yaml");
         fs::write(&config, "").unwrap();
         assert_eq!(find_project_config_from(dir.path()), Some(config));
     }
@@ -450,7 +504,7 @@ mod tests {
     #[test]
     fn find_project_config_from_finds_in_parent() {
         let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".sanitize.toml");
+        let config = dir.path().join(".sanitize.yaml");
         fs::write(&config, "").unwrap();
         let child = dir.path().join("subdir/nested");
         fs::create_dir_all(&child).unwrap();
@@ -460,15 +514,9 @@ mod tests {
     #[test]
     fn find_project_config_from_returns_none_when_absent() {
         let dir = tempfile::tempdir().unwrap();
-        // No .sanitize.toml anywhere in this subtree (which is in /tmp).
-        // Walk will stop at filesystem root; as long as no .sanitize.toml
-        // happens to exist in /tmp or above this returns None.
         let child = dir.path().join("a/b/c");
         fs::create_dir_all(&child).unwrap();
-        // Verify there is no config in the temp dir itself either.
         let result = find_project_config_from(&child);
-        // It may find one higher up on developer machines, so only assert
-        // it doesn't find one *inside* our temp dir.
         if let Some(ref found) = result {
             assert!(
                 !found.starts_with(dir.path()),
@@ -480,41 +528,94 @@ mod tests {
     // ── load_project_config ──────────────────────────────────────────────────
 
     #[test]
-    fn load_project_config_parses_valid_toml() {
+    fn load_project_config_parses_all_fields() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(".sanitize.toml");
+        let path = dir.path().join(".sanitize.yaml");
         fs::write(
             &path,
             r#"
-            app = ["gitlab"]
-            allow = ["localhost"]
-            fail_on_match = true
-        "#,
+app: [gitlab, kubernetes]
+allow: [localhost, "*.internal"]
+exclude_path: ["*.test.yaml"]
+include_path: ["**/*.log"]
+secrets_file: secrets.yaml
+encrypted_secrets: true
+profile: profile.yaml
+fail_on_match: true
+strict: true
+no_structured_handoff: true
+no_field_signal: true
+force_text: true
+include_binary: true
+hidden: true
+entropy_threshold: 4.5
+threads: 8
+chunk_size: 2097152
+max_archive_depth: 3
+context_lines: 5
+context_keywords: [timeout, oomkilled]
+log_format: json
+log_level: debug
+no_progress: true
+quiet: true
+"#,
         )
         .unwrap();
         let (cfg, cfg_dir) = load_project_config(&path);
-        assert_eq!(cfg.app, vec!["gitlab"]);
-        assert_eq!(cfg.allow, vec!["localhost"]);
+        assert_eq!(cfg.app, vec!["gitlab", "kubernetes"]);
+        assert_eq!(cfg.allow, vec!["localhost", "*.internal"]);
+        assert_eq!(cfg.exclude_path, vec!["*.test.yaml"]);
+        assert_eq!(cfg.include_path, vec!["**/*.log"]);
+        assert_eq!(cfg.secrets_file, Some(PathBuf::from("secrets.yaml")));
+        assert_eq!(cfg.encrypted_secrets, Some(true));
+        assert_eq!(cfg.profile, Some(PathBuf::from("profile.yaml")));
         assert_eq!(cfg.fail_on_match, Some(true));
+        assert_eq!(cfg.strict, Some(true));
+        assert_eq!(cfg.no_structured_handoff, Some(true));
+        assert_eq!(cfg.no_field_signal, Some(true));
+        assert_eq!(cfg.force_text, Some(true));
+        assert_eq!(cfg.include_binary, Some(true));
+        assert_eq!(cfg.hidden, Some(true));
+        assert_eq!(cfg.entropy_threshold, Some(4.5));
+        assert_eq!(cfg.threads, Some(8));
+        assert_eq!(cfg.chunk_size, Some(2_097_152));
+        assert_eq!(cfg.max_archive_depth, Some(3));
+        assert_eq!(cfg.context_lines, Some(5));
+        assert_eq!(cfg.context_keywords, vec!["timeout", "oomkilled"]);
+        assert_eq!(cfg.log_format.as_deref(), Some("json"));
+        assert_eq!(cfg.log_level.as_deref(), Some("debug"));
+        assert_eq!(cfg.no_progress, Some(true));
+        assert_eq!(cfg.quiet, Some(true));
         assert_eq!(cfg_dir, dir.path());
     }
 
     #[test]
-    fn load_project_config_returns_default_on_invalid_toml() {
+    fn load_project_config_partial_file_fills_rest_with_defaults() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(".sanitize.toml");
-        fs::write(&path, "this is not valid toml ][[[").unwrap();
+        let path = dir.path().join(".sanitize.yaml");
+        fs::write(&path, "app:\n  - gitlab\nfail_on_match: true\n").unwrap();
+        let (cfg, _) = load_project_config(&path);
+        assert_eq!(cfg.app, vec!["gitlab"]);
+        assert_eq!(cfg.fail_on_match, Some(true));
+        assert!(cfg.strict.is_none());
+        assert!(cfg.secrets_file.is_none());
+    }
+
+    #[test]
+    fn load_project_config_returns_default_on_invalid_yaml() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".sanitize.yaml");
+        fs::write(&path, "this: is: not: valid: ][[[").unwrap();
         let (cfg, _) = load_project_config(&path);
         assert!(cfg.app.is_empty());
-        assert!(cfg.allow.is_empty());
-        assert_eq!(cfg.fail_on_match, None);
+        assert!(cfg.fail_on_match.is_none());
     }
 
     #[test]
     fn load_project_config_resolves_config_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(".sanitize.toml");
-        fs::write(&path, r#"secrets_file = "secrets.yaml""#).unwrap();
+        let path = dir.path().join(".sanitize.yaml");
+        fs::write(&path, "secrets_file: secrets.yaml\n").unwrap();
         let (cfg, cfg_dir) = load_project_config(&path);
         assert_eq!(cfg.secrets_file, Some(PathBuf::from("secrets.yaml")));
         assert_eq!(cfg_dir, dir.path());
@@ -535,7 +636,6 @@ mod tests {
     #[test]
     fn load_settings_returns_default_when_file_missing() {
         let _guard = env_lock();
-        // Point XDG_CONFIG_HOME to an empty temp dir so no settings file exists.
         let dir = tempfile::tempdir().unwrap();
         std::env::remove_var("SANITIZE_NO_SETTINGS");
         std::env::set_var("XDG_CONFIG_HOME", dir.path());
@@ -545,14 +645,14 @@ mod tests {
     }
 
     #[test]
-    fn load_settings_parses_valid_yaml() {
+    fn load_settings_parses_all_fields() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let config_dir = dir.path().join("sanitize");
         fs::create_dir_all(&config_dir).unwrap();
         fs::write(
             config_dir.join("settings.yaml"),
-            "app:\n  - gitlab\nfail_on_match: true\n",
+            "app:\n  - gitlab\nallow:\n  - localhost\nfail_on_match: true\nthreads: 4\nno_progress: true\nforce_text: true\nentropy_threshold: 3.5\n",
         )
         .unwrap();
         std::env::remove_var("SANITIZE_NO_SETTINGS");
@@ -560,7 +660,12 @@ mod tests {
         let s = load_settings();
         std::env::remove_var("XDG_CONFIG_HOME");
         assert_eq!(s.app, vec!["gitlab"]);
+        assert_eq!(s.allow, vec!["localhost"]);
         assert_eq!(s.fail_on_match, Some(true));
+        assert_eq!(s.threads, Some(4));
+        assert_eq!(s.no_progress, Some(true));
+        assert_eq!(s.force_text, Some(true));
+        assert_eq!(s.entropy_threshold, Some(3.5));
     }
 
     #[test]
@@ -590,7 +695,7 @@ mod tests {
     #[test]
     fn find_project_config_uses_explicit_env_var() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("custom.toml");
+        let path = dir.path().join("custom.yaml");
         fs::write(&path, "").unwrap();
         std::env::remove_var("SANITIZE_NO_CONFIG");
         std::env::set_var("SANITIZE_CONFIG", path.to_str().unwrap());
@@ -602,7 +707,7 @@ mod tests {
     #[test]
     fn find_project_config_returns_none_for_nonexistent_explicit_path() {
         std::env::remove_var("SANITIZE_NO_CONFIG");
-        std::env::set_var("SANITIZE_CONFIG", "/nonexistent/path/custom.toml");
+        std::env::set_var("SANITIZE_CONFIG", "/nonexistent/path/custom.yaml");
         let result = find_project_config();
         std::env::remove_var("SANITIZE_CONFIG");
         assert!(result.is_none());

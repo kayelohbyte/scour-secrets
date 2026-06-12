@@ -4,7 +4,8 @@
     "@modelcontextprotocol/sdk/server/stdio": "npm:@modelcontextprotocol/sdk@^1.0/server/stdio.js",
     "@modelcontextprotocol/sdk/server/webStandardStreamableHttp": "npm:@modelcontextprotocol/sdk@^1.0/server/webStandardStreamableHttp.js",
     "zod": "npm:zod@^3.22",
-    "@std/path": "jsr:@std/path@^1"
+    "@std/path": "jsr:@std/path@^1",
+    "@std/yaml": "jsr:@std/yaml@^1"
   },
   "tasks": {
     "start": "deno run --allow-run --allow-env --allow-read --allow-write --allow-net src/index.ts",

@@ -19,10 +19,11 @@ use rust_sanitize::{
 };
 
 use crate::apps::{ensure_user_app_copy, load_app_bundle};
-use crate::cli_args::{Cli, ReportFormat};
-use crate::config::{
-    find_project_config, load_project_config, load_settings, ProjectConfig, Settings,
+use crate::cli_args::{
+    Cli, ReportFormat, DEFAULT_MAX_STRUCTURED_FILE_SIZE, DEFAULT_PROGRESS_INTERVAL_MS,
 };
+use crate::config::{find_project_config, load_project_config, load_settings, SanitizeConfig};
+use rust_sanitize::{DEFAULT_ARCHIVE_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_MAX_MATCHES};
 use crate::crypto::resolve_sanitize_password;
 use crate::dispatch::{
     abs_label, load_profiles, print_entropy_histogram, save_discovered_secrets, write_output,
@@ -43,9 +44,6 @@ use crate::scanner_builder::{
 };
 
 /// Apply a `bool` setting from a config layer: skip if the flag is already set by a higher-priority source.
-///
-/// Requires that every covered field defaults to `false` in `Cli` (i.e. the flag is off by default).
-/// A field that defaults to `true` would be permanently skipped, silently ignoring config.
 macro_rules! apply_bool_flag {
     ($cli:expr, $src:expr, $field:ident) => {
         if !$cli.$field {
@@ -65,34 +63,71 @@ macro_rules! apply_opt_field {
     };
 }
 
-fn apply_settings_layer(cli: &mut Cli, s: Settings) {
-    if cli.app.is_empty() && !s.app.is_empty() {
-        cli.app = s.app;
+/// Apply a concrete (non-Option) CLI field: only applied when the field still holds its compile-time
+/// default, which is the proxy for "not explicitly set on the command line".
+macro_rules! apply_concrete_field {
+    ($cli:expr, $src:expr, $field:ident, $default:expr) => {
+        if $cli.$field == $default {
+            if let Some(v) = $src.$field {
+                $cli.$field = v;
+            }
+        }
+    };
+}
+
+/// Merge one list additively into another, skipping values already present.
+fn merge_list(target: &mut Vec<String>, source: Vec<String>) {
+    for v in source {
+        if !target.contains(&v) {
+            target.push(v);
+        }
     }
-    if cli.allow.is_empty() && !s.allow.is_empty() {
-        cli.allow = s.allow;
-    }
+}
+
+fn apply_settings_layer(cli: &mut Cli, s: SanitizeConfig) {
+    // Additive lists
+    merge_list(&mut cli.app, s.app);
+    merge_list(&mut cli.allow, s.allow);
+    merge_list(&mut cli.exclude_path, s.exclude_path);
+    merge_list(&mut cli.include_path, s.include_path);
+    merge_list(&mut cli.context_keywords, s.context_keywords);
+    // Bool flags
     apply_bool_flag!(cli, s, fail_on_match);
     apply_bool_flag!(cli, s, strict);
     apply_bool_flag!(cli, s, no_structured_handoff);
     apply_bool_flag!(cli, s, no_field_signal);
+    apply_bool_flag!(cli, s, force_text);
+    apply_bool_flag!(cli, s, include_binary);
+    apply_bool_flag!(cli, s, hidden);
+    apply_bool_flag!(cli, s, context_keywords_replace);
+    apply_bool_flag!(cli, s, context_case_sensitive);
+    apply_bool_flag!(cli, s, extract_context);
+    apply_bool_flag!(cli, s, no_progress);
+    apply_bool_flag!(cli, s, quiet);
+    // Option<T> fields
     apply_opt_field!(cli, s, threads);
+    apply_opt_field!(cli, s, entropy_threshold);
     apply_opt_field!(cli, s, log_format);
     apply_opt_field!(cli, s, log_level);
-    apply_bool_flag!(cli, s, no_progress);
+    // Concrete fields: only applied when the CLI still holds the compile-time default.
+    apply_concrete_field!(cli, s, chunk_size, 1_048_576_usize);
+    apply_concrete_field!(cli, s, max_mappings, 10_000_000_usize);
+    apply_concrete_field!(cli, s, max_structured_size, DEFAULT_MAX_STRUCTURED_FILE_SIZE);
+    apply_concrete_field!(cli, s, max_archive_depth, DEFAULT_ARCHIVE_DEPTH);
+    apply_concrete_field!(cli, s, context_lines, DEFAULT_CONTEXT_LINES);
+    apply_concrete_field!(cli, s, max_context_matches, DEFAULT_MAX_MATCHES);
+    apply_concrete_field!(cli, s, max_match_locations, 500_usize);
+    apply_concrete_field!(cli, s, progress_interval_ms, DEFAULT_PROGRESS_INTERVAL_MS);
 }
 
-fn apply_project_config_layer(cli: &mut Cli, pc: ProjectConfig, config_dir: &std::path::Path) {
-    for bundle in &pc.app {
-        if !cli.app.contains(bundle) {
-            cli.app.push(bundle.clone());
-        }
-    }
-    for val in &pc.allow {
-        if !cli.allow.contains(val) {
-            cli.allow.push(val.clone());
-        }
-    }
+fn apply_project_config_layer(cli: &mut Cli, pc: SanitizeConfig, config_dir: &std::path::Path) {
+    // Additive lists (same semantics as settings layer)
+    merge_list(&mut cli.app, pc.app);
+    merge_list(&mut cli.allow, pc.allow);
+    merge_list(&mut cli.exclude_path, pc.exclude_path);
+    merge_list(&mut cli.include_path, pc.include_path);
+    merge_list(&mut cli.context_keywords, pc.context_keywords);
+    // Path-relative source files
     if cli.secrets_file.is_none() {
         if let Some(rel) = pc.secrets_file {
             cli.secrets_file = Some(config_dir.join(rel));
@@ -104,10 +139,33 @@ fn apply_project_config_layer(cli: &mut Cli, pc: ProjectConfig, config_dir: &std
             cli.profile = Some(config_dir.join(rel));
         }
     }
+    // Bool flags
     apply_bool_flag!(cli, pc, fail_on_match);
     apply_bool_flag!(cli, pc, strict);
     apply_bool_flag!(cli, pc, no_structured_handoff);
     apply_bool_flag!(cli, pc, no_field_signal);
+    apply_bool_flag!(cli, pc, force_text);
+    apply_bool_flag!(cli, pc, include_binary);
+    apply_bool_flag!(cli, pc, hidden);
+    apply_bool_flag!(cli, pc, context_keywords_replace);
+    apply_bool_flag!(cli, pc, context_case_sensitive);
+    apply_bool_flag!(cli, pc, extract_context);
+    apply_bool_flag!(cli, pc, no_progress);
+    apply_bool_flag!(cli, pc, quiet);
+    // Option<T> fields
+    apply_opt_field!(cli, pc, threads);
+    apply_opt_field!(cli, pc, entropy_threshold);
+    apply_opt_field!(cli, pc, log_format);
+    apply_opt_field!(cli, pc, log_level);
+    // Concrete fields
+    apply_concrete_field!(cli, pc, chunk_size, 1_048_576_usize);
+    apply_concrete_field!(cli, pc, max_mappings, 10_000_000_usize);
+    apply_concrete_field!(cli, pc, max_structured_size, DEFAULT_MAX_STRUCTURED_FILE_SIZE);
+    apply_concrete_field!(cli, pc, max_archive_depth, DEFAULT_ARCHIVE_DEPTH);
+    apply_concrete_field!(cli, pc, context_lines, DEFAULT_CONTEXT_LINES);
+    apply_concrete_field!(cli, pc, max_context_matches, DEFAULT_MAX_MATCHES);
+    apply_concrete_field!(cli, pc, max_match_locations, 500_usize);
+    apply_concrete_field!(cli, pc, progress_interval_ms, DEFAULT_PROGRESS_INTERVAL_MS);
 }
 
 fn merge_settings(mut cli: Cli) -> Cli {
@@ -1118,7 +1176,7 @@ mod tests {
     #[test]
     fn settings_layer_applies_when_cli_is_default() {
         let mut cli = default_cli();
-        let s = Settings {
+        let s = SanitizeConfig {
             threads: Some(8),
             fail_on_match: Some(true),
             log_level: Some("debug".into()),
@@ -1136,12 +1194,11 @@ mod tests {
         assert!(cli.fail_on_match);
         apply_settings_layer(
             &mut cli,
-            Settings {
+            SanitizeConfig {
                 fail_on_match: Some(false),
                 ..Default::default()
             },
         );
-        // CLI flag wins — still true.
         assert!(cli.fail_on_match);
     }
 
@@ -1150,7 +1207,7 @@ mod tests {
         let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--threads", "2"]).unwrap();
         apply_settings_layer(
             &mut cli,
-            Settings {
+            SanitizeConfig {
                 threads: Some(16),
                 ..Default::default()
             },
@@ -1163,25 +1220,76 @@ mod tests {
         let mut cli = default_cli();
         apply_settings_layer(
             &mut cli,
-            Settings {
+            SanitizeConfig {
                 app: vec!["gitlab".into()],
                 ..Default::default()
             },
         );
-        assert_eq!(cli.app, vec!["gitlab"]);
+        assert!(cli.app.contains(&"gitlab".to_string()));
     }
 
     #[test]
-    fn settings_layer_does_not_replace_cli_app() {
+    fn settings_layer_merges_app_additively_with_cli() {
         let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--app", "kubernetes"]).unwrap();
         apply_settings_layer(
             &mut cli,
-            Settings {
+            SanitizeConfig {
                 app: vec!["gitlab".into()],
                 ..Default::default()
             },
         );
-        assert_eq!(cli.app, vec!["kubernetes"]);
+        assert!(cli.app.contains(&"kubernetes".to_string()));
+        assert!(cli.app.contains(&"gitlab".to_string()));
+    }
+
+    #[test]
+    fn settings_layer_applies_new_bool_flags() {
+        let mut cli = default_cli();
+        apply_settings_layer(
+            &mut cli,
+            SanitizeConfig {
+                force_text: Some(true),
+                include_binary: Some(true),
+                hidden: Some(true),
+                quiet: Some(true),
+                ..Default::default()
+            },
+        );
+        assert!(cli.force_text);
+        assert!(cli.include_binary);
+        assert!(cli.hidden);
+        assert!(cli.quiet);
+    }
+
+    #[test]
+    fn settings_layer_applies_concrete_fields() {
+        let mut cli = default_cli();
+        apply_settings_layer(
+            &mut cli,
+            SanitizeConfig {
+                chunk_size: Some(2_097_152),
+                max_archive_depth: Some(3),
+                context_lines: Some(5),
+                ..Default::default()
+            },
+        );
+        assert_eq!(cli.chunk_size, 2_097_152);
+        assert_eq!(cli.max_archive_depth, 3);
+        assert_eq!(cli.context_lines, 5);
+    }
+
+    #[test]
+    fn settings_layer_does_not_override_explicit_concrete_field() {
+        let mut cli =
+            Cli::try_parse_from(["sanitize", "file.txt", "--max-archive-depth", "2"]).unwrap();
+        apply_settings_layer(
+            &mut cli,
+            SanitizeConfig {
+                max_archive_depth: Some(10),
+                ..Default::default()
+            },
+        );
+        assert_eq!(cli.max_archive_depth, 2);
     }
 
     // ── apply_project_config_layer ───────────────────────────────────────────
@@ -1189,7 +1297,7 @@ mod tests {
     #[test]
     fn project_layer_adds_app_bundles_additively() {
         let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--app", "kubernetes"]).unwrap();
-        let pc = ProjectConfig {
+        let pc = SanitizeConfig {
             app: vec!["gitlab".into()],
             ..Default::default()
         };
@@ -1201,7 +1309,7 @@ mod tests {
     #[test]
     fn project_layer_deduplicates_app_bundles() {
         let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--app", "gitlab"]).unwrap();
-        let pc = ProjectConfig {
+        let pc = SanitizeConfig {
             app: vec!["gitlab".into()],
             ..Default::default()
         };
@@ -1212,7 +1320,7 @@ mod tests {
     #[test]
     fn project_layer_resolves_secrets_file_relative_to_config_dir() {
         let mut cli = default_cli();
-        let pc = ProjectConfig {
+        let pc = SanitizeConfig {
             secrets_file: Some(PathBuf::from("secrets.yaml")),
             ..Default::default()
         };
@@ -1224,7 +1332,7 @@ mod tests {
     fn project_layer_does_not_override_cli_secrets_file() {
         let mut cli =
             Cli::try_parse_from(["sanitize", "file.txt", "-s", "/explicit/secrets.yaml"]).unwrap();
-        let pc = ProjectConfig {
+        let pc = SanitizeConfig {
             secrets_file: Some(PathBuf::from("project_secrets.yaml")),
             ..Default::default()
         };
@@ -1238,7 +1346,7 @@ mod tests {
     #[test]
     fn project_layer_resolves_profile_relative_to_config_dir() {
         let mut cli = default_cli();
-        let pc = ProjectConfig {
+        let pc = SanitizeConfig {
             profile: Some(PathBuf::from("my.profile.yaml")),
             ..Default::default()
         };
@@ -1250,12 +1358,30 @@ mod tests {
     fn project_layer_adds_allow_additively() {
         let mut cli =
             Cli::try_parse_from(["sanitize", "file.txt", "--allow", "localhost"]).unwrap();
-        let pc = ProjectConfig {
+        let pc = SanitizeConfig {
             allow: vec!["*.internal".into()],
             ..Default::default()
         };
         apply_project_config_layer(&mut cli, pc, Path::new("."));
         assert!(cli.allow.contains(&"localhost".to_string()));
         assert!(cli.allow.contains(&"*.internal".to_string()));
+    }
+
+    #[test]
+    fn project_layer_adds_exclude_path_additively() {
+        let mut cli = Cli::try_parse_from([
+            "sanitize",
+            "file.txt",
+            "--exclude-path",
+            "tests/fixtures/**",
+        ])
+        .unwrap();
+        let pc = SanitizeConfig {
+            exclude_path: vec!["*.generated.yaml".into()],
+            ..Default::default()
+        };
+        apply_project_config_layer(&mut cli, pc, Path::new("."));
+        assert!(cli.exclude_path.contains(&"tests/fixtures/**".to_string()));
+        assert!(cli.exclude_path.contains(&"*.generated.yaml".to_string()));
     }
 }

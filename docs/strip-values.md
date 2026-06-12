@@ -75,5 +75,5 @@ let output = strip_values_from_text(input, "=", "#");
 
 ## CLI
 
-The `--strip-config-values` flag exposes this function directly on key-value
+The `--strip-values` flag exposes this function directly on key-value
 format files. See the [CLI reference](cli-reference.md) for usage.

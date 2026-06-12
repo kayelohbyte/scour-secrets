@@ -34,6 +34,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp";
 import { basename, join, resolve } from "@std/path";
 import { globToRegExp } from "@std/path/glob-to-regexp";
+import { parse as parseYaml } from "@std/yaml";
 import { z } from "zod";
 import { predictOutputName, uniquifyName } from "./naming.ts";
 
@@ -307,11 +308,35 @@ function isArchivePath(p: string): boolean {
 
 const NAMESPACE_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/;
 
+/** Subset of SanitizeConfig fields that make sense as per-namespace defaults. */
+interface NsSettings {
+  app?: string[];
+  allow?: string[];
+  exclude_path?: string[];
+  include_path?: string[];
+  context_keywords?: string[];
+  fail_on_match?: boolean;
+  strict?: boolean;
+  no_field_signal?: boolean;
+  force_text?: boolean;
+  include_binary?: boolean;
+  hidden?: boolean;
+  context_keywords_replace?: boolean;
+  context_case_sensitive?: boolean;
+  extract_context?: boolean;
+  threads?: number;
+  entropy_threshold?: number;
+  max_archive_depth?: number;
+  context_lines?: number;
+  max_context_matches?: number;
+}
+
 interface ResolvedNamespace {
   secretsFile: string;
   profileFile?: string;
   encrypted: boolean;
   password?: string;
+  settings?: NsSettings;
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -409,7 +434,19 @@ async function resolveNamespace(namespace: string): Promise<ResolvedNamespace> {
     }
   }
 
-  return { secretsFile, profileFile, encrypted, password };
+  // Optionally read per-namespace behavior defaults from settings.yaml.
+  let settings: NsSettings | undefined;
+  const nsSettingsPath = join(nsDir, "settings.yaml");
+  if (await fileExists(nsSettingsPath)) {
+    try {
+      const raw = await Deno.readTextFile(nsSettingsPath);
+      settings = parseYaml(raw) as NsSettings;
+    } catch {
+      // Silently ignore invalid YAML — same policy as the Rust config loader.
+    }
+  }
+
+  return { secretsFile, profileFile, encrypted, password, settings };
 }
 
 // ---------------------------------------------------------------------------
@@ -441,6 +478,50 @@ function buildSecretsJson(patterns: InlinePattern[]): string {
     null,
     2,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Namespace settings → CLI flag conversion
+// ---------------------------------------------------------------------------
+
+/** Push CLI flags derived from a namespace settings.yaml into `args`.
+ *
+ * These are added before per-call params so that per-call flags take precedence
+ * via clap's last-wins rule. List fields (app, allow, …) are additive in both
+ * the CLI and the Rust merge layer so duplicates are fine.
+ */
+function appendNsSettingsArgs(args: string[], s: NsSettings): void {
+  for (const v of s.app ?? []) {
+    if (!v.startsWith("-")) args.push("--app", v);
+  }
+  for (const v of s.allow ?? []) {
+    if (!v.startsWith("-")) args.push("--allow", v);
+  }
+  for (const v of s.exclude_path ?? []) {
+    if (!v.startsWith("-")) args.push("--exclude-path", v);
+  }
+  for (const v of s.include_path ?? []) {
+    if (!v.startsWith("-")) args.push("--include-path", v);
+  }
+  for (const v of s.context_keywords ?? []) {
+    if (!v.startsWith("-")) args.push("--context-keywords", v);
+  }
+  if (s.fail_on_match) args.push("--fail-on-match");
+  if (s.strict) args.push("--strict");
+  if (s.no_field_signal) args.push("--no-field-signal");
+  if (s.force_text) args.push("--force-text");
+  if (s.include_binary) args.push("--include-binary");
+  if (s.hidden) args.push("--hidden");
+  if (s.context_keywords_replace) args.push("--context-keywords-replace");
+  if (s.context_case_sensitive) args.push("--context-case-sensitive");
+  if (s.extract_context) args.push("--extract-context");
+  if (s.threads !== undefined) args.push("--threads", String(s.threads));
+  if (s.entropy_threshold !== undefined) args.push("--entropy-threshold", String(s.entropy_threshold));
+  if (s.context_lines !== undefined) args.push("--context-lines", String(s.context_lines));
+  if (s.max_context_matches !== undefined) args.push("--max-context-matches", String(s.max_context_matches));
+  // max_archive_depth is intentionally omitted here: it is threaded through the
+  // effectiveMaxArchiveDepth variable in each tool handler so the MCP-level default
+  // (SANITIZE_MCP_MAX_ARCHIVE_DEPTH) does not silently override a namespace setting.
 }
 
 // ---------------------------------------------------------------------------
@@ -567,6 +648,7 @@ async function toolSanitize(params: {
     if (params.format) commonArgs.push("--format", params.format);
 
     // Namespace resolution takes priority over secrets_file and patterns.
+    let nsSettings: NsSettings | undefined;
     if (params.namespace) {
       const ns = await resolveNamespace(params.namespace);
       commonArgs.push("-s", ns.secretsFile);
@@ -577,6 +659,9 @@ async function toolSanitize(params: {
       // Explicit profile param overrides namespace profile.
       const profileToUse = params.profile ?? ns.profileFile;
       if (profileToUse) commonArgs.push("--profile", profileToUse);
+      // Apply per-namespace behavior defaults before per-call params.
+      nsSettings = ns.settings;
+      if (nsSettings) appendNsSettingsArgs(commonArgs, nsSettings);
     } else {
       // Seed/deterministic only applies outside namespace mode.
       if (params.seed) {
@@ -628,7 +713,8 @@ async function toolSanitize(params: {
     }
     if (params.llm_template) commonArgs.push("--llm", params.llm_template);
     if (params.strict) commonArgs.push("--strict");
-    commonArgs.push("--max-archive-depth", String(params.max_archive_depth ?? MAX_ARCHIVE_DEPTH));
+    const effectiveMaxArchiveDepth = params.max_archive_depth ?? nsSettings?.max_archive_depth ?? MAX_ARCHIVE_DEPTH;
+    commonArgs.push("--max-archive-depth", String(effectiveMaxArchiveDepth));
     commonArgs.push(...THREADS_ARGS);
 
     // A report is generated whenever report:true or extract_context:true.
@@ -852,6 +938,7 @@ async function toolScan(params: {
 
     if (params.format) commonArgs.push("--format", params.format);
 
+    let nsSettings: NsSettings | undefined;
     if (params.namespace) {
       const ns = await resolveNamespace(params.namespace);
       commonArgs.push("-s", ns.secretsFile);
@@ -862,6 +949,9 @@ async function toolScan(params: {
       // Explicit profile param overrides namespace profile.
       const profileToUse = params.profile ?? ns.profileFile;
       if (profileToUse) commonArgs.push("--profile", profileToUse);
+      // Apply per-namespace behavior defaults before per-call params.
+      nsSettings = ns.settings;
+      if (nsSettings) appendNsSettingsArgs(commonArgs, nsSettings);
     } else {
       if (params.profile) commonArgs.push("--profile", params.profile);
       if (params.secrets_file) {
@@ -904,7 +994,8 @@ async function toolScan(params: {
       commonArgs.push("--entropy-threshold", String(params.entropy_threshold));
     }
     if (params.strict) commonArgs.push("--strict");
-    commonArgs.push("--max-archive-depth", String(params.max_archive_depth ?? MAX_ARCHIVE_DEPTH));
+    const effectiveMaxArchiveDepth = params.max_archive_depth ?? nsSettings?.max_archive_depth ?? MAX_ARCHIVE_DEPTH;
+    commonArgs.push("--max-archive-depth", String(effectiveMaxArchiveDepth));
     commonArgs.push(...THREADS_ARGS);
 
     let inputArgs: string[];

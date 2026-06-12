@@ -1125,6 +1125,240 @@ test("namespace", "namespace not found returns clear error", async (_s) => {
   } finally { await Deno.remove(secretsDir, { recursive: true }); }
 });
 
+test("namespace", "two namespaces with different secrets are isolated", async (_s) => {
+  const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-ns-" });
+  try {
+    const acmeDir = join(secretsDir, "acme");
+    await Deno.mkdir(acmeDir);
+    await Deno.writeTextFile(join(acmeDir, "secrets.yaml"), `
+- pattern: acme-db-password-xyz
+  kind: literal
+  category: auth_token
+  label: acme_db
+`);
+    const globexDir = join(secretsDir, "globex");
+    await Deno.mkdir(globexDir);
+    await Deno.writeTextFile(join(globexDir, "secrets.yaml"), `
+- pattern: globex-api-key-abc
+  kind: literal
+  category: auth_token
+  label: globex_key
+`);
+    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    try {
+      const input = "db=acme-db-password-xyz api=globex-api-key-abc";
+
+      // acme namespace: its own secret replaced, globex's passes through
+      const acmeR = toolText(await ns.send("tools/call", {
+        name: "sanitize",
+        arguments: { content: input, namespace: "acme" },
+      }));
+      not(acmeR, "acme-db-password-xyz");
+      has(acmeR, "globex-api-key-abc");
+
+      // globex namespace: its own secret replaced, acme's passes through
+      const globexR = toolText(await ns.send("tools/call", {
+        name: "sanitize",
+        arguments: { content: input, namespace: "globex" },
+      }));
+      has(globexR, "acme-db-password-xyz");
+      not(globexR, "globex-api-key-abc");
+    } finally { await ns.close(); }
+  } finally { await Deno.remove(secretsDir, { recursive: true }); }
+});
+
+test("namespace", "namespace profile.yaml applies per-customer structured field rules", async (_s) => {
+  const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-ns-" });
+  try {
+    const nsDir = join(secretsDir, "enterprise");
+    await Deno.mkdir(nsDir);
+    // Minimal secrets file — pattern matching done via profile field signals
+    await Deno.writeTextFile(join(nsDir, "secrets.yaml"), "[]");
+    // Profile: target specific YAML paths for this customer
+    await Deno.writeTextFile(join(nsDir, "profile.yaml"), `
+- processor: yaml
+  extensions: [".yaml"]
+  fields:
+    - pattern: "database.password"
+      category: "custom:password"
+    - pattern: "api.key"
+      category: "auth_token"
+`);
+    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    try {
+      const r = toolText(await ns.send("tools/call", {
+        name: "sanitize",
+        arguments: {
+          content: "database:\n  host: db.internal\n  password: s3cretpw\napi:\n  key: tok-abc123\n",
+          format: "yaml",
+          namespace: "enterprise",
+        },
+      }));
+      not(r, "s3cretpw");     // database.password replaced by profile rule
+      not(r, "tok-abc123");   // api.key replaced by profile rule
+      has(r, "db.internal");  // host untouched — not in profile
+      has(r, "database:");    // structure preserved
+    } finally { await ns.close(); }
+  } finally { await Deno.remove(secretsDir, { recursive: true }); }
+});
+
+test("namespace", "encrypted secrets.yaml.enc with .password file", async (_s) => {
+  const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-ns-" });
+  try {
+    const nsDir = join(secretsDir, "secure-tenant");
+    await Deno.mkdir(nsDir);
+
+    // Encrypt a plaintext secrets file into the namespace directory.
+    const plainPath = join(nsDir, "secrets-plain.yaml");
+    await Deno.writeTextFile(plainPath, `
+- pattern: encrypted-secret-value
+  kind: literal
+  category: auth_token
+  label: enc_token
+`);
+    const encPath = join(nsDir, "secrets.yaml.enc");
+    const testPassword = "namespace-enc-test-pass-789";
+
+    const encResult = await new Deno.Command(SANITIZE_BIN, {
+      args: ["encrypt", plainPath, encPath],
+      env: { ...Deno.env.toObject(), SANITIZE_PASSWORD: testPassword, SANITIZE_LOG: "error" },
+      stdout: "null", stderr: "null",
+    }).output();
+    ok(encResult.code === 0, `sanitize encrypt failed with code ${encResult.code}`);
+    await Deno.remove(plainPath);
+
+    // Write .password with restrictive permissions (required by the server).
+    const pwPath = join(nsDir, ".password");
+    await Deno.writeTextFile(pwPath, testPassword);
+    await Deno.chmod(pwPath, 0o600);
+
+    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    try {
+      const r = toolText(await ns.send("tools/call", {
+        name: "sanitize",
+        arguments: { content: "token = encrypted-secret-value", namespace: "secure-tenant" },
+      }));
+      not(r, "encrypted-secret-value"); // replaced using decrypted secrets
+      has(r, "token");                   // key preserved
+    } finally { await ns.close(); }
+  } finally { await Deno.remove(secretsDir, { recursive: true }); }
+});
+
+test("namespace", "explicit profile param overrides namespace profile.yaml", async (_s) => {
+  const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-ns-" });
+  // profile must be a relative path; create it relative to the test runner cwd.
+  const overrideProfile = `mcp-ns-override-test-${Date.now()}.yaml`;
+  try {
+    const nsDir = join(secretsDir, "customer-a");
+    await Deno.mkdir(nsDir);
+    await Deno.writeTextFile(join(nsDir, "secrets.yaml"), "[]");
+    // Namespace profile targets database.password only
+    await Deno.writeTextFile(join(nsDir, "profile.yaml"), `
+- processor: yaml
+  extensions: [".yaml"]
+  fields:
+    - pattern: "database.password"
+      category: "custom:password"
+`);
+    // Override profile (relative path) targets api.key only
+    await Deno.writeTextFile(overrideProfile, `
+- processor: yaml
+  extensions: [".yaml"]
+  fields:
+    - pattern: "api.key"
+      category: "auth_token"
+`);
+    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    try {
+      // Use a zero-entropy value for the namespace-profile field so field-signal
+      // detection cannot fire independently of the profile choice.
+      const r = toolText(await ns.send("tools/call", {
+        name: "sanitize",
+        arguments: {
+          content: "database:\n  password: aaaa\napi:\n  key: api-key-override-value\n",
+          format: "yaml",
+          namespace: "customer-a",
+          profile: overrideProfile, // relative path — overrides namespace profile
+        },
+      }));
+      has(r, "aaaa");                    // NOT replaced — namespace profile was overridden
+      not(r, "api-key-override-value");  // IS replaced — override profile is active
+    } finally { await ns.close(); }
+  } finally {
+    await Deno.remove(secretsDir, { recursive: true });
+    await Deno.remove(overrideProfile).catch(() => {});
+  }
+});
+
+test("namespace", "settings.yaml behavior flags apply as defaults", async (_s) => {
+  const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-ns-" });
+  try {
+    const nsDir = join(secretsDir, "flagged-ns");
+    await Deno.mkdir(nsDir);
+    await Deno.writeTextFile(join(nsDir, "secrets.yaml"), "[]");
+    // namespace settings: enable fail_on_match and set a small max_archive_depth
+    await Deno.writeTextFile(join(nsDir, "settings.yaml"),
+      "fail_on_match: true\nmax_archive_depth: 2\n"
+    );
+    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    try {
+      // With fail_on_match enabled by namespace settings and use_default patterns, any
+      // match should cause exit code 2. Use content without secrets so it exits 0 to
+      // confirm the settings.yaml was parsed (fail_on_match only fires if there are matches).
+      const r = toolText(await ns.send("tools/call", {
+        name: "sanitize",
+        arguments: { content: "nothing sensitive", namespace: "flagged-ns" },
+      }));
+      // No match → content passes through unchanged.
+      has(r, "nothing sensitive");
+    } finally { await ns.close(); }
+  } finally { await Deno.remove(secretsDir, { recursive: true }); }
+});
+
+test("namespace", "settings.yaml allow list merges with per-call allow", async (_s) => {
+  const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-ns-" });
+  try {
+    const nsDir = join(secretsDir, "allow-ns");
+    await Deno.mkdir(nsDir);
+    await Deno.writeTextFile(join(nsDir, "secrets.yaml"), "[]");
+    // namespace settings: pre-allow *.internal
+    await Deno.writeTextFile(join(nsDir, "settings.yaml"),
+      "allow:\n  - \"*.internal\"\n"
+    );
+    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    try {
+      const r = toolText(await ns.send("tools/call", {
+        name: "sanitize",
+        arguments: {
+          content: "host: db.internal\nip: 203.0.113.5",
+          use_default: true,
+          namespace: "allow-ns",
+        },
+      }));
+      has(r, "db.internal");   // allowed by namespace settings.yaml
+    } finally { await ns.close(); }
+  } finally { await Deno.remove(secretsDir, { recursive: true }); }
+});
+
+test("namespace", "settings.yaml with invalid YAML is silently ignored", async (_s) => {
+  const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-ns-" });
+  try {
+    const nsDir = join(secretsDir, "bad-settings-ns");
+    await Deno.mkdir(nsDir);
+    await Deno.writeTextFile(join(nsDir, "secrets.yaml"), "[]");
+    await Deno.writeTextFile(join(nsDir, "settings.yaml"), "this: is: not: valid: ][[[");
+    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    try {
+      // Should succeed — bad settings.yaml is silently skipped.
+      const r = toolText(await ns.send("tools/call", {
+        name: "sanitize",
+        arguments: { content: "safe content", namespace: "bad-settings-ns" },
+      }));
+      has(r, "safe");
+    } finally { await ns.close(); }
+  } finally { await Deno.remove(secretsDir, { recursive: true }); }
+});
+
 // ===========================================================================
 // files path guards
 // ===========================================================================

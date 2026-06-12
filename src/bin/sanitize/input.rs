@@ -383,7 +383,7 @@ pub(crate) fn plan_input_targets(cli: &Cli) -> Result<Vec<InputTarget>, String> 
         let mut patterns: Vec<String> = Vec::new();
         let root = if let Some(ref cfg_path) = find_project_config() {
             let (pc, cfg_dir) = load_project_config(cfg_path);
-            patterns.extend(pc.exclude);
+            patterns.extend(pc.exclude_path);
             cfg_dir
         } else {
             std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
