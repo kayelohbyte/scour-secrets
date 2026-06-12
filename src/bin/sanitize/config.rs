@@ -712,6 +712,7 @@ quiet: true
 
     #[test]
     fn find_project_config_returns_none_when_disabled() {
+        let _guard = env_lock();
         std::env::set_var("SANITIZE_NO_CONFIG", "1");
         let result = find_project_config();
         std::env::remove_var("SANITIZE_NO_CONFIG");
@@ -720,6 +721,7 @@ quiet: true
 
     #[test]
     fn find_project_config_uses_explicit_env_var() {
+        let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("custom.yaml");
         fs::write(&path, "").unwrap();
@@ -732,6 +734,7 @@ quiet: true
 
     #[test]
     fn find_project_config_returns_none_for_nonexistent_explicit_path() {
+        let _guard = env_lock();
         std::env::remove_var("SANITIZE_NO_CONFIG");
         std::env::set_var("SANITIZE_CONFIG", "/nonexistent/path/custom.yaml");
         let result = find_project_config();
