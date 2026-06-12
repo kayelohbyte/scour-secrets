@@ -146,6 +146,18 @@ fn main() {
     }
 }
 
+/// Single process-wide mutex for tests that mutate environment variables.
+/// Shared by config and hooks tests so they cannot race each other.
+#[cfg(test)]
+pub(crate) fn test_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::{Mutex, OnceLock};
+    static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
+    ENV_MUTEX
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::cli_args::{Cli, HookMode, HookType, InstallHookArgs};

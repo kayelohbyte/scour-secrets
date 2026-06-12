@@ -490,11 +490,9 @@ pub(crate) fn run_init(args: &InitArgs) -> Result<(), (String, i32)> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::{Mutex, OnceLock};
 
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static ENV_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-        ENV_MUTEX.get_or_init(Mutex::default).lock().unwrap()
+        crate::test_env_lock()
     }
 
     // ── find_project_config_from ─────────────────────────────────────────────
@@ -644,8 +642,14 @@ quiet: true
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
         std::env::remove_var("SANITIZE_NO_SETTINGS");
+        #[cfg(windows)]
+        std::env::set_var("APPDATA", dir.path());
+        #[cfg(not(windows))]
         std::env::set_var("XDG_CONFIG_HOME", dir.path());
         let s = load_settings();
+        #[cfg(windows)]
+        std::env::remove_var("APPDATA");
+        #[cfg(not(windows))]
         std::env::remove_var("XDG_CONFIG_HOME");
         assert!(s.app.is_empty());
     }
@@ -662,8 +666,14 @@ quiet: true
         )
         .unwrap();
         std::env::remove_var("SANITIZE_NO_SETTINGS");
+        #[cfg(windows)]
+        std::env::set_var("APPDATA", dir.path());
+        #[cfg(not(windows))]
         std::env::set_var("XDG_CONFIG_HOME", dir.path());
         let s = load_settings();
+        #[cfg(windows)]
+        std::env::remove_var("APPDATA");
+        #[cfg(not(windows))]
         std::env::remove_var("XDG_CONFIG_HOME");
         assert_eq!(s.app, vec!["gitlab"]);
         assert_eq!(s.allow, vec!["localhost"]);
@@ -686,8 +696,14 @@ quiet: true
         )
         .unwrap();
         std::env::remove_var("SANITIZE_NO_SETTINGS");
+        #[cfg(windows)]
+        std::env::set_var("APPDATA", dir.path());
+        #[cfg(not(windows))]
         std::env::set_var("XDG_CONFIG_HOME", dir.path());
         let s = load_settings();
+        #[cfg(windows)]
+        std::env::remove_var("APPDATA");
+        #[cfg(not(windows))]
         std::env::remove_var("XDG_CONFIG_HOME");
         assert!(s.app.is_empty());
     }

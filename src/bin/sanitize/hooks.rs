@@ -596,17 +596,22 @@ mod tests {
     }
 
     // ── sanitize_config_dir / global path helpers ─────────────────────────────
+    // These tests exercise XDG/HOME behaviour which only applies on Unix.
 
+    #[cfg(unix)]
     #[test]
     fn sanitize_config_dir_uses_xdg_config_home() {
+        let _guard = crate::test_env_lock();
         std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-test");
         let dir = sanitize_config_dir();
         std::env::remove_var("XDG_CONFIG_HOME");
         assert_eq!(dir, PathBuf::from("/tmp/xdg-test/sanitize"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn sanitize_config_dir_falls_back_to_home() {
+        let _guard = crate::test_env_lock();
         std::env::remove_var("XDG_CONFIG_HOME");
         std::env::set_var("HOME", "/tmp/home-test");
         let dir = sanitize_config_dir();
@@ -614,8 +619,10 @@ mod tests {
         assert_eq!(dir, PathBuf::from("/tmp/home-test/.config/sanitize"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn global_path_helpers_use_config_dir() {
+        let _guard = crate::test_env_lock();
         std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-test");
         let secrets = global_default_secrets_path();
         let settings = global_settings_path();
