@@ -9,19 +9,24 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::tempdir;
 
-/// Read a file with brief retry on `PermissionDenied`.
+/// Read a file with retry on transient permission errors.
 ///
-/// On Windows CI, real-time AV (Defender) can hold a transient lock on a
-/// file immediately after `AtomicFileWriter::finish` renames it into place,
+/// On Windows CI, real-time AV (Defender) can hold a lock on a file
+/// immediately after `AtomicFileWriter::finish` renames it into place,
 /// causing the test-side reopen to fail with `ERROR_ACCESS_DENIED` (os 5).
-/// Retry for up to ~500ms with short backoffs.
+/// Retry on either `PermissionDenied` or raw OS error 5 (some Rust
+/// versions don't map every flavor of ACCESS_DENIED to `PermissionDenied`)
+/// for up to ~3 seconds with 50ms backoffs.
 fn read_to_string_retry(path: &Path) -> String {
-    let deadline = Instant::now() + Duration::from_millis(500);
+    let deadline = Instant::now() + Duration::from_secs(3);
     loop {
         match fs::read_to_string(path) {
             Ok(s) => return s,
-            Err(e) if e.kind() == ErrorKind::PermissionDenied && Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(25));
+            Err(e)
+                if (e.kind() == ErrorKind::PermissionDenied || e.raw_os_error() == Some(5))
+                    && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(50));
             }
             Err(e) => panic!("read {}: {e}", path.display()),
         }
