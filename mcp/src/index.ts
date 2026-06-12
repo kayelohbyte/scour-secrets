@@ -82,7 +82,7 @@ const FILES_DENYLIST: RegExp[] = (() => {
 })();
 
 // Keep in sync with version field in Cargo.toml.
-const SERVER_VERSION = "0.12.0";
+const SERVER_VERSION = "0.13.0";
 const DEFAULT_HTTP_PORT = 6277;
 
 const NO_STRUCTURED_HANDOFF_ARG = "--no-structured-handoff";

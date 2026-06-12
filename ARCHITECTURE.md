@@ -1,6 +1,6 @@
 # Architecture
 
-> **rust-sanitize** v0.12.0 — Deterministic, one-way data sanitization.
+> **rust-sanitize** v0.13.0 — Deterministic, one-way data sanitization.
 
 This document describes the internal architecture of the sanitization
 engine.  It is aimed at contributors and operators who need to

@@ -1145,7 +1145,6 @@ impl<'a> FileProcessor<'a> {
     ) -> Result<bool, String> {
         let cli = self.cli;
         let fp = self;
-        let mut had_matches = false;
 
         let input_bytes =
             fs::read(input).map_err(|e| format!("failed to read {}: {e}", input.display()))?;
@@ -1196,11 +1195,10 @@ impl<'a> FileProcessor<'a> {
             stats.bytes_output = output_bytes.len() as u64;
 
             let label = input.display().to_string();
-            had_matches = finalize_buffered_scan(
+            finalize_buffered_scan(
                 &output_bytes, &stats, &label, method.as_str(),
                 output_path, cli, fp,
-            )?;
-            Ok(had_matches)
+            )
         })
     }
 

@@ -7,7 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-06-12
+
 ### Added
+
+- **`--quick PATTERN[,PATTERN…]` flag** — add one-off literal or regex patterns
+  for the current run without creating or modifying a secrets file. Bare values
+  are matched literally; prefix with `regex:` to enable regex matching, consistent
+  with the `--allow` convention. Patterns are merged with any `--secrets-file` /
+  `--app` patterns for the same run.
+
+- **`balanced` and `aggressive` template presets** — two new presets for
+  `sanitize template`. `balanced` produces a ready-to-edit YAML that mirrors the
+  built-in runtime detection set (the same patterns activated by omitting
+  `--secrets-file`). `aggressive` extends `balanced` with high-entropy block
+  detection, bearer / authorization header patterns, and short container IDs.
+
+- **Namespace `settings.yaml` in MCP** — per-namespace behavior defaults loaded
+  from `$SANITIZE_SECRETS_DIR/<namespace>/settings.yaml` alongside the existing
+  secrets file and profile. Supports all scan-behavior flags (e.g. `fail_on_match`,
+  `force_text`, `entropy_threshold`, `allow`, `exclude_path`). Per-call tool
+  parameters always override namespace defaults.
 
 - **`IniProcessor`** — new structured processor for INI / CFG files (`*.ini`,
   `*.cfg`). Handles `[section]` / `key = value` and `key: value` syntax,
@@ -48,7 +68,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `StoreSnapshot::start()` (or `StoreSnapshot::default()`) to iterate all
   entries, replacing the former `iter_since(0)`.
 
+### Removed
+
+- **`sanitize guided` interactive subcommand** — removed. The pattern generation
+  it provided is now covered by `sanitize template balanced` (exact runtime
+  defaults, editable) and `sanitize template aggressive`. Removing it eliminates
+  the `GuidedOptions` / `GuidedPreset` coupling between the wizard and the scanner
+  defaults; `balanced_secret_entries()` in `scanner_builder` is now the single
+  source of truth for the built-in detection set.
+
 ### Changed
+
+- **`sanitize template` preset is now a positional argument** *(breaking)* —
+  `sanitize template --preset k8s` becomes `sanitize template k8s`. Default
+  preset changes from `generic` → `balanced`.
+
+- **Project config format: `.sanitize.toml` → `.sanitize.yaml`** *(breaking)* —
+  the per-project config file is now `.sanitize.yaml` instead of `.sanitize.toml`.
+  Rename any existing `.sanitize.toml` files. The schema is unchanged; field names
+  are identical in both formats.
+
+- **Unified config schema across all three layers** — `~/.config/sanitize/settings.yaml`,
+  `.sanitize.yaml`, and (MCP) `<namespace>/settings.yaml` now share a single
+  `SanitizeConfig` struct covering all 30+ behavior flags. Previously, the global
+  settings file and project config file had different, partial schemas. Lists
+  (`app`, `allow`, `exclude_path`, `include_path`, `context_keywords`) are merged
+  additively across layers; scalar flags follow lowest-wins precedence (global →
+  project → namespace → per-call CLI flag).
+
+- **LLM client hardened** — `send_prompt` now enforces: SSRF scheme check
+  (http/https only, validated before the request is sent); 10 MiB SSE stream cap
+  (returns an error if exceeded); ESC byte stripping from decoded content (prevents
+  terminal control-sequence injection); bounded error-body read; separate connect
+  timeout distinct from the read timeout.
 
 - **`Strategy::replace` takes `category: &Category` as first argument** *(breaking)*
   — strategies can now produce category-aware output. The five built-in strategies
@@ -95,6 +147,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - `MappingStore::Drop::drop` now delegates to `clear()` instead of duplicating
   the map teardown logic.
+
+- Extracted `strip_terminal_escapes` and `process_sse_stream` from `send_prompt`
+  in `llm_client.rs`. 7 new unit tests cover ESC stripping, multi-token SSE
+  concatenation, `[DONE]` termination, non-data line skipping, and the stream
+  byte-cap error path.
+
+- 4 new `llm_endpoint_tests` integration tests exercise the full
+  `--llm-endpoint` path via a self-contained mock HTTP server: correct SSE
+  streaming, wrong-token 401 rejection, 500 error propagation, and ESC stripping
+  end-to-end.
+
+- 27 entropy unit tests (branch coverage 42 % → 97.7 %), 7 `looks_binary` /
+  `merge_entropy_counts` tests, 10 `--quick` integration tests, 10 config /
+  hooks env-var tests added in `tests/`.
+
+- 3 new MCP namespace `settings.yaml` integration tests (94 total).
 
 ## [0.12.0] - 2026-06-03
 
@@ -605,7 +673,8 @@ contract and MSRV policy.
 - **290+ tests** including unit, integration, property-based (proptest), and
   4 fuzz targets.
 
-[Unreleased]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.13.0...HEAD
+[0.13.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.10.0...v0.11.0
 [0.8.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.5.0...v0.8.0

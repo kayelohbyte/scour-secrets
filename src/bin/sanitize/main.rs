@@ -146,7 +146,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use crate::cli_args::{Cli, HookMode, HookType, InstallHookArgs, SubCommand};
+    use crate::cli_args::{Cli, HookMode, HookType, InstallHookArgs};
     use crate::hooks::{
         build_hook_flags, build_hook_script, hook_script_pre_commit_scan, remove_hook, sh_quote,
         HOOK_MARKER,
