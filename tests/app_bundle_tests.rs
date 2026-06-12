@@ -1,7 +1,7 @@
 //! Integration tests for the `--app` flag in the main sanitize flow and `--no-structured-handoff`.
 
 use std::fs;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use tempfile::tempdir;
 
 // ---------------------------------------------------------------------------
@@ -221,8 +221,13 @@ fn no_structured_handoff_with_secrets_file_does_not_mutate_secrets_file() {
 
 /// 6. --allow passes a specific value through unchanged while other matching
 ///    values of the same category are still replaced.
+///
+/// Uses stdin→stdout to avoid reading an output file written by the child
+/// process, which can trigger spurious PermissionDenied errors on Windows CI.
 #[test]
 fn allow_flag_passes_value_through_unchanged() {
+    use std::io::Write as _;
+
     let dir = tempdir().unwrap();
 
     // IPv4 regex pattern.
@@ -233,30 +238,32 @@ fn allow_flag_passes_value_through_unchanged() {
     )
     .unwrap();
 
-    let input_path = dir.path().join("hosts.txt");
-    fs::write(
-        &input_path,
-        "server at 192.168.1.1 and client at 10.0.0.1\n",
-    )
-    .unwrap();
-
-    let output_path = dir.path().join("hosts-out.txt");
-
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    // Pipe input via stdin so the output arrives on stdout — no output file to
+    // read back, which sidesteps Windows CI file-permission flakiness.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
         .args([
-            input_path.to_str().unwrap(),
+            "-", // read from stdin
             "-s",
             secrets_path.to_str().unwrap(),
             "--allow",
             "192.168.1.1",
-            "-o",
-            output_path.to_str().unwrap(),
         ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
         .env("SANITIZE_LOG", "error")
         .env("SANITIZE_NO_SETTINGS", "1")
         .current_dir(dir.path())
-        .output()
+        .spawn()
         .unwrap();
+
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"server at 192.168.1.1 and client at 10.0.0.1\n")
+        .unwrap();
+
+    let out = child.wait_with_output().unwrap();
 
     assert!(
         out.status.success(),
@@ -264,7 +271,7 @@ fn allow_flag_passes_value_through_unchanged() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    let result = fs::read_to_string(&output_path).unwrap();
+    let result = String::from_utf8_lossy(&out.stdout);
 
     // 192.168.1.1 should pass through because it was explicitly allowed.
     assert!(
