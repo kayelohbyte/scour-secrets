@@ -247,23 +247,31 @@ fn extract_context_keywords_only_replaces_defaults() {
 // --strip-values (file input)
 // ---------------------------------------------------------------------------
 
+// NOTE: input comes via piped stdin instead of a file.  On the Windows CI
+// runner, the file-input + AtomicFileWriter-output combination triggers a
+// >3s ACCESS_DENIED hold on the output file (Defender scan / sharing-mode
+// lock on the renamed destination).  The buffered-stdin code path is not
+// affected.  See commit 590eb81 for the failed retry-helper experiment.
 #[test]
 fn strip_values_removes_values_from_file() {
     let dir = tempdir().unwrap();
-    let input = dir.path().join("config.cfg");
-    fs::write(&input, "host = localhost\nport = 5432\npassword = s3cr3t\n").unwrap();
     let output_path = dir.path().join("out.cfg");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
-        .args([
-            input.to_str().unwrap(),
-            "--strip-values",
-            "-o",
-            output_path.to_str().unwrap(),
-        ])
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+        .args(["-", "--strip-values", "-o", output_path.to_str().unwrap()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .env("SANITIZE_LOG", "error")
-        .output()
+        .spawn()
         .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"host = localhost\nport = 5432\npassword = s3cr3t\n")
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
 
     assert!(
         out.status.success(),
@@ -282,20 +290,23 @@ fn strip_values_removes_values_from_file() {
 #[test]
 fn strip_values_preserves_comments_and_blank_lines_in_file() {
     let dir = tempdir().unwrap();
-    let input = dir.path().join("config.cfg");
-    fs::write(&input, "# database settings\n\nhost = localhost\n").unwrap();
     let output_path = dir.path().join("out.cfg");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
-        .args([
-            input.to_str().unwrap(),
-            "--strip-values",
-            "-o",
-            output_path.to_str().unwrap(),
-        ])
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+        .args(["-", "--strip-values", "-o", output_path.to_str().unwrap()])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .env("SANITIZE_LOG", "error")
-        .output()
+        .spawn()
         .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(b"# database settings\n\nhost = localhost\n")
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
 
     assert!(out.status.success());
     let content = read_to_string_retry(&output_path);
