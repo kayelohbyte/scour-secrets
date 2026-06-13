@@ -5,9 +5,33 @@
 //! rejections, custom template files, and no-file-write guarantee.
 
 use std::fs;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
+use std::path::Path;
 use std::process::Command;
+use std::thread;
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
+
+/// Read a file with retry on transient permission errors.
+///
+/// Even after `AtomicFileWriter::finish` retries past the Windows rename
+/// race, Defender can briefly re-lock the just-renamed file with
+/// ACCESS_DENIED.  Retry the test-side reopen for up to ~3 seconds.
+fn read_to_string_retry(path: &Path) -> String {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        match fs::read_to_string(path) {
+            Ok(s) => return s,
+            Err(e)
+                if (e.kind() == ErrorKind::PermissionDenied || e.raw_os_error() == Some(5))
+                    && Instant::now() < deadline =>
+            {
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => panic!("read {}: {e}", path.display()),
+        }
+    }
+}
 
 fn secrets_file(dir: &std::path::Path) -> std::path::PathBuf {
     let p = dir.join("secrets.json");
@@ -77,7 +101,7 @@ fn llm_reference_mode_with_output_writes_file_and_lists_path() {
         output.exists(),
         "reference mode must write the sanitized file"
     );
-    let sanitized = fs::read_to_string(&output).unwrap();
+    let sanitized = read_to_string_retry(&output);
     assert!(
         !sanitized.contains("SUPERSECRET"),
         "output file must be sanitized"
@@ -348,7 +372,7 @@ fn llm_file_input_uses_reference_mode() {
         expected_out.exists(),
         "--llm with file input must write the sanitized output file"
     );
-    let sanitized = fs::read_to_string(&expected_out).unwrap();
+    let sanitized = read_to_string_retry(&expected_out);
     assert!(
         !sanitized.contains("SUPERSECRET"),
         "output file must be sanitized"
