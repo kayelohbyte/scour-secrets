@@ -123,8 +123,12 @@ impl AtomicFileWriter {
         file.sync_all()?;
         drop(file);
 
-        // Atomic rename.
-        if let Err(e) = fs::rename(&self.tmp_path, &self.dest_path) {
+        // Atomic rename.  On Windows, real-time AV (Defender), Search Indexer,
+        // or another process scanning the just-closed temp file can hold a
+        // transient lock that causes `MoveFileExW` to return ERROR_ACCESS_DENIED
+        // (or ERROR_SHARING_VIOLATION).  Retry with short backoff for up to
+        // ~1 second before giving up.
+        if let Err(e) = rename_with_retry(&self.tmp_path, &self.dest_path) {
             // Cleanup the temp file on rename failure.
             let _ = fs::remove_file(&self.tmp_path);
             return Err(e);
@@ -145,6 +149,47 @@ impl AtomicFileWriter {
     #[must_use]
     pub fn dest_path(&self) -> &Path {
         &self.dest_path
+    }
+}
+
+/// Rename `from` to `to`, retrying on Windows when the destination is
+/// transiently locked by another process (typically AV scanning the
+/// just-closed temp file).
+///
+/// `fs::rename` on Windows uses `MoveFileExW`, which can return
+/// `ERROR_ACCESS_DENIED` (5) or `ERROR_SHARING_VIOLATION` (32) when
+/// another process holds an open handle without `FILE_SHARE_DELETE`.
+/// Retry up to ~1 second with 50ms backoffs to ride out the typical
+/// AV scan window.
+///
+/// On non-Windows platforms this is a single `fs::rename` call.
+fn rename_with_retry(from: &Path, to: &Path) -> io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        fs::rename(from, to)
+    }
+    #[cfg(windows)]
+    {
+        use std::thread::sleep;
+        use std::time::{Duration, Instant};
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match fs::rename(from, to) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    let transient = matches!(
+                        e.raw_os_error(),
+                        Some(5)  /* ERROR_ACCESS_DENIED */
+                        | Some(32) /* ERROR_SHARING_VIOLATION */
+                    );
+                    if !transient || Instant::now() >= deadline {
+                        return Err(e);
+                    }
+                    sleep(Duration::from_millis(50));
+                }
+            }
+        }
     }
 }
 
