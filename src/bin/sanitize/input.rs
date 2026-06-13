@@ -66,8 +66,22 @@ pub(crate) fn has_stdin_input(cli: &Cli) -> bool {
 /// Returns `true` when stdin is an OS-level pipe (FIFO).
 ///
 /// On Unix we check `S_IFIFO` via fstat so that redirected regular files and
-/// /dev/null are not mistaken for pipes. On other platforms we fall back to
-/// `!is_terminal()`, which is a safe but slightly broader approximation.
+/// /dev/null are not mistaken for pipes.
+///
+/// On non-Unix platforms (Windows) we return `false` unconditionally.  The
+/// only safe Win32 alternative is `GetFileType == FILE_TYPE_PIPE`, which
+/// requires unsafe code and a new dependency; staying with `!is_terminal()`
+/// is too broad — it matches the NUL handle inherited from cargo-test, which
+/// caused single-file input + `-o file` to be misclassified as multi-input
+/// and the output path to be created as a directory, breaking integration
+/// tests on Windows CI.
+///
+/// The trade-off is that `echo data | sanitize file.log -o out` (a pipe
+/// combined with a positional file) no longer auto-detects stdin as a
+/// second input on Windows.  Users who want that behavior must add an
+/// explicit `-` token: `echo data | sanitize - file.log -o out`.  The
+/// common cases — solo stdin (`echo data | sanitize`) and solo file
+/// (`sanitize file.log`) — are unaffected.
 #[cfg(unix)]
 fn stdin_is_pipe() -> bool {
     use nix::sys::stat::fstat;
@@ -82,7 +96,7 @@ fn stdin_is_pipe() -> bool {
 
 #[cfg(not(unix))]
 fn stdin_is_pipe() -> bool {
-    !io::stdin().is_terminal()
+    false
 }
 
 /// Returns file-path inputs, excluding explicit stdin markers ("-").
