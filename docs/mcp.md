@@ -57,24 +57,71 @@ For **ChatGPT and Gemini**: no ambient filesystem access — control what you ex
 
 ### File System Permissions (All Tools)
 
-Own sensitive files by a dedicated service user so the agent's login process cannot open them directly:
+OS-level permissions are the only control that works against every agent regardless of its built-in deny mechanism. The model: a dedicated service user owns the sensitive files and runs the daemon; your login user (and therefore every agent you launch) cannot open the files directly.
+
+```
+       ┌──────────────────────────────────────────┐
+       │  Sensitive files                         │
+       │  owner: sanitize-svc                     │
+       └─────────────┬────────────────────────────┘
+                     │ read access (OS-enforced)
+                     ▼
+   ┌─────────────────────────────────────┐
+   │  sanitize-mcp daemon                │
+   │  runs as: sanitize-svc              │
+   │  binds:   127.0.0.1 + bearer token  │
+   └────────────────┬────────────────────┘
+                    │ sanitized output only
+                    ▼
+   ┌─────────────────────────────────────┐
+   │  AI agent (Claude Code, Cursor, …)  │
+   │  runs as: your login user           │
+   │  cannot open() the sensitive files  │
+   └─────────────────────────────────────┘
+```
+
+The agent can only reach the data through the daemon, and the daemon only returns sanitized bytes. For this to hold, `sanitize-mcp` must run as `sanitize-svc` — which requires the [persistent daemon](#running-as-a-persistent-daemon) setup below. When AI tools spawn `sanitize-mcp` on demand it inherits the login user's permissions, so on-demand mode cannot access files owned exclusively by the service user.
+
+**Create the service user once:**
 
 ```bash
 sudo useradd -r -s /sbin/nologin sanitize-svc
-sudo chown sanitize-svc:sanitize-svc /var/data/sensitive.log
-sudo chmod 0600 /var/data/sensitive.log
 ```
 
-The agent process (running as your login user) cannot open the file. For `sanitize-mcp` to open it, the server must also run as `sanitize-svc` — which requires the **persistent daemon** setup below. When AI tools spawn `sanitize-mcp` on demand it inherits the login user's permissions, so on-demand mode cannot access files owned exclusively by the service user.
+Then pick one of two file-ownership models. Both put the daemon in the same position; they differ only in how you, the human, edit the files.
 
-For multi-user deployments a shared group is more practical:
+#### Strict (recommended for shared/sensitive secrets)
+
+Only the service user can read or write. Your login user — and therefore every agent — gets `Permission denied` at the OS level. Edits require an explicit `sudo` step, which is the point: there is no path by which a compromised agent shell can reach the file.
+
+```bash
+sudo chown sanitize-svc:sanitize-svc /var/sanitize/secrets/secrets.yaml
+sudo chmod 0600 /var/sanitize/secrets/secrets.yaml
+```
+
+Edit with `sudoedit` (preserves your `$EDITOR`, writes via a safe temp file):
+
+```bash
+sudo -u sanitize-svc -e /var/sanitize/secrets/secrets.yaml
+# or, for a one-off read:
+sudo -u sanitize-svc cat /var/sanitize/secrets/secrets.yaml
+```
+
+Pick this when the secrets are stable, edited rarely, and the consequences of agent exfiltration are severe (production tokens, customer-namespace secrets, audit-scoped credentials).
+
+#### Convenient (recommended for actively-edited config)
+
+Your login user joins a shared group and can edit the files with their normal editor. The daemon still runs as `sanitize-svc`; agents inherit your group membership and *can* read the files at the OS level, so this model relies on per-agent deny rules ([Blocking Direct File Reads by AI Tool](#blocking-direct-file-reads-by-ai-tool)) to enforce the boundary inside the agent.
 
 ```bash
 sudo groupadd sanitize-readers
 sudo usermod -aG sanitize-readers sanitize-svc
-sudo chown root:sanitize-readers /var/data/sensitive.log
-sudo chmod 0640 /var/data/sensitive.log
+sudo usermod -aG sanitize-readers $USER         # log out and back in for this to take effect
+sudo chown sanitize-svc:sanitize-readers /var/sanitize/secrets/secrets.yaml
+sudo chmod 0640 /var/sanitize/secrets/secrets.yaml
 ```
+
+Pick this when you iterate on patterns/profiles frequently, are confident in your agent's deny mechanism (e.g. Claude Code `PreToolUse` hook, Codex TOML deny, OpenCode `permission.read`), and the threat model is "stop the agent from casually reading them" rather than "defend against a determined shell escape." VS Code Copilot users should **not** use this model — `.copilotignore` is not a security boundary; strict mode is the only effective control.
 
 ### Running as a Persistent Daemon
 
@@ -567,6 +614,8 @@ require("avante").setup({
 | `strip_config_values` | Strip values from key=value config files, preserving keys and structure. |
 | `test_allowlist` | Test which values match a set of allowlist patterns. |
 | `list_apps` | List all available app bundles (built-in + user-defined). |
+| `list_processors` | List all supported input format processors and the `format_flag` value to pass as the `format` parameter to `sanitize` or `scan`. Call when auto-detection fails (extensionless files, stdin, unfamiliar extensions). |
+| `list_templates` | List the built-in LLM prompt templates available via the `llm_template` parameter of the `sanitize` tool. |
 | `init` | Create a starter secrets file on disk from a preset template and return its contents. |
 | `build_secrets` | Build a tailored secrets file from specific patterns. Typical workflow: scan → identify gaps → build_secrets → sanitize. |
 | `test_pattern` | Test which values are matched by a secrets file, app bundle, or inline patterns. Returns per-value match results. |
@@ -983,6 +1032,20 @@ Omit `preset` to create a file with only the entries you specify. Returns the wr
 ```
 
 Available presets: `balanced` (default — mirrors the built-in runtime detection set), `aggressive` (balanced + entropy/bearer patterns), `generic`, `web`, `k8s`, `database`, `aws`. Pass `overwrite: true` to replace an existing file. Once created, pass the path via `secrets_file` on subsequent `sanitize` or `scan` calls.
+
+### Discover input formats and LLM templates
+
+`list_processors` returns every supported format processor and the `format_flag` value to pass as the `format` parameter to `sanitize` or `scan`. Useful when auto-detection fails — extensionless files, stdin input, or an unfamiliar extension.
+
+```json
+{ "tool": "list_processors" }
+```
+
+`list_templates` returns the built-in LLM prompt templates available via the `llm_template` parameter of `sanitize`.
+
+```json
+{ "tool": "list_templates" }
+```
 
 ---
 

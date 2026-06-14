@@ -46,7 +46,9 @@ sanitize apps
 #
 #   ansible            Ansible — group_vars, host_vars, vault credentials
 #   aws-cli            AWS CLI — ~/.aws/credentials, ~/.aws/config access keys
+#   bruno              Bruno — .bru collections and OpenCollection YAML (Bruno 3.0+) credentials
 #   circleci           CircleCI — .circleci/config.yml job/step environment variables, docker auth
+#   datadog            Datadog Agent — datadog.yaml API keys, proxy credentials, SNMP auth, cluster agent tokens
 #   django             Django — .env files, SECRET_KEY, database credentials, third-party API keys
 #   docker-compose     Docker Compose — compose.yml environment variables, image credentials
 #   elasticsearch      Elasticsearch — elasticsearch.yml, Kibana/Logstash credentials
@@ -54,13 +56,16 @@ sanitize apps
 #   github-actions     GitHub Actions — workflow env vars, step inputs, container registry credentials
 #   gitlab             GitLab — CI/CD logs, runner output, .gitlab-ci.yml variables
 #   grafana            Grafana — grafana.ini admin credentials, provisioning datasource secrets
+#   har                HAR (HTTP Archive) — browser-captured request/response traffic, auth headers, cookies
 #   heroku             Heroku — app.json env values, add-on credentials (Postgres, Redis, SendGrid…)
+#   insomnia           Insomnia — workspace exports, request auth, environment variables
 #   kubernetes         Kubernetes — kubeconfig credentials, Secret manifests, Helm values
 #   laravel            Laravel — .env files, APP_KEY, Pusher, Passport, Stripe secrets
 #   mongodb            MongoDB — mongod.conf TLS passwords, .env connection strings
 #   mysql              MySQL / MariaDB — my.cnf credentials, .env DATABASE_URL
 #   nginx              Nginx — nginx.conf virtual hosts, proxy upstreams, access/error logs
 #   postgresql         PostgreSQL — postgresql.conf, connection strings, pg logs
+#   postman            Postman — collection credentials, environment variables, auth configs
 #   rails              Ruby on Rails — database.yml, .env, config/secrets.yml
 #   redis              Redis — redis.conf requirepass/masterauth, .env credentials
 #   splunk             Splunk — outputs.conf, inputs.conf, authentication.conf credentials

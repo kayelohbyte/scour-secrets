@@ -97,28 +97,25 @@ sanitize server.log -n
 sanitize config.yaml --fail-on-match
 ```
 
-### Guided setup — answer a few questions, get a tailored config
+### Template-based setup — start from a preset
 
 ```bash
-sanitize guided
+sanitize template balanced       # mirrors the built-in runtime defaults
+sanitize template aggressive     # balanced + entropy detection + broad token patterns
+sanitize template k8s -o k8s.secrets.yaml
 ```
 
-The wizard asks for your workspace type (Generic, Web app, Kubernetes, Database, AWS), replacement strictness, company domains, and which file formats to cover. It produces two files:
-
-- `secrets.guided.yaml` — your pattern set, optionally encrypted
-- `secrets.guided.profile.yaml` — structured field rules for the formats you chose
+Each preset writes a ready-to-edit `secrets.template.<preset>.yaml` covering one use case. Available presets: `balanced` (default), `aggressive`, `generic`, `web`, `k8s`, `database`, `aws`.
 
 ```bash
-sanitize server.log config.yaml \
-  -s secrets.guided.yaml \
-  --profile secrets.guided.profile.yaml
+sanitize server.log -s secrets.template.balanced.yaml
 ```
 
-Aggressive strictness also matches broad hostnames, short container IDs, and high-entropy token patterns — recommended when sharing logs with an LLM.
+`aggressive` also matches broad hostnames, short container IDs, and high-entropy token patterns — recommended when sharing logs with an LLM.
 
 ### App bundles — zero config for common applications
 
-Built-in bundles for 22 applications pair a secrets pattern set with a structured field profile so field-level sanitization works out of the box, no authoring required.
+Built-in bundles for 27 applications pair a secrets pattern set with a structured field profile so field-level sanitization works out of the box, no authoring required.
 
 ```bash
 sanitize /etc/gitlab/gitlab.rb --app gitlab
@@ -129,7 +126,7 @@ sanitize values.yaml --app kubernetes
 sanitize apps
 ```
 
-Built-in bundles: `ansible`, `aws-cli`, `circleci`, `django`, `docker-compose`, `elasticsearch`, `fstab`, `github-actions`, `gitlab`, `grafana`, `heroku`, `kubernetes`, `laravel`, `mongodb`, `mysql`, `nginx`, `postgresql`, `rails`, `redis`, `splunk`, `spring-boot`, `terraform`.
+Built-in bundles: `ansible`, `aws-cli`, `bruno`, `circleci`, `datadog`, `django`, `docker-compose`, `elasticsearch`, `fstab`, `github-actions`, `gitlab`, `grafana`, `har`, `heroku`, `insomnia`, `kubernetes`, `laravel`, `mongodb`, `mysql`, `nginx`, `postgresql`, `postman`, `rails`, `redis`, `splunk`, `spring-boot`, `terraform`.
 
 ---
 
@@ -361,7 +358,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model and mitigations.
 | [CLI Reference](docs/cli-reference.md) | Full `sanitize` command reference including all flags, subcommands, secrets file format, and examples. |
 | [Structured Processing](docs/structured-processing.md) | `--profile` usage, field patterns, two-phase pipeline, format preservation, and processor options. |
 | [Supported Categories](docs/categories.md) | All 18 built-in replacement categories with strategies and examples, plus custom categories. |
-| [Pluggable Strategies](docs/strategies.md) | The `Strategy` trait, 5 built-in strategies, and guide to writing custom strategies. |
+| [Pluggable Strategies](docs/strategies.md) | The `Strategy` trait, 6 built-in strategies, and guide to writing custom strategies. |
 | [Library API Reference](docs/api-reference.md) | Module-by-module public API tables. |
 | [Defensive Limits & Streaming](docs/defensive-limits.md) | Streaming chunking model, archive processing flow, and all defensive size/depth/count limits. |
 | [Architecture](ARCHITECTURE.md) | Internal architecture, data flow, module map, concurrency model, and streaming design. |

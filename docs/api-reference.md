@@ -56,10 +56,10 @@ All public types are re-exported from the crate root (`rust_sanitize::*`) for co
 
 | Type / Function | Description |
 |-----------------|-------------|
-| `Strategy` | Trait: `fn name(&self) -> &str` + `fn replace(&self, original: &str, entropy: &[u8; 32]) -> String`. Object-safe. |
+| `Strategy` | Trait: `fn name(&self) -> &'static str` + `fn replace(&self, category: &Category, original: &str, entropy: &[u8; 32]) -> String`. Object-safe. |
 | `StrategyGenerator` | Adapter: bridges `Strategy` → `ReplacementGenerator` with configurable entropy. |
 | `EntropyMode` | Enum: `Deterministic { key: [u8; 32] }` or `Random`. |
-| `RandomString`, `RandomUuid`, `FakeIp`, `PreserveLength`, `HmacHash` | Five built-in strategy implementations (see [Pluggable Strategies](strategies.md)). |
+| `CategoryAwareStrategy`, `RandomString`, `RandomUuid`, `FakeIp`, `PreserveLength`, `HmacHash` | Six built-in strategy implementations (see [Pluggable Strategies](strategies.md)). |
 
 ## Processor Module (`processor`)
 
