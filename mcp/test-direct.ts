@@ -10,97 +10,25 @@
  *     mcp/test-direct.ts
  */
 
-import { join } from "@std/path";
+import { join, resolve } from "@std/path";
 import { predictOutputName, uniquifyName } from "./src/naming.ts";
+import { McpSession, startStdioSession } from "./mcp_client.ts";
+import { scrubEnv } from "./src/env.ts";
 
 const MCP_SCRIPT = join(import.meta.dirname!, "src/index.ts");
-const SANITIZE_BIN =
+// Resolve to absolute so the server can locate the binary even when it runs in
+// a different working directory (cwd override used by file-writing tool tests).
+const SANITIZE_BIN = resolve(
   Deno.env.get("SANITIZE_BIN") ??
-  join(import.meta.dirname!, "../target/release/sanitize");
+    join(import.meta.dirname!, "../target/release/sanitize"),
+);
 
 // ---------------------------------------------------------------------------
-// JSON-RPC session
+// JSON-RPC session — stdio client lives in ./mcp_client.ts (shared with probe.ts)
 // ---------------------------------------------------------------------------
 
-const enc = new TextEncoder();
-const dec = new TextDecoder();
-let idCounter = 1;
-
-function nextId() { return idCounter++; }
-function ser(msg: unknown): Uint8Array { return enc.encode(JSON.stringify(msg) + "\n"); }
-
-class McpSession {
-  private child: Deno.ChildProcess;
-  private writer: WritableStreamDefaultWriter<Uint8Array>;
-  private reader: ReadableStreamDefaultReader<string>;
-  private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>();
-  private closed = false;
-
-  constructor(child: Deno.ChildProcess) {
-    this.child = child;
-    this.writer = child.stdin.getWriter();
-    const lineStream = child.stdout
-      .pipeThrough(new TextDecoderStream())
-      .pipeThrough(new TransformStream<string, string>({
-        transform(chunk, ctrl) {
-          for (const l of chunk.split("\n")) if (l.trim()) ctrl.enqueue(l.trim());
-        },
-      }));
-    this.reader = lineStream.getReader();
-    this.startReadLoop();
-  }
-
-  private async startReadLoop() {
-    while (!this.closed) {
-      let r: ReadableStreamReadResult<string>;
-      try { r = await this.reader.read(); } catch { break; }
-      if (r.done) break;
-      try {
-        const msg = JSON.parse(r.value) as { id?: number; result?: unknown; error?: unknown };
-        if (msg.id !== undefined) {
-          const p = this.pending.get(msg.id);
-          if (p) {
-            this.pending.delete(msg.id);
-            if (msg.error) p.reject(msg.error); else p.resolve(msg.result);
-          }
-        }
-      } catch { /* skip */ }
-    }
-  }
-
-  async send(method: string, params?: unknown): Promise<unknown> {
-    const id = nextId();
-    const promise = new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); });
-    await this.writer.write(ser({ jsonrpc: "2.0", id, method, params }));
-    return promise;
-  }
-
-  async notify(method: string, params?: unknown) {
-    await this.writer.write(ser({ jsonrpc: "2.0", method, params }));
-  }
-
-  async close() {
-    this.closed = true;
-    try { await this.writer.close(); } catch { /* */ }
-    try { this.child.kill("SIGTERM"); } catch { /* */ }
-    await this.child.status;
-  }
-}
-
-async function startSession(extraEnv: Record<string, string> = {}): Promise<McpSession> {
-  const cmd = new Deno.Command(Deno.execPath(), {
-    args: ["run", "--allow-run", "--allow-env", "--allow-read", "--allow-write", MCP_SCRIPT],
-    stdin: "piped", stdout: "piped", stderr: "null",
-    env: { ...Deno.env.toObject(), SANITIZE_BIN, SANITIZE_LOG: "error", ...extraEnv },
-  });
-  const child = cmd.spawn();
-  const s = new McpSession(child);
-  await s.send("initialize", {
-    protocolVersion: "2024-11-05", capabilities: {},
-    clientInfo: { name: "direct-test", version: "1.0" },
-  });
-  await s.notify("notifications/initialized");
-  return s;
+function startSession(extraEnv: Record<string, string> = {}, cwd?: string): Promise<McpSession> {
+  return startStdioSession({ serverPath: MCP_SCRIPT, sanitizeBin: SANITIZE_BIN, env: extraEnv, cwd });
 }
 
 // ---------------------------------------------------------------------------
@@ -342,6 +270,37 @@ function test(group: string, name: string, fn: Fn) {
   // No extension.
   const u5 = new Set(["Makefile-sanitized"]);
   eq(uniquifyName("Makefile-sanitized", u5), "Makefile-sanitized_2", "no-extension collision");
+}
+
+// Subprocess env scrubbing — a security property: parent-process secrets must
+// not reach the sanitize child. Pure function, no MCP session required.
+{
+  const fail = (label: string) => { throw new Error(`scrubEnv: ${label}`); };
+  const parent = {
+    PATH: "/usr/bin",
+    HOME: "/home/u",
+    LANG: "en_US.UTF-8",
+    AWS_SECRET_ACCESS_KEY: "LEAKED",
+    DATABASE_URL: "postgres://leak",
+    GITHUB_TOKEN: "ghp_leak",
+    SANITIZE_SECRETS_DIR: "/var/sanitize",
+    SANITIZE_LOG: "debug",
+  };
+  const out = scrubEnv(parent, { SANITIZE_PASSWORD: "seed" });
+
+  // Secrets from the parent environment must be dropped.
+  for (const leaked of ["AWS_SECRET_ACCESS_KEY", "DATABASE_URL", "GITHUB_TOKEN"]) {
+    if (leaked in out) fail(`${leaked} must be dropped`);
+  }
+  // Runtime essentials forwarded.
+  if (out.PATH !== "/usr/bin") fail("PATH must be forwarded");
+  if (out.HOME !== "/home/u") fail("HOME must be forwarded");
+  // SANITIZE_* forwarded so callers can configure via environment.
+  if (out.SANITIZE_SECRETS_DIR !== "/var/sanitize") fail("SANITIZE_* must be forwarded");
+  // SANITIZE_LOG forced to error regardless of a chatty parent value.
+  if (out.SANITIZE_LOG !== "error") fail("SANITIZE_LOG must be forced to error");
+  // extraEnv applied.
+  if (out.SANITIZE_PASSWORD !== "seed") fail("extraEnv must be applied");
 }
 
 console.log("  \x1b[32m✓\x1b[0m predictOutputName / uniquifyName unit tests passed\n");
@@ -1487,6 +1446,127 @@ test("files path guard", "SANITIZE_MCP_FILES_DENYLIST does not block non-matchin
       not(toolText(r), "denylist");
     } finally { await Deno.remove(tmpFile).catch(() => {}); }
   } finally { await ns.close(); }
+});
+
+test("files path guard", "segment denylist blocks absolute path (start-anchored regex bypass)", async (_s) => {
+  // Regression: 'secrets/**' compiles to a start-anchored regex, so an absolute
+  // path like '/x/y/secrets/api.yaml' previously slipped past the denylist.
+  const ns = await startSession({ SANITIZE_MCP_FILES_DENYLIST: "secrets/**" });
+  try {
+    const r = await ns.send("tools/call", {
+      name: "sanitize",
+      arguments: { files: ["/var/data/secrets/prod/api.yaml"] },
+    });
+    ok(toolIsError(r), "must be isError:true");
+    has(toolText(r), "denylist");
+  } finally { await ns.close(); }
+});
+
+test("files path guard", "symlink into SANITIZE_SECRETS_DIR is rejected", async (_s) => {
+  // Regression: a symlink in an allowed dir pointing into the secrets store must
+  // be resolved before the guard runs, or it bypasses the secrets-dir check.
+  const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-secrets-" });
+  const allowedDir = await Deno.makeTempDir({ prefix: "sanitize-allowed-" });
+  try {
+    const target = join(secretsDir, "acme", "secrets.yaml");
+    await Deno.mkdir(join(secretsDir, "acme"));
+    await Deno.writeTextFile(target, "- pattern: x\n  kind: literal\n  category: generic\n  label: x\n");
+    const link = join(allowedDir, "innocent.yaml");
+    await Deno.symlink(target, link);
+
+    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    try {
+      const r = await ns.send("tools/call", {
+        name: "sanitize",
+        arguments: { files: [link] },
+      });
+      ok(toolIsError(r), "must be isError:true");
+      has(toolText(r), "SANITIZE_SECRETS_DIR");
+    } finally { await ns.close(); }
+  } finally {
+    await Deno.remove(secretsDir, { recursive: true });
+    await Deno.remove(allowedDir, { recursive: true });
+  }
+});
+
+// ===========================================================================
+// tool coverage — tools with no other call-site (init, build_secrets,
+// test_pattern, list_apps)
+// ===========================================================================
+
+test("tool coverage", "list_apps returns built-in bundle names", async (s) => {
+  const r = await s.send("tools/call", { name: "list_apps", arguments: {} });
+  ok(!toolIsError(r), "list_apps must not error");
+  has(toolText(r), "gitlab");
+});
+
+test("tool coverage", "test_pattern matches a literal and echoes the value", async (s) => {
+  const r = await s.send("tools/call", {
+    name: "test_pattern",
+    arguments: { values: ["hunter2"], patterns: [{ name: "pw", pattern: "hunter2", kind: "literal", category: "generic" }] },
+  });
+  ok(!toolIsError(r), "test_pattern must not error");
+  has(toolText(r), "hunter2");
+});
+
+test("tool coverage", "init writes a starter secrets file into cwd", async (_s) => {
+  const dir = await Deno.makeTempDir({ prefix: "sanitize-init-" });
+  try {
+    const ns = await startSession({}, dir);
+    try {
+      const r = await ns.send("tools/call", {
+        name: "init",
+        arguments: { output_path: "secrets.yaml", preset: "balanced" },
+      });
+      ok(!toolIsError(r), `init must not error: ${toolText(r)}`);
+      const stat = await Deno.stat(join(dir, "secrets.yaml"));
+      ok(stat.isFile && stat.size > 0, "secrets.yaml must be written and non-empty");
+    } finally { await ns.close(); }
+  } finally { await Deno.remove(dir, { recursive: true }); }
+});
+
+test("tool coverage", "init refuses absolute output_path (relative-only guard)", async (s) => {
+  const r = await s.send("tools/call", {
+    name: "init",
+    arguments: { output_path: "/tmp/should-not-write.yaml" },
+  });
+  ok(toolIsError(r), "absolute output_path must be rejected");
+});
+
+test("tool coverage", "build_secrets writes a file with custom entries", async (_s) => {
+  const dir = await Deno.makeTempDir({ prefix: "sanitize-build-" });
+  try {
+    const ns = await startSession({}, dir);
+    try {
+      const r = await ns.send("tools/call", {
+        name: "build_secrets",
+        arguments: {
+          output_path: "custom.yaml",
+          entries: [{ label: "token", pattern: "tok_[a-z0-9]+", kind: "regex", category: "auth_token" }],
+        },
+      });
+      ok(!toolIsError(r), `build_secrets must not error: ${toolText(r)}`);
+      const written = await Deno.readTextFile(join(dir, "custom.yaml"));
+      has(written, "token");
+      has(written, "tok_[a-z0-9]+");
+    } finally { await ns.close(); }
+  } finally { await Deno.remove(dir, { recursive: true }); }
+});
+
+test("tool coverage", "build_secrets refuses to overwrite without overwrite:true", async (_s) => {
+  const dir = await Deno.makeTempDir({ prefix: "sanitize-build-" });
+  try {
+    await Deno.writeTextFile(join(dir, "exists.yaml"), "pre-existing\n");
+    const ns = await startSession({}, dir);
+    try {
+      const r = await ns.send("tools/call", {
+        name: "build_secrets",
+        arguments: { output_path: "exists.yaml", preset: "generic" },
+      });
+      ok(toolIsError(r), "must refuse to clobber existing file");
+      has(toolText(r), "exists");
+    } finally { await ns.close(); }
+  } finally { await Deno.remove(dir, { recursive: true }); }
 });
 
 // ===========================================================================

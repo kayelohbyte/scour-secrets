@@ -30,6 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      mcp: ${{ steps.filter.outputs.mcp }}
     steps:
       - uses: actions/checkout@v4
       - id: filter
@@ -43,6 +44,12 @@ jobs:
               - '.github/workflows/**'
               - 'deny.toml'
               - 'fuzz/**'
+            mcp:
+              - 'mcp/**'
+              - 'src/**'
+              - '**/Cargo.toml'
+              - '**/Cargo.lock'
+              - '.github/workflows/**'
 
   check:
     name: Check (MSRV 1.86)
@@ -122,6 +129,32 @@ jobs:
       - run: cargo doc --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+
+  mcp-test:
+    name: MCP server tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: changes
+    if: github.event_name != 'schedule' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.mcp == 'true')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.3.3
+      # The server shells out to the `sanitize` binary; build it first.
+      - run: cargo build --release --bin sanitize
+      - name: Typecheck
+        working-directory: mcp
+        run: deno task check
+      - name: Run MCP test suite
+        working-directory: mcp
+        run: deno task test
+        env:
+          SANITIZE_BIN: ${{ github.workspace }}/target/release/sanitize
 
   fmt:
     name: Format

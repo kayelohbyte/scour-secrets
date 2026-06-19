@@ -194,9 +194,27 @@ EnvironmentFile=/etc/sanitize-mcp/env
 Restart=always
 RestartSec=1
 
+# --- Hardening (defense in depth) -----------------------------------------
+# The shipped binary is granted broad Deno --allow-read/--allow-write so it can
+# open whatever file paths an agent legitimately asks it to sanitize; it is NOT
+# self-confined. Scope its filesystem reach at the OS layer instead.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6
+# Only the trees the daemon must read/write. Add each directory holding files
+# you intend to sanitize; everything else becomes unreadable to the process.
+ReadOnlyPaths=/var/sanitize/secrets
+ReadWritePaths=/var/sanitize/work
+
 [Install]
 WantedBy=multi-user.target
 ```
+
+> **Confinement vs. generality.** `ProtectSystem=strict` + `ProtectHome=yes` make most of the filesystem unreadable to the daemon, so list every directory it must reach via `ReadOnlyPaths`/`ReadWritePaths`. This is ideal when the daemon only ever sanitizes a known set of trees (logs, configs, the secrets store). If you instead need it to sanitize arbitrary agent-supplied paths anywhere on disk, you cannot meaningfully confine its reads — in that case the **service-user ownership model above is the boundary**, and the OS hardening only limits write surface and privilege escalation. macOS launchd has no direct equivalent to these directives; rely on the service-user ownership model there.
 
 ```bash
 sudo systemctl enable --now sanitize-mcp

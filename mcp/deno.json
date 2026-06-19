@@ -10,7 +10,8 @@
   "tasks": {
     "start": "deno run --allow-run --allow-env --allow-read --allow-write --allow-net src/index.ts",
     "test": "deno run --allow-run --allow-env --allow-read --allow-write --allow-net test-direct.ts",
-    "check": "deno check src/index.ts"
+    "probe": "deno run --allow-run --allow-env --allow-read --allow-write probe.ts",
+    "check": "deno check src/index.ts test-direct.ts probe.ts mcp_client.ts"
   },
   "compilerOptions": {
     "strict": true,

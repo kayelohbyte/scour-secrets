@@ -32,11 +32,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp";
-import { basename, join, resolve } from "@std/path";
+import { basename, dirname, join, resolve } from "@std/path";
 import { globToRegExp } from "@std/path/glob-to-regexp";
 import { parse as parseYaml } from "@std/yaml";
 import { z } from "zod";
 import { predictOutputName, uniquifyName } from "./naming.ts";
+import { scrubEnv } from "./env.ts";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -67,7 +68,7 @@ const THREADS_ARGS: string[] = (() => {
 })();
 const SANITIZE_SECRETS_DIR = Deno.env.get("SANITIZE_SECRETS_DIR");
 const SANITIZE_SECRETS_DIR_RESOLVED = SANITIZE_SECRETS_DIR
-  ? resolve(SANITIZE_SECRETS_DIR)
+  ? canonicalPath(SANITIZE_SECRETS_DIR)
   : undefined;
 
 // Operator-configured denylist: comma-separated glob patterns.
@@ -113,24 +114,12 @@ const SUBPROCESS_TIMEOUT_MS = parsePositiveInt(
 );
 
 /**
- * Build a minimal environment for the sanitize subprocess.
- * We pass only what the binary needs — system paths, locale, temp dirs, and
- * SANITIZE_* vars — rather than spreading the full parent environment, which
- * could contain secrets like AWS_SECRET_ACCESS_KEY or DATABASE_URL.
+ * Build a minimal environment for the sanitize subprocess. Scrubbing logic
+ * lives in ./env.ts (pure + unit-tested); here we just feed it the live
+ * parent environment.
  */
 function buildSubprocessEnv(extraEnv: Record<string, string>): Record<string, string> {
-  const parent = Deno.env.toObject();
-  const allowed: Record<string, string> = {};
-  // Runtime essentials
-  for (const k of ["PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "TMP",
-                    "LANG", "LC_ALL", "LC_CTYPE", "TERM", "SystemRoot", "USERPROFILE"]) {
-    if (parent[k] !== undefined) allowed[k] = parent[k];
-  }
-  // Forward all SANITIZE_* vars so callers can configure via environment
-  for (const [k, v] of Object.entries(parent)) {
-    if (k.startsWith("SANITIZE_")) allowed[k] = v;
-  }
-  return { ...allowed, SANITIZE_LOG: "error", ...extraEnv };
+  return scrubEnv(Deno.env.toObject(), extraEnv);
 }
 
 /**
@@ -225,31 +214,81 @@ function validatePath(p: string, paramName: string, allowAbsolute = false): void
 }
 
 /**
+ * Resolve `p` to a canonical absolute path with symlinks followed, so the
+ * secrets-dir and denylist guards cannot be evaded by a symlink that points
+ * into a protected location. For paths that do not yet exist (e.g. output
+ * targets), the longest existing ancestor is realpath'd and the non-existent
+ * tail re-appended. Best-effort by nature: a TOCTOU swap between this check and
+ * the subprocess open is still possible, which is why OS-level permissions
+ * (see docs/mcp.md) remain the authoritative boundary, not these guards.
+ */
+function canonicalPath(p: string): string {
+  let head = resolve(p);
+  const tail: string[] = [];
+  for (;;) {
+    try {
+      const real = Deno.realPathSync(head);
+      return tail.length ? join(real, ...tail) : real;
+    } catch {
+      const parent = dirname(head);
+      if (parent === head) return resolve(p); // reached root without resolving
+      tail.unshift(basename(head));
+      head = parent;
+    }
+  }
+}
+
+/**
+ * Test a path against the operator denylist. Glob patterns compile to
+ * start-anchored regexes, so an absolute path like '/proj/secrets/db.yaml'
+ * would never match a 'secrets/**' pattern. To close that gap, each pattern is
+ * tested against the basename and against every trailing path suffix of both
+ * the path as-given and its canonical (symlink-resolved) form, so segment
+ * patterns match regardless of the absolute prefix or an intervening symlink.
+ */
+function pathMatchesDenylist(original: string, canonical: string): boolean {
+  const candidates = new Set<string>();
+  for (const raw of [original, canonical]) {
+    const norm = raw.replace(/\\/g, "/");
+    candidates.add(norm);
+    candidates.add(basename(norm));
+    const segments = norm.split("/").filter(Boolean);
+    for (let i = 0; i < segments.length; i++) {
+      candidates.add(segments.slice(i).join("/"));
+    }
+  }
+  for (const pattern of FILES_DENYLIST) {
+    for (const c of candidates) {
+      if (pattern.test(c)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Guard `files` entries against three threat classes:
  *   1. Paths inside $SANITIZE_SECRETS_DIR (operator secrets store)
  *   2. .password files (namespace encryption keys)
  *   3. Operator-configured denylist patterns (SANITIZE_MCP_FILES_DENYLIST)
+ *
+ * All three checks run against the canonical, symlink-resolved path so a
+ * symlink in an allowed directory cannot reach a protected target.
  */
 function validateFilesPath(p: string): void {
-  if (basename(p) === ".password") {
+  const canonical = canonicalPath(p);
+
+  if (basename(p) === ".password" || basename(canonical) === ".password") {
     throw new Error(`files path '${p}' is not permitted: .password files cannot be processed`);
   }
 
   if (SANITIZE_SECRETS_DIR_RESOLVED) {
-    const abs = resolve(p);
-    if (abs === SANITIZE_SECRETS_DIR_RESOLVED || abs.startsWith(SANITIZE_SECRETS_DIR_RESOLVED + "/")) {
+    if (canonical === SANITIZE_SECRETS_DIR_RESOLVED || canonical.startsWith(SANITIZE_SECRETS_DIR_RESOLVED + "/")) {
       throw new Error(`files path '${p}' is not permitted: path resolves inside SANITIZE_SECRETS_DIR`);
     }
   }
 
-  if (FILES_DENYLIST.length > 0) {
-    const normalized = p.replace(/\\/g, "/");
-    const base = basename(normalized);
-    for (const pattern of FILES_DENYLIST) {
-      if (pattern.test(normalized) || pattern.test(base)) {
-        throw new Error(`files path '${p}' is not permitted: matches operator denylist`);
-      }
-    }
+  if (FILES_DENYLIST.length > 0 && pathMatchesDenylist(p, canonical)) {
+    throw new Error(`files path '${p}' is not permitted: matches operator denylist`);
   }
 }
 
@@ -1980,6 +2019,21 @@ if (!isNaN(httpPort)) {
   }
 
   const expectedAuth = `Bearer ${token}`;
+  // Constant-time comparison over fixed-length SHA-256 digests: avoids both the
+  // short-circuit timing oracle of `!==` and leaking the token length.
+  const tokensMatch = async (provided: string | null): Promise<boolean> => {
+    if (provided === null) return false;
+    const enc = new TextEncoder();
+    const [a, b] = await Promise.all([
+      crypto.subtle.digest("SHA-256", enc.encode(provided)),
+      crypto.subtle.digest("SHA-256", enc.encode(expectedAuth)),
+    ]);
+    const av = new Uint8Array(a);
+    const bv = new Uint8Array(b);
+    let diff = 0;
+    for (let i = 0; i < av.length; i++) diff |= av[i] ^ bv[i];
+    return diff === 0;
+  };
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: () => crypto.randomUUID(),
     onsessionclosed: () => {
@@ -2004,11 +2058,11 @@ if (!isNaN(httpPort)) {
       console.error(`sanitize-mcp: unhandled error: ${(err as Error).name}`);
       return new Response("Internal Server Error", { status: 500 });
     },
-  }, (req) => {
+  }, async (req) => {
     if (new URL(req.url).pathname !== "/mcp") {
       return new Response("Not Found", { status: 404 });
     }
-    if (req.headers.get("Authorization") !== expectedAuth) {
+    if (!(await tokensMatch(req.headers.get("Authorization")))) {
       return new Response("Unauthorized", { status: 401 });
     }
     return transport.handleRequest(req);
