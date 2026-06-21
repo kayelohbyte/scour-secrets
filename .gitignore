@@ -33,3 +33,6 @@ deno.lock
 
 # Local FFI test harness (cdylib shim + Python/Go drivers); not part of the crate
 /ffi-test/
+
+# Local sanitize-run output dirs (e.g. <name>-sanitized/); never part of the crate
+*-sanitized/
