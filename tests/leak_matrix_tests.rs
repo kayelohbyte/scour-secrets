@@ -324,6 +324,41 @@ fn matrix_csv() {
     }
 }
 
+/// A leading UTF-8 BOM (common from Windows/Java exporters) must not stop a
+/// matched secret from being redacted, and the BOM itself must be preserved.
+/// Regression: jiter rejects a BOM, so BOM-prefixed JSON/JSONL silently leaked.
+#[test]
+fn bom_prefixed_files_redact_and_preserve() {
+    const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+    let cases: &[(&str, Vec<u8>, &str)] = &[
+        (
+            "b.json",
+            format!(r#"{{"secret":{},"keep":"BOMKEEP"}}"#, e_json("BOMSEC-a\"b")).into_bytes(),
+            r#"[{"processor":"json","extensions":[".json"],"fields":[{"pattern":"secret","category":"auth_token"}]}]"#,
+        ),
+        (
+            "b.jsonl",
+            format!("{{\"secret\":{}}}\n", e_json("BOMSEC-l")).into_bytes(),
+            r#"[{"processor":"jsonl","extensions":[".jsonl"],"options":{"skip_invalid":"true"},"fields":[{"pattern":"secret","category":"auth_token"}]}]"#,
+        ),
+    ];
+    for (file, body, profile) in cases {
+        let mut content = BOM.to_vec();
+        content.extend_from_slice(body);
+        let outs = run(&[(file, content)], profile);
+        assert_no_leak(&format!("bom/{file}"), &outs);
+        let out = &outs[&sanitized_name(file)];
+        assert!(
+            out.as_bytes().starts_with(BOM),
+            "bom/{file}: BOM not preserved: {out:?}"
+        );
+        assert!(
+            out.contains("BOMKEEP") || file.ends_with(".jsonl"),
+            "bom/{file}: keep lost"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // EOF / line-ending sweep: every format must redact a matched secret and keep
 // non-secret content regardless of LF / CRLF / missing trailing newline.

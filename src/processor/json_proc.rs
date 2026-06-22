@@ -110,12 +110,27 @@ pub(crate) fn json_value_edits(
     profile: &FileTypeProfile,
     store: &MappingStore,
 ) -> Result<Vec<Replacement>> {
-    let mut jiter = Jiter::new(content);
+    // A leading UTF-8 BOM is not valid JSON to jiter (which would error and
+    // leave the value un-redacted). Skip it for parsing, then shift the spans
+    // back so they stay aligned to the original `content` (the BOM is preserved
+    // in the output, sitting before the first edit). For JSONL this only
+    // affects the file's first line.
+    let bom = if content.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        3
+    } else {
+        0
+    };
+    let body = &content[bom..];
+    let mut jiter = Jiter::new(body);
     let mut edits = Vec::new();
     let peek = jiter.peek().map_err(json_err)?;
-    collect_json_edits(
-        &mut jiter, peek, "", "", content, profile, store, &mut edits,
-    )?;
+    collect_json_edits(&mut jiter, peek, "", "", body, profile, store, &mut edits)?;
+    if bom != 0 {
+        for e in &mut edits {
+            e.start += bom;
+            e.end += bom;
+        }
+    }
     Ok(edits)
 }
 
