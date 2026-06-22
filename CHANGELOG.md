@@ -26,6 +26,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **No-leak hardening across formats (found via a systematic leak matrix).**
+  Five issues in the span-based path are fixed, each with regression coverage in
+  `tests/leak_matrix_tests.rs` (format × value-class × location × scope × EOF):
+  - **CSV:** the last field of a file with **no trailing newline** was dropped
+    (and, if it matched a rule, leaked) because the `csv-core` loop broke on
+    `InputEmpty` before the EOF flush call.
+  - **Cross-location escaped values:** a value discovered in a matched field
+    leaked when it reappeared in an **unmatched** field of another file that
+    escaped it differently (JSON/YAML `\"`, CSV `""`, XML `&quot;`). The
+    span-edit discovery path no longer skips registering the format-escaped
+    store aliases the phase-2 scanner relies on.
+  - **XML unmatched attributes:** the escaped alias over-escaped `'`/`>`, missing
+    the realistic double-quoted-attribute form; context-specific XML alias forms
+    are now registered.
+  - **YAML quoted scalars:** a `"…"`/`'…'` value followed by an inline
+    `# comment` lost the comment (saphyr's span runs to end-of-line); the span is
+    now clamped to the closing quote.
+  - **BOM-prefixed JSON/JSONL:** a leading UTF-8 BOM made jiter error, so a
+    matched value was never redacted; the BOM is now skipped for parsing and
+    preserved in the output.
 - **Structured entries inside archives now preserve comments and formatting.**
   A profile-matched entry in a `.zip`/`.tar`/`.tar.gz` was re-serialized from its
   parsed tree, which silently dropped YAML/TOML comments and reflowed JSON
