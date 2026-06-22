@@ -28,7 +28,7 @@ cli = ["dep:clap", "dep:ureq", "dep:walkdir", "dep:ctrlc", "dep:rpassword", "arc
 archive = ["dep:zip", "dep:tar", "dep:flate2"]
 # CSV and XML structured processors. (JSON/YAML/TOML/INI/env are always built —
 # they ride on the core serde stack and pull no extra heavy deps.)
-structured = ["dep:csv", "dep:quick-xml"]
+structured = ["dep:csv", "dep:csv-core", "dep:quick-xml"]
 bench = []
 
 [dependencies]
@@ -56,6 +56,8 @@ saphyr-parser = "0.0.6"
 # Structured processors (feature = "structured")
 quick-xml = { version = "0.31", optional = true }
 csv = { version = "1", optional = true }
+# Low-level CSV state machine (byte-accurate field spans for in-place editing).
+csv-core = { version = "0.1", optional = true }
 # Archive processors (feature = "archive")
 zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
 tar = { version = "0.4.45", optional = true }

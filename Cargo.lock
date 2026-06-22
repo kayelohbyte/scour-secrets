@@ -1400,6 +1400,7 @@ dependencies = [
  "compact_str",
  "criterion",
  "csv",
+ "csv-core",
  "ctrlc",
  "dashmap",
  "flate2",

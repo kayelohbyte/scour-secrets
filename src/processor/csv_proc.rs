@@ -19,7 +19,8 @@
 use crate::error::{Result, SanitizeError};
 use crate::processor::limits::DEFAULT_INPUT_SIZE;
 use crate::processor::{
-    find_matching_rule, pattern_matches, replace_value, FileTypeProfile, Processor,
+    edit_token, find_matching_rule, pattern_matches, replace_value, FileTypeProfile, Processor,
+    Replacement,
 };
 use crate::store::MappingStore;
 
@@ -141,6 +142,119 @@ impl Processor for CsvProcessor {
         drop(wtr);
 
         Ok(output)
+    }
+
+    /// Span-based redaction: drive `csv-core` (the byte-accurate field state
+    /// machine) over the source, recording an edit at each matched field's exact
+    /// source span. The delimiter, quoting style, line endings, and non-matched
+    /// fields are preserved, and a quoted/`""`-escaped field is hit as written so
+    /// no value leaks.
+    fn process_to_edits(
+        &self,
+        content: &[u8],
+        profile: &FileTypeProfile,
+        store: &MappingStore,
+    ) -> Result<Option<Vec<Replacement>>> {
+        if content.len() > DEFAULT_INPUT_SIZE {
+            return Err(SanitizeError::InputTooLarge {
+                size: content.len(),
+                limit: DEFAULT_INPUT_SIZE,
+            });
+        }
+        let delimiter = profile
+            .options
+            .get("delimiter")
+            .and_then(|s| s.as_bytes().first().copied())
+            .unwrap_or(b',');
+        let has_header = profile
+            .options
+            .get("has_header")
+            .is_none_or(|v| v != "false");
+
+        let mut rdr = csv_core::ReaderBuilder::new().delimiter(delimiter).build();
+        let mut edits = Vec::new();
+        let mut out_chunk = vec![0u8; 4096];
+        let mut value_buf: Vec<u8> = Vec::new();
+        let mut pos = 0usize;
+        let mut field_start = 0usize;
+        let mut record_idx = 0usize;
+        let mut col_idx = 0usize;
+        let mut headers: Vec<String> = Vec::new();
+
+        loop {
+            let (result, n_in, n_out) = rdr.read_field(&content[pos..], &mut out_chunk);
+            value_buf.extend_from_slice(&out_chunk[..n_out]);
+            pos += n_in;
+
+            match result {
+                csv_core::ReadFieldResult::InputEmpty => {
+                    if pos >= content.len() {
+                        break;
+                    }
+                }
+                csv_core::ReadFieldResult::OutputFull => {} // field continues; keep accumulating
+                csv_core::ReadFieldResult::End => break,
+                csv_core::ReadFieldResult::Field { record_end } => {
+                    let term_len = field_terminator_len(&content[field_start..pos], record_end);
+                    let value_end = pos - term_len;
+                    let value = String::from_utf8_lossy(&value_buf).into_owned();
+
+                    if has_header && record_idx == 0 {
+                        headers.push(value);
+                    } else {
+                        let col_key;
+                        let key: &str = if has_header {
+                            headers.get(col_idx).map_or("", String::as_str)
+                        } else {
+                            col_key = col_idx.to_string();
+                            &col_key
+                        };
+                        if !key.is_empty() {
+                            if let Some(token) = edit_token(key, key, &value, profile, store)? {
+                                edits.push(Replacement {
+                                    start: field_start,
+                                    end: value_end,
+                                    value: csv_escape_token(&token),
+                                });
+                            }
+                        }
+                    }
+
+                    value_buf.clear();
+                    col_idx += 1;
+                    field_start = pos;
+                    if record_end {
+                        record_idx += 1;
+                        col_idx = 0;
+                    }
+                }
+            }
+        }
+        Ok(Some(edits))
+    }
+}
+
+/// Length of the field terminator at the end of `raw` (the bytes consumed for a
+/// field, including its trailing separator): the delimiter (1) for a mid-record
+/// field, or the record terminator (`\r\n` → 2, `\n`/`\r` → 1, EOF → 0).
+fn field_terminator_len(raw: &[u8], record_end: bool) -> usize {
+    if !record_end {
+        return 1; // delimiter
+    }
+    if raw.ends_with(b"\r\n") {
+        2
+    } else {
+        usize::from(raw.ends_with(b"\n") || raw.ends_with(b"\r"))
+    }
+}
+
+/// CSV-quote a token if it contains a character that would need quoting. Tokens
+/// are safe ASCII in practice, so this is a defensive no-op in the common case.
+fn csv_escape_token(token: &str) -> String {
+    if token.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", token.replace('"', "\"\""))
+    } else {
+        token.to_string()
     }
 }
 
@@ -292,5 +406,39 @@ mod tests {
         // Same input → same replacement.
         assert_eq!(lines[1], lines[2]);
         assert_ne!(lines[1], "test@x.com");
+    }
+
+    /// Edit-mode redacts matched columns at their exact source span, including
+    /// quoted fields with embedded commas and `""`-escaped quotes, leaving the
+    /// header and non-matched columns intact.
+    #[test]
+    fn edits_redact_quoted_and_escaped_fields() {
+        let store = make_store();
+        let proc = CsvProcessor;
+        let content =
+            b"name,email,note\nAlice,a-SEC1@e.test,\"has,comma-SEC2\"\nBob,\"b\"\"q-SEC3@e.test\",x\n";
+        let profile = FileTypeProfile::new(
+            "csv",
+            vec![
+                FieldRule::new("email").with_category(Category::Email),
+                FieldRule::new("note").with_category(Category::Custom("n".into())),
+            ],
+        );
+        let edits = proc
+            .process_to_edits(content, &profile, &store)
+            .unwrap()
+            .unwrap();
+        let out = crate::processor::apply_edits(content, edits);
+        let text = String::from_utf8(out).unwrap();
+        for leak in ["SEC1", "SEC2", "SEC3"] {
+            assert!(!text.contains(leak), "leaked {leak}: {text}");
+        }
+        // Header and the non-matched `name` column are untouched.
+        assert!(
+            text.starts_with("name,email,note\n"),
+            "header changed: {text}"
+        );
+        assert!(text.contains("Alice,"), "name column changed: {text}");
+        assert!(text.contains("Bob,"), "name column changed: {text}");
     }
 }
