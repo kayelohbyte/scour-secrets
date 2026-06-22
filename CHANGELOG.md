@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-06-21
+
 ### Added
 
 - **Cargo feature flags** for slimmer library builds. The crate now exposes
@@ -738,7 +740,8 @@ contract and MSRV policy.
 - **290+ tests** including unit, integration, property-based (proptest), and
   4 fuzz targets.
 
-[Unreleased]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.13.1...HEAD
+[Unreleased]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.11.0...v0.12.0
