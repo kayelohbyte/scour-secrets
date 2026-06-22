@@ -512,6 +512,9 @@ mod tests {
         let result = proc.process(content, &profile, &store).unwrap();
         let out = String::from_utf8(result).unwrap();
         assert!(!out.contains("root.corp.com"));
+        // Non-secret structure preserved: element name and attribute key remain.
+        assert!(out.contains("<server"));
+        assert!(out.contains("host="));
     }
 
     #[test]

@@ -280,6 +280,9 @@ user = "admin@corp.com"
         let text = String::from_utf8(output).unwrap();
         assert!(!text.contains("secret"));
         assert!(!text.contains("postgres://user:pass@host/db"));
+        // Non-secret structure preserved: the keys remain (only values changed).
+        assert!(text.contains("api_key"));
+        assert!(text.contains("db_url"));
     }
 
     #[test]
@@ -301,6 +304,10 @@ user = "admin@corp.com"
         let output = proc.process(content, &profile, &store).unwrap();
         let text = String::from_utf8(output).unwrap();
         assert!(!text.contains("value"));
+        // Non-secret structure preserved: only the value changed, the nested
+        // table and key remain.
+        let parsed: toml::Value = toml::from_str(&text).unwrap();
+        assert!(parsed["a"]["b"]["c"]["key"].as_str().is_some());
     }
 
     // ── process_to_edits (span-based, format-preserving) ─────────────────────

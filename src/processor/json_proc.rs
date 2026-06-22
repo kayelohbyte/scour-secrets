@@ -298,6 +298,10 @@ mod tests {
         let users = out["users"].as_array().unwrap();
         assert_ne!(users[0]["email"].as_str().unwrap(), "a@b.com");
         assert_ne!(users[1]["email"].as_str().unwrap(), "c@d.com");
+        // Non-secret structure preserved: both elements and their keys remain.
+        assert_eq!(users.len(), 2);
+        let text = String::from_utf8_lossy(&result);
+        assert!(text.contains("\"users\"") && text.contains("\"email\""));
     }
 
     #[test]

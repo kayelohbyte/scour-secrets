@@ -399,6 +399,11 @@ mod tests {
         let result = proc.process(content, &profile, &store).unwrap();
         let out = String::from_utf8(result).unwrap();
         assert!(!out.contains("hunter2"));
+        // Non-secret structure preserved: only the value changed, the nested
+        // keys remain.
+        assert!(out.contains("secret:"));
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&out).unwrap();
+        assert!(parsed["a"]["b"]["c"]["secret"].as_str().is_some());
     }
 
     #[test]
@@ -443,6 +448,10 @@ mod tests {
 
         assert!(!out.contains("a@b.com"));
         assert!(!out.contains("c@d.com"));
+        // Non-secret structure preserved: the key and both sequence items.
+        assert!(out.contains("users:"));
+        let parsed: serde_yaml_ng::Value = serde_yaml_ng::from_str(&out).unwrap();
+        assert_eq!(parsed["users"].as_sequence().unwrap().len(), 2);
     }
 
     // ── process_to_edits (span-based, format-preserving) ─────────────────────

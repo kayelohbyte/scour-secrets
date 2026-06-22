@@ -371,6 +371,8 @@ mod tests {
         let result = proc.process(content, &profile, &store).unwrap();
         let out = String::from_utf8(result).unwrap();
         assert!(!out.contains("alice@corp.com"));
+        // Non-secret structure preserved: header and the empty field/row.
+        assert!(out.starts_with("email"));
     }
 
     #[test]

@@ -254,6 +254,9 @@ mod tests {
         let output = proc.process(content, &profile, &store).unwrap();
         let text = String::from_utf8(output).unwrap();
         assert!(!text.contains("abc123"));
+        // Non-secret structure preserved: section header, key, and `:` delimiter.
+        assert!(text.contains("[section]"));
+        assert!(text.contains("api_key:"));
     }
 
     #[test]
