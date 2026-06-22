@@ -375,3 +375,79 @@ fn two_pass_profile_seeds_plain_text_scan() {
          replacement={replacement:?}, log:\n{log_out}"
     );
 }
+
+/// Regression: a value appearing in the structured fields of **two** structured
+/// files must be redacted in **both**, not only the first one processed.
+///
+/// Previously each structured file built its format-preserving scanner from the
+/// per-file discovery delta, so a value already in the store from an earlier
+/// file was skipped in later files (silent plaintext leak). The discovery
+/// pre-pass + full-store output pass fixes this and makes the result
+/// independent of command-line order.
+#[test]
+fn duplicate_value_across_structured_files_redacted_in_both() {
+    let shared = "dup-pii-shared@corp.example";
+
+    // Two JSON files, each with the same email in a structured field, plus the
+    // value embedded in a string ("comment"-like) region of the first.
+    for order in [["a.json", "b.json"], ["b.json", "a.json"]] {
+        let dir = tempdir().unwrap();
+        let outdir = dir.path().join("out");
+        fs::create_dir_all(&outdir).unwrap();
+
+        let a = dir.path().join("a.json");
+        fs::write(
+            &a,
+            format!(r#"{{"user":{{"email":"{shared}"}},"note":"ping {shared} for access"}}"#),
+        )
+        .unwrap();
+        let b = dir.path().join("b.json");
+        fs::write(&b, format!(r#"{{"acct":{{"email":"{shared}"}}}}"#)).unwrap();
+
+        let secrets = dir.path().join("secrets.json");
+        fs::write(&secrets, b"[]").unwrap();
+
+        let profile = dir.path().join("profile.json");
+        fs::write(
+            &profile,
+            r#"[{"processor":"json","extensions":[".json"],"fields":[{"pattern":"*.email","category":"email"}]}]"#,
+        )
+        .unwrap();
+
+        let first = dir.path().join(order[0]);
+        let second = dir.path().join(order[1]);
+        let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+            .args([
+                first.to_str().unwrap(),
+                second.to_str().unwrap(),
+                "-s",
+                secrets.to_str().unwrap(),
+                "--profile",
+                profile.to_str().unwrap(),
+                "--output",
+                outdir.to_str().unwrap(),
+            ])
+            .env("SANITIZE_LOG", "error")
+            .env("SANITIZE_NO_SETTINGS", "1")
+            .output()
+            .unwrap();
+
+        assert!(
+            out.status.success(),
+            "order {order:?} stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let a_out = fs::read_to_string(outdir.join("a-sanitized.json")).unwrap();
+        let b_out = fs::read_to_string(outdir.join("b-sanitized.json")).unwrap();
+
+        assert!(
+            !a_out.contains(shared),
+            "order {order:?}: first/second file a.json leaked the shared value:\n{a_out}"
+        );
+        assert!(
+            !b_out.contains(shared),
+            "order {order:?}: file b.json leaked the shared value (the regression):\n{b_out}"
+        );
+    }
+}

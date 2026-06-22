@@ -90,6 +90,93 @@ impl FileProcessor<'_> {
         fp.scan_plain_scanner(input, output_path)
     }
 
+    /// Discovery pre-pass for a structured plain file: populate the mapping
+    /// store with the file's structured field values **without** writing any
+    /// output. Running this over every structured input before the output pass
+    /// lets the augmented and format-preserving scanners redact those values
+    /// across all files, independent of input order.
+    ///
+    /// Non-structured files, binaries, and files too large for buffered
+    /// structured parsing are skipped here — they carry no field literals to
+    /// seed, and any base-pattern matches in them are caught during the output
+    /// pass (regexes match the same value in every file regardless).
+    pub(crate) fn discover_plain_file(self, input: &Path) -> Result<(), String> {
+        let cli = self.cli;
+        let fp = self;
+
+        let mut sample = [0u8; 512];
+        let sample_len = {
+            let mut f = fs::File::open(input)
+                .map_err(|e| format!("failed to open {}: {e}", input.display()))?;
+            io::Read::read(&mut f, &mut sample)
+                .map_err(|e| format!("failed to read {}: {e}", input.display()))?
+        };
+        if !cli.include_binary && looks_binary(&sample[..sample_len]) {
+            return Ok(());
+        }
+
+        let filename = if let Some(ref fmt) = cli.format {
+            format_to_ext(fmt)
+                .map(|ext| format!("override.{ext}"))
+                .unwrap_or_default()
+        } else {
+            input
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string()
+        };
+
+        if !is_structured_filename(&filename) || cli.force_text {
+            return Ok(());
+        }
+
+        // Streaming processors discover by streaming to a sink.
+        let maybe_streaming = fp
+            .profiles
+            .iter()
+            .find(|p| p.matches_filename(&filename))
+            .and_then(|p| {
+                fp.registry
+                    .get(&p.processor)
+                    .filter(|proc| proc.supports_streaming())
+                    .map(|proc| (p.clone(), Arc::clone(proc)))
+            });
+
+        if let Some((profile, proc)) = maybe_streaming {
+            let mut reader = BufReader::new(
+                fs::File::open(input)
+                    .map_err(|e| format!("failed to open {}: {e}", input.display()))?,
+            );
+            proc.process_stream(&mut reader, &mut io::sink(), &profile, fp.store)
+                .map_err(|e| format!("structured discovery failed for {}: {e}", input.display()))?;
+            return Ok(());
+        }
+
+        let file_size = fs::metadata(input)
+            .map_err(|e| format!("failed to stat {}: {e}", input.display()))?
+            .len();
+        if file_size > cli.max_structured_size {
+            return Ok(());
+        }
+
+        let input_bytes =
+            fs::read(input).map_err(|e| format!("failed to read {}: {e}", input.display()))?;
+        // Populate the store as a side effect; the produced bytes are discarded.
+        if let Some(Err(e)) =
+            try_structured_processing(&input_bytes, &filename, fp.registry, fp.store, fp.profiles)
+        {
+            if cli.strict {
+                return Err(format!(
+                    "structured discovery failed for {}: {e}",
+                    input.display()
+                ));
+            }
+            warn!(error = %e, file = %input.display(), "structured discovery failed; continuing");
+        }
+        Ok(())
+    }
+
     fn process_streaming_structured(
         self,
         input: &Path,
@@ -103,7 +190,11 @@ impl FileProcessor<'_> {
         let fp = self;
         let mut had_matches = false;
 
-        let store_snapshot = fp.store.snapshot();
+        let store_snapshot = if fp.full_store_pass {
+            rust_sanitize::store::StoreSnapshot::start()
+        } else {
+            fp.store.snapshot()
+        };
         {
             let mut reader = BufReader::new(
                 fs::File::open(input)
@@ -328,7 +419,11 @@ impl FileProcessor<'_> {
 
         let input_bytes =
             fs::read(input).map_err(|e| format!("failed to read {}: {e}", input.display()))?;
-        let store_snapshot = fp.store.snapshot();
+        let store_snapshot = if fp.full_store_pass {
+            rust_sanitize::store::StoreSnapshot::start()
+        } else {
+            fp.store.snapshot()
+        };
 
         let label = format!("Processing structured {}", input.display());
         with_progress_scope(fp.progress, &label, move |_| {

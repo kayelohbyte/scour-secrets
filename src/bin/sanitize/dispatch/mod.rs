@@ -42,6 +42,14 @@ pub(crate) struct FileProcessor<'a> {
     pub(crate) llm_collector: Option<&'a LlmCollector>,
     pub(crate) entropy_configs: &'a Arc<Vec<crate::entropy::EntropyConfig>>,
     pub(crate) entropy_histogram_acc: Option<&'a Arc<Mutex<Vec<crate::entropy::EntropyBuckets>>>>,
+    /// When `true`, a structured file's format-preserving scanner is built from
+    /// the **entire** mapping store rather than only the values discovered while
+    /// processing that file. This lets values found in *other* structured files
+    /// (e.g. the same email or password in two configs) be redacted here too —
+    /// including where they appear in comments or unstructured regions. Set on
+    /// the output pass that runs after the discovery pre-pass has populated the
+    /// store; the discovery pass itself uses the per-file delta.
+    pub(crate) full_store_pass: bool,
 }
 
 fn merge_entropy_counts(stats: &mut ScanStats, label_counts: HashMap<String, u64>) {

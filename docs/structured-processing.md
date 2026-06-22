@@ -106,16 +106,17 @@ When mixing stdin, profile-matched files, archives, and plain files in a single 
 
 **With `--profile`:**
 
-1. **Phase 1 — serial, in command-line order** — plain files whose name matches at least one profile entry. Running these first populates the mapping store with discovered field values.
+1. **Phase 1a — discovery pre-pass, serial, in command-line order** — plain files whose name matches at least one profile entry are parsed structurally to populate the mapping store with their field values. No output is written yet.
 2. **Archive discovery pre-pass** — for each archive in the input set, a second read scans for profile-matched entries so their values are also recorded in the store.
-3. **Augmented scanner is built** — base secrets patterns + all literals discovered from Phase 1 files and the archive pre-pass.
-4. **Stdin** — now processed with the fully-populated augmented scanner, so values from structured config files are replaced in piped input.
-5. **Phase 2 — parallel** — archives and plain files not matched by any profile, also using the augmented scanner.
+3. **Augmented scanner is built** — base secrets patterns + all literals discovered from the Phase 1a files and the archive pre-pass.
+4. **Phase 1b — structured output pass, serial** — the profile-matched files are re-processed and written, each building its format-preserving scanner from the **entire** store. Because discovery already saw every structured file, a value found in one config is redacted in all of them — including where it appears in comments or other unstructured regions of a structured file.
+5. **Stdin** — processed with the fully-populated augmented scanner, so values from structured config files are replaced in piped input.
+6. **Phase 2 — parallel** — archives and plain files not matched by any profile, also using the augmented scanner.
 
-Deferring stdin until after Phase 1 and the archive pre-pass is what makes this work correctly:
+Deferring stdin until after discovery and the archive pre-pass is what makes this work correctly:
 
 ```bash
-# config.yaml runs first (Phase 1), discovers e.g. password: hunter2
+# config.yaml is discovered first (Phase 1a), seeding e.g. password: hunter2
 # stdin is processed after, so "hunter2" is replaced in error.json too
 cat error.json | sanitize config.yaml -s secrets.yaml --profile profile.yaml
 
@@ -126,7 +127,7 @@ cat error.json | sanitize -s secrets.yaml
 **Does command-line order matter?**
 
 - **Without `--profile`:** No. All file targets run in parallel, and the mapping store's first-writer-wins semantics guarantee consistent replacements regardless of which file finishes first.
-- **With `--profile`:** Phase 1 files run in command-line order. In practice, order rarely matters because each value has one canonical replacement — the order only affects which file *first* adds a given value to the store, not what the replacement is.
+- **With `--profile`:** No. The discovery pre-pass populates the store from *all* structured files before any output is written, so the same value is redacted identically in every file. Command-line order only affects which file *first* adds a given value to the store, not whether — or to what — it is replaced.
 
 ```bash
 # Phase 2 ordering never changes results — same replacements regardless of file order

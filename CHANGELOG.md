@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Documented MSRV corrected to 1.86** across README, DESIGN.md, and
   CONTRIBUTING.md to match `Cargo.toml` and CI (docs previously lagged at 1.74).
 
+### Fixed
+
+- **Duplicate values across structured files leaked in all but the first.**
+  When several profile-matched files were sanitized in one run, a value that
+  appeared in more than one of them (e.g. the same email in `users.json` and
+  `license.json`) was redacted only in the first file processed and shipped in
+  plaintext in the rest. Each structured file built its format-preserving
+  scanner from its own discovery delta, so values already in the store from an
+  earlier file were skipped. The `--profile` pipeline now runs a discovery
+  pre-pass over all structured files before writing any output, then builds each
+  file's scanner from the full store. Results are now independent of
+  command-line order, and cross-file values are also caught in comments and
+  unstructured regions of structured files.
+
 ## [0.13.1] - 2026-06-19
 
 ### Fixed

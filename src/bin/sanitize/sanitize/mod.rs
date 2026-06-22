@@ -301,6 +301,7 @@ pub(crate) fn run_sanitize(
         llm_collector: llm_collector.as_ref(),
         entropy_configs: &entropy_configs,
         entropy_histogram_acc: entropy_histogram_acc.as_ref(),
+        full_store_pass: false,
     };
 
     let mut had_matches = false;
@@ -329,16 +330,19 @@ pub(crate) fn run_sanitize(
         })
     };
 
-    for target in phase1_targets {
+    // Phase 1a — discovery only, sequential in command-line order. Populates
+    // the store with structured field values so the augmented scanner and each
+    // structured file's format-preserving scanner can redact them across *all*
+    // files, regardless of which file a value first appeared in. Sequential
+    // order preserves deterministic first-writer-wins replacement values.
+    for target in &phase1_targets {
         if crate::is_interrupted() {
             break;
         }
-        let InputTarget::File { input, output } = target else {
+        let InputTarget::File { ref input, .. } = target else {
             unreachable!()
         };
-        had_matches |= base_fp
-            .process_plain_file(&input, Some(output.as_path()))
-            .map_err(|e| (e, 1))?;
+        base_fp.discover_plain_file(input).map_err(|e| (e, 1))?;
     }
 
     if !profiles.is_empty() {
@@ -387,6 +391,28 @@ pub(crate) fn run_sanitize(
         scanner: &augmented_scanner,
         ..base_fp
     };
+
+    // Phase 1b — output pass for structured files. Uses the base scanner (so
+    // `for_structured_pass` can strip structure-corrupting patterns) with
+    // `full_store_pass`, building each file's format-preserving scanner from the
+    // now fully-populated store. Sequential, in command-line order, to keep
+    // first-writer-wins deterministic for any base-pattern/entropy values these
+    // files contribute.
+    let full_fp = FileProcessor {
+        full_store_pass: true,
+        ..base_fp
+    };
+    for target in phase1_targets {
+        if crate::is_interrupted() {
+            break;
+        }
+        let InputTarget::File { input, output } = target else {
+            unreachable!()
+        };
+        had_matches |= full_fp
+            .process_plain_file(&input, Some(output.as_path()))
+            .map_err(|e| (e, 1))?;
+    }
 
     if !profiles.is_empty() {
         for target in stdin_targets {
