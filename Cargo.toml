@@ -50,7 +50,8 @@ toml = "0.8"
 # Span-preserving structured editing (format-preserving in-place value redaction).
 toml_edit = "0.22"
 # Byte-position JSON parsing for span-based JSON editing (no big-int/py features).
-jiter = { version = "0.15", default-features = false }
+# Pinned to 0.13 (MSRV 1.83); 0.14+ require Rust 1.88, above this crate's MSRV.
+jiter = { version = "0.13", default-features = false }
 # Span-aware YAML event parser for format-preserving YAML value redaction.
 saphyr-parser = "0.0.6"
 # Structured processors (feature = "structured")
