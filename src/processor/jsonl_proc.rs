@@ -140,6 +140,62 @@ impl Processor for JsonLinesProcessor {
         Ok(output)
     }
 
+    /// Span-based redaction: run the JSON span walker on each line, offsetting
+    /// the resulting edits by the line's byte position. Preserves each line's
+    /// exact formatting; invalid lines are passed through (no edits) when
+    /// `skip_invalid` is set, matching `process`.
+    fn process_to_edits(
+        &self,
+        content: &[u8],
+        profile: &FileTypeProfile,
+        store: &MappingStore,
+    ) -> Result<Option<Vec<crate::processor::Replacement>>> {
+        crate::processor::check_size_and_decode(content, "JSONL", DEFAULT_INPUT_SIZE)?;
+        let skip_invalid = profile
+            .options
+            .get("skip_invalid")
+            .is_some_and(|v| v == "true");
+
+        let mut edits = Vec::new();
+        let mut pos = 0usize;
+        let mut line_no = 0usize;
+        while pos < content.len() {
+            let rel_nl = content[pos..].iter().position(|&b| b == b'\n');
+            let end = rel_nl.map_or(content.len(), |i| pos + i);
+            let line = &content[pos..end];
+            line_no += 1;
+
+            if !line.iter().all(u8::is_ascii_whitespace) {
+                match crate::processor::json_proc::json_value_edits(line, profile, store) {
+                    Ok(line_edits) => {
+                        for e in line_edits {
+                            edits.push(crate::processor::Replacement {
+                                start: e.start + pos,
+                                end: e.end + pos,
+                                value: e.value,
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        if !skip_invalid {
+                            return Err(SanitizeError::ParseError {
+                                format: "JSONL".into(),
+                                message: format!("line {line_no}: {e}"),
+                            });
+                        }
+                        // skip_invalid: leave the line unchanged (no edits).
+                    }
+                }
+            }
+
+            match rel_nl {
+                Some(_) => pos = end + 1,
+                None => break,
+            }
+        }
+        Ok(Some(edits))
+    }
+
     fn process_stream(
         &self,
         reader: &mut dyn io::Read,
@@ -291,5 +347,33 @@ mod tests {
     #[test]
     fn supports_streaming_is_true() {
         assert!(JsonLinesProcessor.supports_streaming());
+    }
+
+    /// Edit-mode redacts matched values per line (including non-canonical `\/`
+    /// escapes), offsets spans correctly, and leaves invalid lines unchanged
+    /// when `skip_invalid` is set.
+    #[test]
+    fn edits_redact_per_line_and_skip_invalid() {
+        let store = make_store();
+        let proc = JsonLinesProcessor;
+        let content =
+            b"{\"email\":\"a-SEC1@e.test\"}\n{\"u\":\"http:\\/\\/SEC2.test\"}\nnot json\n";
+        let mut profile = FileTypeProfile::new(
+            "jsonl",
+            vec![
+                FieldRule::new("email").with_category(Category::Email),
+                FieldRule::new("u").with_category(Category::Custom("url".into())),
+            ],
+        );
+        profile.options.insert("skip_invalid".into(), "true".into());
+        let edits = proc
+            .process_to_edits(content, &profile, &store)
+            .unwrap()
+            .unwrap();
+        let out = crate::processor::apply_edits(content, edits);
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains("SEC1"), "leaked SEC1: {text}");
+        assert!(!text.contains("SEC2"), "leaked SEC2 (\\/ escape): {text}");
+        assert!(text.contains("not json"), "invalid line dropped: {text}");
     }
 }

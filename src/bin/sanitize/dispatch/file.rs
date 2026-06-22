@@ -53,6 +53,15 @@ impl FileProcessor<'_> {
                 .map_err(|e| format!("failed to stat {}: {e}", input.display()))?
                 .len();
 
+            // Within the size cap, use the buffered path, which prefers
+            // span-based edit mode (leak-free + format-preserving). This applies
+            // even to streaming-capable processors (e.g. JSONL) so normal-size
+            // files get exact edits; only oversized files fall back to the
+            // bounded-memory streaming path (literal redaction).
+            if file_size <= cli.max_structured_size {
+                return fp.process_buffered_structured(input, output_path, &filename);
+            }
+
             let maybe_streaming = fp
                 .profiles
                 .iter()
@@ -75,16 +84,12 @@ impl FileProcessor<'_> {
                 );
             }
 
-            if file_size > cli.max_structured_size {
-                warn!(
-                    file = %input.display(),
-                    size = file_size,
-                    max = cli.max_structured_size,
-                    "structured file exceeds size limit, falling back to streaming scanner"
-                );
-            } else {
-                return fp.process_buffered_structured(input, output_path, &filename);
-            }
+            warn!(
+                file = %input.display(),
+                size = file_size,
+                max = cli.max_structured_size,
+                "structured file exceeds size limit, falling back to streaming scanner"
+            );
         }
 
         fp.scan_plain_scanner(input, output_path)

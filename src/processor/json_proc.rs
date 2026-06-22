@@ -90,14 +90,29 @@ impl Processor for JsonProcessor {
     ) -> Result<Option<Vec<Replacement>>> {
         // Enforce the size limit and reject non-UTF-8 (JSON must be UTF-8).
         crate::processor::check_size_and_decode(content, "JSON", DEFAULT_INPUT_SIZE)?;
-        let mut jiter = Jiter::new(content);
-        let mut edits = Vec::new();
-        let peek = jiter.peek().map_err(json_err)?;
-        collect_json_edits(
-            &mut jiter, peek, "", "", content, profile, store, &mut edits,
-        )?;
-        Ok(Some(edits))
+        Ok(Some(json_value_edits(content, profile, store)?))
     }
+}
+
+/// Compute span edits for a single JSON document in `content` (spans are
+/// relative to `content`). Shared by the JSON processor and, per line, by the
+/// JSONL processor.
+///
+/// # Errors
+///
+/// Returns [`SanitizeError::ParseError`] if `content` is not valid JSON.
+pub(crate) fn json_value_edits(
+    content: &[u8],
+    profile: &FileTypeProfile,
+    store: &MappingStore,
+) -> Result<Vec<Replacement>> {
+    let mut jiter = Jiter::new(content);
+    let mut edits = Vec::new();
+    let peek = jiter.peek().map_err(json_err)?;
+    collect_json_edits(
+        &mut jiter, peek, "", "", content, profile, store, &mut edits,
+    )?;
+    Ok(edits)
 }
 
 /// Recursively walk a JSON value via `jiter`, emitting span edits for matched
