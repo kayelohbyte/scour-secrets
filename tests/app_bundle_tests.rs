@@ -361,12 +361,14 @@ fn two_pass_profile_seeds_plain_text_scan() {
     );
 
     // Extract the replacement that appeared in the config, then verify the
-    // log uses the exact same string (cross-file consistency).
+    // log uses the exact same string (cross-file consistency). Span-based YAML
+    // editing emits the value double-quoted (`password: "TOKEN"`), so strip any
+    // surrounding quotes to get the bare token that appears in the log.
     let replacement = config_out
         .lines()
         .find(|l| l.contains("password:"))
         .and_then(|l| l.split_once(':').map(|x| x.1))
-        .map(str::trim)
+        .map(|v| v.trim().trim_matches('"'))
         .expect("config output must have a password: line");
 
     assert!(

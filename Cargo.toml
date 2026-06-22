@@ -51,6 +51,8 @@ toml = "0.8"
 toml_edit = "0.22"
 # Byte-position JSON parsing for span-based JSON editing (no big-int/py features).
 jiter = { version = "0.15", default-features = false }
+# Span-aware YAML event parser for format-preserving YAML value redaction.
+saphyr-parser = "0.0.6"
 # Structured processors (feature = "structured")
 quick-xml = { version = "0.31", optional = true }
 csv = { version = "1", optional = true }

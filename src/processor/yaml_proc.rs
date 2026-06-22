@@ -9,9 +9,47 @@
 
 use crate::error::{Result, SanitizeError};
 use crate::processor::limits::{DEFAULT_DEPTH, YAML_INPUT_SIZE, YAML_NODE_COUNT};
-use crate::processor::{walk_tree, FileTypeProfile, Processor, TreeNode};
+use crate::processor::{
+    build_path, edit_token, walk_tree, FileTypeProfile, Processor, Replacement, TreeNode,
+};
 use crate::store::MappingStore;
+use saphyr_parser::{Event, Parser};
 use serde_yaml_ng::Value;
+
+/// A container frame for the YAML event-stream walk (span-based editing).
+enum YamlFrame {
+    /// Inside a mapping. `path`/`key` locate the mapping itself; `current_key`
+    /// is the key whose value is being read; `expecting_key` alternates.
+    Mapping {
+        path: String,
+        expecting_key: bool,
+        current_key: Option<String>,
+    },
+    /// Inside a sequence. Items are path-transparent (keep the parent key/path).
+    Sequence { path: String, key: String },
+}
+
+/// The (dot-path, bare-key) of the value about to be read, given the frame stack.
+fn yaml_value_position(frames: &[YamlFrame]) -> (String, String) {
+    match frames.last() {
+        Some(YamlFrame::Mapping {
+            path, current_key, ..
+        }) => {
+            let key = current_key.clone().unwrap_or_default();
+            (build_path(path, &key), key)
+        }
+        Some(YamlFrame::Sequence { path, key }) => (path.clone(), key.clone()),
+        None => (String::new(), String::new()),
+    }
+}
+
+/// After a value (scalar, or a container that just ended) is consumed, a parent
+/// mapping should expect the next key.
+fn yaml_note_value_consumed(frames: &mut [YamlFrame]) {
+    if let Some(YamlFrame::Mapping { expecting_key, .. }) = frames.last_mut() {
+        *expecting_key = true;
+    }
+}
 
 /// Structured processor for YAML files.
 pub struct YamlProcessor;
@@ -68,6 +106,85 @@ impl Processor for YamlProcessor {
         })?;
 
         Ok(output.into_bytes())
+    }
+
+    /// Span-based redaction: drive `saphyr-parser` (which yields each event with
+    /// a byte `Span`) over the document, tracking the mapping/sequence path, and
+    /// emit an edit replacing each matched value scalar's exact source span with
+    /// a quoted token. Comments, anchors, key order, block/flow style, and the
+    /// exact escaping of unrelated content are preserved; the value is hit in the
+    /// source as written, so quoted/escaped scalars never leak.
+    fn process_to_edits(
+        &self,
+        content: &[u8],
+        profile: &FileTypeProfile,
+        store: &MappingStore,
+    ) -> Result<Option<Vec<Replacement>>> {
+        let text = crate::processor::check_size_and_decode(content, "YAML", YAML_INPUT_SIZE)?;
+        let mut edits = Vec::new();
+        let mut frames: Vec<YamlFrame> = Vec::new();
+
+        for event in Parser::new_from_str(text) {
+            let (event, span) = event.map_err(|e| SanitizeError::ParseError {
+                format: "YAML".into(),
+                message: format!("YAML parse error: {e}"),
+            })?;
+            match event {
+                Event::Scalar(value, _style, _aid, _tag) => {
+                    let is_key = matches!(
+                        frames.last(),
+                        Some(YamlFrame::Mapping {
+                            expecting_key: true,
+                            ..
+                        })
+                    );
+                    if is_key {
+                        if let Some(YamlFrame::Mapping {
+                            expecting_key,
+                            current_key,
+                            ..
+                        }) = frames.last_mut()
+                        {
+                            *current_key = Some(value.into_owned());
+                            *expecting_key = false;
+                        }
+                    } else {
+                        let (path, key) = yaml_value_position(&frames);
+                        if let Some(token) = edit_token(&key, &path, &value, profile, store)? {
+                            edits.push(Replacement {
+                                start: span.start.index(),
+                                end: span.end.index(),
+                                value: format!("\"{token}\""),
+                            });
+                        }
+                        yaml_note_value_consumed(&mut frames);
+                    }
+                }
+                Event::MappingStart(..) => {
+                    let (path, _key) = yaml_value_position(&frames);
+                    frames.push(YamlFrame::Mapping {
+                        path,
+                        expecting_key: true,
+                        current_key: None,
+                    });
+                }
+                Event::SequenceStart(..) => {
+                    let (path, key) = yaml_value_position(&frames);
+                    frames.push(YamlFrame::Sequence { path, key });
+                }
+                Event::MappingEnd | Event::SequenceEnd => {
+                    frames.pop();
+                    yaml_note_value_consumed(&mut frames);
+                }
+                Event::Alias(_) => {
+                    // Alias references an anchored value (redacted at its
+                    // definition); the alias node itself isn't a literal.
+                    yaml_note_value_consumed(&mut frames);
+                }
+                _ => {}
+            }
+        }
+        Ok(Some(edits))
     }
 }
 
@@ -326,5 +443,45 @@ mod tests {
 
         assert!(!out.contains("a@b.com"));
         assert!(!out.contains("c@d.com"));
+    }
+
+    // ── process_to_edits (span-based, format-preserving) ─────────────────────
+
+    /// Edit-mode alone must redact plain, double-quoted, single-quoted, and
+    /// escaped scalars while preserving comments and unrelated values.
+    #[test]
+    fn edits_redact_all_scalar_styles_and_preserve_comments() {
+        let store = make_store();
+        let proc = YamlProcessor;
+        let content = b"# top\ndb:\n  a: plain-SEC1   # inline\n  b: \"dq-SEC2\"\n  c: 'sq-SEC3'\n  d: \"x\\\"y-SEC4\"\n  host: keep.local\n";
+        let profile = FileTypeProfile::new(
+            "yaml",
+            vec![
+                FieldRule::new("db.a").with_category(Category::Custom("k".into())),
+                FieldRule::new("db.b").with_category(Category::Custom("k".into())),
+                FieldRule::new("db.c").with_category(Category::Custom("k".into())),
+                FieldRule::new("db.d").with_category(Category::Custom("k".into())),
+            ],
+        );
+        let edits = proc
+            .process_to_edits(content, &profile, &store)
+            .unwrap()
+            .unwrap();
+        let out = crate::processor::apply_edits(content, edits);
+        let text = String::from_utf8(out).unwrap();
+        for leak in ["SEC1", "SEC2", "SEC3", "SEC4"] {
+            assert!(!text.contains(leak), "leaked {leak}: {text}");
+        }
+        assert!(text.contains("# top"), "top comment dropped: {text}");
+        assert!(text.contains("# inline"), "inline comment dropped: {text}");
+        assert!(
+            text.contains("host: keep.local"),
+            "non-secret changed: {text}"
+        );
+        // Output remains valid YAML.
+        assert!(
+            serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&text).is_ok(),
+            "invalid YAML: {text}"
+        );
     }
 }
