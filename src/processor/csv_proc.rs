@@ -184,6 +184,7 @@ impl Processor for CsvProcessor {
         let mut record_idx = 0usize;
         let mut col_idx = 0usize;
         let mut headers: Vec<String> = Vec::new();
+        let mut flushed = false;
 
         loop {
             let (result, n_in, n_out) = rdr.read_field(&content[pos..], &mut out_chunk);
@@ -192,8 +193,17 @@ impl Processor for CsvProcessor {
 
             match result {
                 csv_core::ReadFieldResult::InputEmpty => {
+                    // Input exhausted. csv_core only flushes a final
+                    // *unterminated* field (a file with no trailing newline)
+                    // and reports `End` when read_field is called once more
+                    // with an empty buffer. Loop back to make that EOF call
+                    // instead of breaking here; otherwise the last field would
+                    // be dropped — and, if it matched a rule, leak.
                     if pos >= content.len() {
-                        break;
+                        if flushed {
+                            break;
+                        }
+                        flushed = true;
                     }
                 }
                 csv_core::ReadFieldResult::OutputFull => {} // field continues; keep accumulating
@@ -446,5 +456,30 @@ mod tests {
         );
         assert!(text.contains("Alice,"), "name column changed: {text}");
         assert!(text.contains("Bob,"), "name column changed: {text}");
+    }
+
+    /// Regression: a CSV with no trailing newline must still redact the final
+    /// field. csv_core reports the last unterminated field only on an EOF flush
+    /// call; an earlier version broke on `InputEmpty` first and leaked it.
+    #[test]
+    fn edits_redact_last_field_without_trailing_newline() {
+        let store = make_store();
+        let proc = CsvProcessor;
+        let content = b"name,email\nAlice,leak-SEC9@e.test";
+        let profile = FileTypeProfile::new(
+            "csv",
+            vec![FieldRule::new("email").with_category(Category::Email)],
+        );
+        let edits = proc
+            .process_to_edits(content, &profile, &store)
+            .unwrap()
+            .unwrap();
+        let out = crate::processor::apply_edits(content, edits);
+        let text = String::from_utf8(out).unwrap();
+        assert!(!text.contains("SEC9"), "leaked last field: {text}");
+        assert!(
+            text.starts_with("name,email\nAlice,"),
+            "format broken: {text}"
+        );
     }
 }
