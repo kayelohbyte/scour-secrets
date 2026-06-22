@@ -10,7 +10,7 @@ use libfuzzer_sys::fuzz_target;
 use rust_sanitize::category::Category;
 use rust_sanitize::generator::HmacGenerator;
 use rust_sanitize::processor::xml_proc::XmlProcessor;
-use rust_sanitize::processor::{FieldRule, FileTypeProfile, Processor};
+use rust_sanitize::processor::{FieldRule, FileTypeProfile, Processor, ProcessorRegistry};
 use rust_sanitize::store::MappingStore;
 use std::sync::Arc;
 
@@ -25,9 +25,8 @@ fuzz_target!(|data: &[u8]| {
     let profile = FileTypeProfile::new(
         "xml",
         vec![
-            FieldRule::new("*.password").with_category(Category::Custom("password".into())),
-            FieldRule::new("*.email").with_category(Category::Email),
-            FieldRule::new("*.token").with_category(Category::Custom("api_key".into())),
+            // XML paths are slash-separated; `*` matches any element/attribute.
+            FieldRule::new("*").with_category(Category::Custom("field".into())),
         ],
     )
     .with_extension("xml");
@@ -36,4 +35,7 @@ fuzz_target!(|data: &[u8]| {
     if processor.can_handle(data, &profile) {
         let _ = processor.process(data, &profile, &store);
     }
+    // Span-based edit path (quick-xml walk + attribute-span scan → apply_edits).
+    let registry = ProcessorRegistry::with_builtins();
+    let _ = registry.process_to_edits(data, &profile, &store);
 });
