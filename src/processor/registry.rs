@@ -42,7 +42,9 @@ impl ProcessorRegistry {
         reg.register(Arc::new(super::json_proc::JsonProcessor));
         reg.register(Arc::new(super::jsonl_proc::JsonLinesProcessor));
         reg.register(Arc::new(super::yaml_proc::YamlProcessor));
+        #[cfg(feature = "structured")]
         reg.register(Arc::new(super::xml_proc::XmlProcessor));
+        #[cfg(feature = "structured")]
         reg.register(Arc::new(super::csv_proc::CsvProcessor));
         reg.register(Arc::new(super::toml_proc::TomlProcessor));
         reg.register(Arc::new(super::env_proc::EnvProcessor));

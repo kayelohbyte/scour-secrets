@@ -336,6 +336,28 @@ assert_eq!(sanitized, again);
 
 See [Library API Reference](docs/api-reference.md) for the full module-by-module API.
 
+### Feature flags
+
+The default build includes the CLI binary and every processor. Library-only consumers can trim dependencies by disabling default features and opting back into just what they need:
+
+```toml
+# Core only — HMAC/random generators, mapping store, streaming scanner,
+# and the always-on JSON/YAML/TOML/INI/env/key-value/log-line processors.
+# Drops clap, ureq, walkdir, ctrlc, rpassword, zip, tar, flate2, csv, quick-xml.
+rust-sanitize = { version = "0.13", default-features = false }
+
+# Add archive (zip/tar/tar.gz) and/or the CSV + XML processors as needed.
+rust-sanitize = { version = "0.13", default-features = false, features = ["archive", "structured"] }
+```
+
+| Feature | Pulls in | Enables |
+|---------|----------|---------|
+| `cli` *(default)* | `clap`, `ureq`, `walkdir`, `ctrlc`, `rpassword` | The `sanitize` binary; implies `archive` + `structured` |
+| `archive` *(default)* | `zip`, `tar`, `flate2` | `ArchiveProcessor` (zip / tar / tar.gz) |
+| `structured` *(default)* | `csv`, `quick-xml` | `CsvProcessor` and `XmlProcessor` |
+
+JSON, YAML, TOML, INI, `.env`, key-value, and log-line processing — plus the regex/literal streaming scanner — are always built; they ride on the core serde stack and pull no extra heavy dependencies.
+
 ---
 
 ## Security Model

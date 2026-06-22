@@ -65,6 +65,34 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-targets
 
+  feature-matrix:
+    name: Features (${{ matrix.features == '' && 'core' || matrix.features }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: changes
+    if: github.event_name != 'schedule' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.code == 'true')
+    strategy:
+      fail-fast: false
+      matrix:
+        # Prove every feature combination compiles cleanly. Plain `cargo clippy`
+        # (not --all-targets) builds the lib plus any bin whose required-features
+        # are satisfied — so the `sanitize` binary is only built for `cli`, and
+        # the integration tests (which use gated types) are not compiled here.
+        features:
+          - ""                    # core library only (--no-default-features)
+          - "archive"
+          - "structured"
+          - "archive,structured"
+          - "cli"                 # full CLI binary (implies archive + structured)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --no-default-features --features "${{ matrix.features }}" -- -D warnings
+
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

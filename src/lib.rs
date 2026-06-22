@@ -148,6 +148,7 @@ pub use log_context::{
     extract_context, extract_context_reader, LogContextConfig, LogContextMatch, LogContextResult,
     DEFAULT_CONTEXT_LINES, DEFAULT_KEYWORDS, DEFAULT_MAX_MATCHES,
 };
+#[cfg(feature = "archive")]
 pub use processor::archive::{
     ArchiveFilter, ArchiveFormat, ArchiveProcessor, ArchiveProgress, ArchiveStats, EntryCallback,
 };

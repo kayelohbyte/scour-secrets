@@ -30,6 +30,7 @@ pub(crate) const DEFAULT_DEPTH: usize = 128;
 /// Higher than the default because deeply nested XML documents are common in
 /// practice (e.g. Maven POMs, Android manifests) and XML is iterative rather
 /// than recursive in this processor (R-5 fix).
+#[cfg(feature = "structured")]
 pub(crate) const XML_DEPTH: usize = 256;
 
 // ---------------------------------------------------------------------------
@@ -48,12 +49,14 @@ pub(crate) const YAML_NODE_COUNT: usize = 10_000_000;
 /// Maximum size (bytes) for a single archive entry loaded into memory for
 /// structured processing. Larger entries are streamed through the scanner
 /// instead (M-3 fix).
+#[cfg(feature = "archive")]
 pub(crate) const STRUCTURED_ENTRY_SIZE: u64 = 256 * 1024 * 1024;
 
 /// Maximum total uncompressed data size (bytes) across all zip entries before
 /// the parallel processing path is disabled. Above this threshold the zip
 /// processor falls back to sequential entry processing to avoid holding the
 /// entire archive in memory at once.
+#[cfg(feature = "archive")]
 pub(crate) const PARALLEL_ZIP_DATA_SIZE: u64 = 256 * 1024 * 1024;
 
 /// Maximum total buffered data size (bytes) across all tar entries before
@@ -63,6 +66,7 @@ pub(crate) const PARALLEL_ZIP_DATA_SIZE: u64 = 256 * 1024 * 1024;
 /// before reading. Entries are buffered speculatively; if the running total
 /// exceeds this cap the parallel path is abandoned and remaining entries are
 /// processed sequentially from the stream.
+#[cfg(feature = "archive")]
 pub(crate) const PARALLEL_TAR_DATA_SIZE: u64 = 256 * 1024 * 1024;
 
 /// Default maximum nesting depth for recursive archive processing.
@@ -75,9 +79,11 @@ pub const DEFAULT_ARCHIVE_DEPTH: u32 = 5;
 /// Absolute maximum allowed value for `--max-archive-depth`.
 /// Each nesting level can buffer up to [`STRUCTURED_ENTRY_SIZE`] bytes, so
 /// capping at 10 bounds peak memory to ~2.5 GiB in the worst case.
+#[cfg(feature = "archive")]
 pub(crate) const MAX_ARCHIVE_DEPTH: u32 = 10;
 
 /// Minimum number of file entries in an archive before parallel entry
 /// processing is enabled. Below this threshold rayon task overhead exceeds
 /// the parallelism benefit.
+#[cfg(feature = "archive")]
 pub(crate) const PARALLEL_ENTRY_THRESHOLD: usize = 4;

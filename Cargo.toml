@@ -18,7 +18,17 @@ name = "rust_sanitize"
 path = "src/lib.rs"
 
 [features]
-default = []
+# Full build (CLI binary + all processors). This is what `cargo install` and
+# the release artifacts produce.
+default = ["cli", "archive", "structured"]
+# CLI binary deps. Implies all processors so the installed `sanitize` tool is
+# fully featured. Library-only users can drop this via `default-features = false`.
+cli = ["dep:clap", "dep:ureq", "dep:walkdir", "dep:ctrlc", "dep:rpassword", "archive", "structured"]
+# Archive processing (zip / tar / tar.gz).
+archive = ["dep:zip", "dep:tar", "dep:flate2"]
+# CSV and XML structured processors. (JSON/YAML/TOML/INI/env are always built —
+# they ride on the core serde stack and pull no extra heavy deps.)
+structured = ["dep:csv", "dep:quick-xml"]
 bench = []
 
 [dependencies]
@@ -37,21 +47,25 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml_ng = "0.10"
 toml = "0.8"
-quick-xml = "0.31"
-csv = "1"
-zip = { version = "2", default-features = false, features = ["deflate"] }
-tar = "0.4.45"
-flate2 = "1"
-clap = { version = "4.5.60", features = ["derive", "env"] }
+# Structured processors (feature = "structured")
+quick-xml = { version = "0.31", optional = true }
+csv = { version = "1", optional = true }
+# Archive processors (feature = "archive")
+zip = { version = "2", default-features = false, features = ["deflate"], optional = true }
+tar = { version = "0.4.45", optional = true }
+flate2 = { version = "1", optional = true }
+# CLI-only (feature = "cli")
+clap = { version = "4.5.60", features = ["derive", "env"], optional = true }
+ctrlc = { version = "3", features = ["termination"], optional = true }
+rpassword = { version = "7", optional = true }
+walkdir = { version = "2", optional = true }
+ureq = { version = "2", features = ["json"], optional = true }
+# Core (always built)
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
-ctrlc = { version = "3", features = ["termination"] }
-rpassword = "7"
 rayon = "1"
 glob = "0.3"
-walkdir = "2"
 bytecount = "0.6"
-ureq = { version = "2", features = ["json"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["fs"] }
@@ -72,6 +86,7 @@ harness = false
 [[bin]]
 name = "sanitize"
 path = "src/bin/sanitize/main.rs"
+required-features = ["cli"]
 
 [profile.release]
 lto = "thin"

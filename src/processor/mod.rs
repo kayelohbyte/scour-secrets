@@ -37,7 +37,9 @@
 //! [`ProcessorRegistry`]. The registry matches profiles to processors
 //! by name and dispatches processing.
 
+#[cfg(feature = "archive")]
 pub mod archive;
+#[cfg(feature = "structured")]
 pub mod csv_proc;
 pub mod env_proc;
 pub mod ini_proc;
@@ -49,6 +51,7 @@ pub mod log_line;
 pub mod profile;
 pub mod registry;
 pub mod toml_proc;
+#[cfg(feature = "structured")]
 pub mod xml_proc;
 pub mod yaml_proc;
 
