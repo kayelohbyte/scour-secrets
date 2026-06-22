@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Structured values containing escaped characters are no longer leaked.** The
+  format-preserving pass matches the *parsed* value against the *raw* bytes, so a
+  value that is escaped in the source (e.g. the JSON value `a"b` written as
+  `a\"b`, or XML entities) did not match and survived in plaintext. Structured
+  processors now also register the value's format-specific source-escaped form as
+  a store alias to the same token, so the escaped occurrence is redacted
+  consistently. Applies to JSON, JSONL, YAML, TOML, and XML across standalone
+  files, stdin, and archive entries.
+
 - **Structured entries inside archives now preserve comments and formatting.**
   A profile-matched entry in a `.zip`/`.tar`/`.tar.gz` was re-serialized from its
   parsed tree, which silently dropped YAML/TOML comments and reflowed JSON

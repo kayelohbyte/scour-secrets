@@ -187,7 +187,12 @@ pub(crate) fn check_size_and_decode<'a>(
 /// `rule.min_length` (if set). This prevents broad glob patterns like
 /// `*token*` from redacting obviously non-secret values such as `"false"`,
 /// `"0"`, or `"nil"`.
-pub(crate) fn replace_value(value: &str, rule: &FieldRule, store: &MappingStore) -> Result<String> {
+pub(crate) fn replace_value(
+    value: &str,
+    rule: &FieldRule,
+    store: &MappingStore,
+    format: &str,
+) -> Result<String> {
     if let Some(min) = rule.min_length {
         if value.len() < min {
             return Ok(value.to_string());
@@ -198,7 +203,104 @@ pub(crate) fn replace_value(value: &str, rule: &FieldRule, store: &MappingStore)
         .clone()
         .unwrap_or(Category::Custom("field".into()));
     let sanitized = store.get_or_insert(&category, value)?;
+    register_source_alias(store, &category, value, sanitized.as_str(), format);
     Ok(sanitized.to_string())
+}
+
+/// Register the format-specific source-escaped form of `original` (if any) as a
+/// store alias to `sanitized`, so a value that appears escaped in the raw bytes
+/// of the source document is still matched by the format-preserving scanner.
+fn register_source_alias(
+    store: &MappingStore,
+    category: &Category,
+    original: &str,
+    sanitized: &str,
+    format: &str,
+) {
+    if let Some(escaped) = source_escape(original, format) {
+        store.register_alias(category, &escaped, sanitized);
+    }
+}
+
+/// Format-specific source (escaped) representation of `value` — how the value
+/// appears in the raw bytes of a `format` document after string escaping —
+/// returned only when it differs from `value`. `None` for formats without
+/// string escaping (key-value, INI, env, CSV, log lines) or when no escaping is
+/// needed. Used so the byte-level format-preserving scanner can redact a value
+/// that is escaped in the source (e.g. JSON `a\"b` for the parsed value `a"b`).
+fn source_escape(value: &str, format: &str) -> Option<String> {
+    let escaped = match format.to_ascii_lowercase().as_str() {
+        "json" | "jsonl" => json_string_escape(value),
+        "yaml" => yaml_double_quoted_escape(value),
+        "toml" => toml_basic_escape(value),
+        "xml" => xml_escape(value),
+        _ => return None,
+    };
+    (escaped != value).then_some(escaped)
+}
+
+/// JSON string-body escaping (the bytes between the surrounding quotes).
+fn json_string_escape(s: &str) -> String {
+    match serde_json::to_string(s) {
+        // `to_string` of a `&str` yields a quoted JSON string literal; the body
+        // is everything between the first and last byte.
+        Ok(quoted) if quoted.len() >= 2 => quoted[1..quoted.len() - 1].to_string(),
+        _ => s.to_string(),
+    }
+}
+
+/// TOML basic-string escaping (the body of a `"..."` string).
+fn toml_basic_escape(s: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\u{08}' => out.push_str("\\b"),
+            '\u{0c}' => out.push_str("\\f"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04X}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// YAML double-quoted-scalar escaping (the body of a `"..."` scalar).
+fn yaml_double_quoted_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// XML text/attribute entity escaping.
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Build a dot-separated key path by appending `key` to `prefix`.
@@ -314,6 +416,7 @@ pub(crate) fn replace_by_signal(
     value: &str,
     sig: &FieldNameSignal,
     store: &MappingStore,
+    format: &str,
 ) -> Result<Option<String>> {
     if value.is_empty() {
         return Ok(None);
@@ -322,6 +425,7 @@ pub(crate) fn replace_by_signal(
         return Ok(None);
     }
     let replaced = store.get_or_insert(&sig.category, value)?;
+    register_source_alias(store, &sig.category, value, replaced.as_str(), format);
     Ok(Some(replaced.to_string()))
 }
 
@@ -398,20 +502,20 @@ pub(crate) fn walk_tree<V: TreeNode>(
         let path = build_path(prefix, key);
         if let Some(s) = v.as_str_mut() {
             if let Some(rule) = find_matching_rule(&path, profile) {
-                *s = replace_value(s, rule, store)?;
+                *s = replace_value(s, rule, store, format_name)?;
             } else if let Some(sig) = find_field_signal(key, &profile.field_name_signals) {
-                if let Some(replaced) = replace_by_signal(s, sig, store)? {
+                if let Some(replaced) = replace_by_signal(s, sig, store, format_name)? {
                     *s = replaced;
                 }
             }
         } else if v.is_scalar() {
             if let Some(rule) = find_matching_rule(&path, profile) {
                 let repr = v.scalar_to_string();
-                let replaced = replace_value(&repr, rule, store)?;
+                let replaced = replace_value(&repr, rule, store, format_name)?;
                 v.set_string(replaced);
             } else if let Some(sig) = find_field_signal(key, &profile.field_name_signals) {
                 let repr = v.scalar_to_string();
-                if let Some(replaced) = replace_by_signal(&repr, sig, store)? {
+                if let Some(replaced) = replace_by_signal(&repr, sig, store, format_name)? {
                     v.set_string(replaced);
                 }
             }
@@ -431,6 +535,30 @@ pub(crate) fn walk_tree<V: TreeNode>(
 mod tests {
     use super::*;
     use crate::category::Category;
+
+    // ── source_escape ────────────────────────────────────────────────────────
+
+    #[test]
+    fn source_escape_per_format() {
+        // JSON / TOML / YAML escape backslash and double-quote in the string body.
+        assert_eq!(source_escape(r#"a"b"#, "json").as_deref(), Some(r#"a\"b"#));
+        assert_eq!(source_escape(r#"a"b"#, "JSON").as_deref(), Some(r#"a\"b"#));
+        assert_eq!(source_escape(r#"a"b"#, "toml").as_deref(), Some(r#"a\"b"#));
+        assert_eq!(source_escape(r#"a"b"#, "yaml").as_deref(), Some(r#"a\"b"#));
+        assert_eq!(source_escape(r"a\b", "json").as_deref(), Some(r"a\\b"));
+        // XML escapes entities.
+        assert_eq!(
+            source_escape("a<b&c", "xml").as_deref(),
+            Some("a&lt;b&amp;c")
+        );
+        // No escaping needed → None (value appears verbatim in the source).
+        assert_eq!(source_escape("plainvalue", "json"), None);
+        // Formats without string escaping → always None.
+        assert_eq!(source_escape(r#"a"b"#, "ini"), None);
+        assert_eq!(source_escape(r#"a"b"#, "env"), None);
+        assert_eq!(source_escape(r#"a"b"#, "key-value"), None);
+        assert_eq!(source_escape(r#"a"b"#, "csv"), None);
+    }
 
     // ── shannon_entropy ──────────────────────────────────────────────────────
 

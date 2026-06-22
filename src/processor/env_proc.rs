@@ -117,7 +117,7 @@ impl Processor for EnvProcessor {
             };
 
             if let Some(rule) = find_matching_rule(key, profile) {
-                let replaced = replace_value(inner_value, rule, store)?;
+                let replaced = replace_value(inner_value, rule, store, "env")?;
 
                 // Reconstruct: indent + [export ] + KEY=["']value["']
                 output.push_str(indent);
@@ -135,7 +135,7 @@ impl Processor for EnvProcessor {
                 }
                 output.push('\n');
             } else if let Some(sig) = find_field_signal(key, &profile.field_name_signals) {
-                if let Some(replaced) = replace_by_signal(inner_value, sig, store)? {
+                if let Some(replaced) = replace_by_signal(inner_value, sig, store, "env")? {
                     output.push_str(indent);
                     if has_export {
                         output.push_str("export ");

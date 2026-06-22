@@ -451,3 +451,101 @@ fn duplicate_value_across_structured_files_redacted_in_both() {
         );
     }
 }
+
+/// Build a `.tar.gz` file on disk from `(name, bytes)` entries.
+fn write_targz(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+    let f = fs::File::create(path).unwrap();
+    let enc = flate2::write::GzEncoder::new(f, flate2::Compression::fast());
+    let mut builder = tar::Builder::new(enc);
+    for (name, data) in entries {
+        let mut hdr = tar::Header::new_gnu();
+        hdr.set_size(data.len() as u64);
+        hdr.set_mode(0o644);
+        hdr.set_mtime(1_700_000_000);
+        hdr.set_cksum();
+        builder.append_data(&mut hdr, *name, *data).unwrap();
+    }
+    builder.into_inner().unwrap().finish().unwrap();
+}
+
+/// Read all file entries of a `.tar.gz` into one concatenated string.
+fn read_targz(path: &std::path::Path) -> String {
+    use std::io::Read;
+    let f = fs::File::open(path).unwrap();
+    let dec = flate2::read::GzDecoder::new(f);
+    let mut ar = tar::Archive::new(dec);
+    let mut s = String::new();
+    for e in ar.entries().unwrap() {
+        e.unwrap().read_to_string(&mut s).unwrap();
+    }
+    s
+}
+
+/// Regression: a value found in a structured entry of one archive must be
+/// redacted in *another* archive in the same run (cross-archive seeding via the
+/// discovery pre-pass), not only in the archive it was discovered in.
+#[test]
+fn cross_archive_duplicate_value_redacted_in_both_archives() {
+    let dir = tempdir().unwrap();
+    let outdir = dir.path().join("out");
+    fs::create_dir_all(&outdir).unwrap();
+    let shared = "cross-arch-shared@corp.example";
+
+    let a1 = dir.path().join("a1.tar.gz");
+    write_targz(
+        &a1,
+        &[(
+            "users.json",
+            format!(r#"{{"email":"{shared}"}}"#).as_bytes(),
+        )],
+    );
+    let a2 = dir.path().join("a2.tar.gz");
+    write_targz(
+        &a2,
+        &[(
+            "accounts.json",
+            format!(r#"{{"email":"{shared}"}}"#).as_bytes(),
+        )],
+    );
+
+    let secrets = dir.path().join("secrets.json");
+    fs::write(&secrets, b"[]").unwrap();
+    let profile = dir.path().join("profile.json");
+    fs::write(
+        &profile,
+        r#"[{"processor":"json","extensions":[".json"],"fields":[{"pattern":"*.email","category":"email"}]}]"#,
+    )
+    .unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+        .args([
+            a1.to_str().unwrap(),
+            a2.to_str().unwrap(),
+            "-s",
+            secrets.to_str().unwrap(),
+            "--profile",
+            profile.to_str().unwrap(),
+            "--output",
+            outdir.to_str().unwrap(),
+        ])
+        .env("SANITIZE_LOG", "error")
+        .env("SANITIZE_NO_SETTINGS", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let a1_out = read_targz(&outdir.join("a1.sanitized.tar.gz"));
+    let a2_out = read_targz(&outdir.join("a2.sanitized.tar.gz"));
+    assert!(
+        !a1_out.contains(shared),
+        "a1 leaked the shared value:\n{a1_out}"
+    );
+    assert!(
+        !a2_out.contains(shared),
+        "a2 leaked the shared value (cross-archive seeding failed):\n{a2_out}"
+    );
+}

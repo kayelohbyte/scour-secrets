@@ -1398,3 +1398,150 @@ fn zip_slip_entry_path_sanitized_in_output() {
 // The `tar` crate itself refuses to construct archives with `..` path
 // components, so an end-to-end integration test would require crafting raw
 // tar bytes, which is out of scope here.
+
+// ---------------------------------------------------------------------------
+// Format preservation for structured entries (regression: archive entries were
+// re-serialized, dropping comments and reflowing JSON).
+// ---------------------------------------------------------------------------
+
+/// Build a processor with a scanner that has NO pre-loaded literals, so field
+/// values can only be redacted via the per-entry discovery delta — exercising
+/// the byte-level format-preserving path and the source-escaped alias.
+fn make_format_preserving_processor(profiles: Vec<FileTypeProfile>) -> ArchiveProcessor {
+    let gen = Arc::new(HmacGenerator::new([17u8; 32]));
+    let store = Arc::new(MappingStore::new(gen, None));
+    let scanner =
+        Arc::new(StreamScanner::new(vec![], Arc::clone(&store), ScanConfig::default()).unwrap());
+    let registry = Arc::new(ProcessorRegistry::with_builtins());
+    ArchiveProcessor::new(registry, scanner, store, profiles)
+}
+
+#[test]
+fn tar_structured_preserves_toml_and_ini_comments() {
+    let proc = make_format_preserving_processor(vec![
+        FileTypeProfile::new(
+            "toml",
+            vec![FieldRule::new("*.password").with_category(Category::Custom("password".into()))],
+        )
+        .with_extension(".toml"),
+        FileTypeProfile::new(
+            "ini",
+            vec![FieldRule::new("*.api_key").with_category(Category::Custom("auth".into()))],
+        )
+        .with_extension(".ini"),
+    ]);
+
+    let toml =
+        b"# db (toml comment)\n[database]\npassword = \"toml-SECRET-1\"\nhost = \"db.local\"\n";
+    let ini = b"; auth (ini comment)\n[auth]\napi_key = ini-SECRET-2\ntimeout = 30\n";
+    let input = make_tar(&[("app.toml", toml), ("app.ini", ini)]);
+
+    let mut output = Vec::new();
+    proc.process_tar(&input[..], &mut output).unwrap();
+    let entries = read_tar(&output);
+    let toml_out = &entries.iter().find(|(n, _)| n == "app.toml").unwrap().1;
+    let ini_out = &entries.iter().find(|(n, _)| n == "app.ini").unwrap().1;
+
+    // Secrets redacted.
+    assert!(
+        !toml_out.contains("toml-SECRET-1"),
+        "toml leaked: {toml_out}"
+    );
+    assert!(!ini_out.contains("ini-SECRET-2"), "ini leaked: {ini_out}");
+    // Comments AND non-secret content preserved (not re-serialized).
+    assert!(
+        toml_out.contains("# db (toml comment)"),
+        "toml comment dropped: {toml_out}"
+    );
+    assert!(
+        toml_out.contains("host = \"db.local\""),
+        "toml non-secret changed: {toml_out}"
+    );
+    assert!(
+        ini_out.contains("; auth (ini comment)"),
+        "ini comment dropped: {ini_out}"
+    );
+    assert!(
+        ini_out.contains("timeout = 30"),
+        "ini non-secret changed: {ini_out}"
+    );
+}
+
+#[test]
+fn tar_structured_redacts_json_value_with_escaped_quotes() {
+    let proc = make_format_preserving_processor(vec![FileTypeProfile::new(
+        "json",
+        vec![FieldRule::new("*.password").with_category(Category::Custom("password".into()))],
+    )
+    .with_extension(".json")]);
+
+    // The value contains escaped quotes: in raw bytes it is a\"b\"c-SECRETXYZ.
+    // The parsed value is a"b"c-SECRETXYZ; redaction must match the *escaped*
+    // source form (the source-escaped alias), or the secret leaks.
+    let json = br#"{"db":{"password":"a\"b\"c-SECRETXYZ"}}"#;
+    let input = make_tar(&[("c.json", json)]);
+
+    let mut output = Vec::new();
+    proc.process_tar(&input[..], &mut output).unwrap();
+    let entries = read_tar(&output);
+    let out = &entries[0].1;
+    assert!(
+        !out.contains("SECRETXYZ"),
+        "escaped JSON value leaked: {out}"
+    );
+}
+
+#[test]
+fn nested_archive_structured_entry_preserves_comments() {
+    // A YAML config (with a comment) inside an inner .tar.gz, inside an outer
+    // tar — the recursive path must also be byte-preserving.
+    let proc = make_format_preserving_processor(vec![FileTypeProfile::new(
+        "yaml",
+        vec![FieldRule::new("owner_email").with_category(Category::Email)],
+    )
+    .with_extension(".yaml")]);
+
+    let yaml = b"# keep this comment\nowner_email: nested.secret@corp.test\nport: 9090\n";
+    let inner = make_tar_gz(&[("conf.yaml", yaml)]);
+    let outer = make_tar(&[("inner.tar.gz", &inner)]);
+
+    let mut output = Vec::new();
+    proc.process_tar(&outer[..], &mut output).unwrap();
+
+    // Extract the inner .tar.gz bytes losslessly (it is binary, so read_tar's
+    // lossy string reader can't be used on the outer archive).
+    let inner_bytes = {
+        let mut ar = tar::Archive::new(&output[..]);
+        let mut bytes = Vec::new();
+        for e in ar.entries().unwrap() {
+            let mut e = e.unwrap();
+            if e.path().unwrap().to_string_lossy() == "inner.tar.gz" {
+                e.read_to_end(&mut bytes).unwrap();
+            }
+        }
+        bytes
+    };
+    assert!(
+        !inner_bytes.is_empty(),
+        "inner.tar.gz entry not found in output"
+    );
+    let dec = flate2::read::GzDecoder::new(&inner_bytes[..]);
+    let mut inner_ar = tar::Archive::new(dec);
+    let mut conf = String::new();
+    for e in inner_ar.entries().unwrap() {
+        e.unwrap().read_to_string(&mut conf).unwrap();
+    }
+
+    assert!(
+        !conf.contains("nested.secret@corp.test"),
+        "nested secret leaked: {conf}"
+    );
+    assert!(
+        conf.contains("# keep this comment"),
+        "nested comment dropped: {conf}"
+    );
+    assert!(
+        conf.contains("port: 9090"),
+        "nested non-secret changed: {conf}"
+    );
+}

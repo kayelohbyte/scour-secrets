@@ -113,7 +113,7 @@ impl Processor for CsvProcessor {
                 if has_header {
                     if let Some(Some(rule_idx)) = column_rules.get(idx) {
                         let rule = &profile.fields[*rule_idx];
-                        let replaced = replace_value(field, rule, store)?;
+                        let replaced = replace_value(field, rule, store, "csv")?;
                         row.push(replaced);
                     } else {
                         row.push(field.to_string());
@@ -122,7 +122,7 @@ impl Processor for CsvProcessor {
                     // Without headers, match by column index as string.
                     let col_key = idx.to_string();
                     if let Some(rule) = find_matching_rule(&col_key, profile) {
-                        let replaced = replace_value(field, rule, store)?;
+                        let replaced = replace_value(field, rule, store, "csv")?;
                         row.push(replaced);
                     } else {
                         row.push(field.to_string());

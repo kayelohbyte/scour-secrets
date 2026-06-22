@@ -324,6 +324,45 @@ impl MappingStore {
         inner.value().get(original).map(|r| r.value().0.clone())
     }
 
+    /// Register `alias` as an additional original that maps to the **same**
+    /// `sanitized` replacement under `category`.
+    ///
+    /// Structured processors use this to record the *source-escaped* form of a
+    /// discovered value — e.g. the JSON value `a"b` appears in the raw bytes as
+    /// `a\"b`. The format-preserving scanner matches against raw input bytes, so
+    /// without the alias the escaped occurrence would not be redacted. Aliasing
+    /// (rather than a fresh mapping) keeps the escaped occurrence consistent with
+    /// the parsed value's token.
+    ///
+    /// First-writer-wins: an existing mapping for `alias` is left unchanged.
+    /// Allowlisted or empty aliases are ignored. Like [`Self::get_or_insert`],
+    /// the new entry participates in [`Self::iter_since`].
+    pub fn register_alias(&self, category: &Category, alias: &str, sanitized: &str) {
+        if alias.is_empty() {
+            return;
+        }
+        if let Some(al) = &self.allowlist {
+            if al.is_allowed(alias) {
+                return;
+            }
+        }
+        let inner: Arc<InnerMap> = match self.forward.get(category) {
+            Some(outer) => outer.value().clone(),
+            None => self
+                .forward
+                .entry(category.clone())
+                .or_insert_with(|| Arc::new(DashMap::new()))
+                .value()
+                .clone(),
+        };
+        inner
+            .entry(ZeroizingString(alias.to_owned()))
+            .or_insert_with(|| {
+                let insertion_index = self.len.fetch_add(1, Ordering::AcqRel);
+                (CompactString::new(sanitized), insertion_index)
+            });
+    }
+
     // ---------------- Metrics ----------------
 
     /// Number of unique mappings in the store.

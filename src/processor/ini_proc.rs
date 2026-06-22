@@ -115,7 +115,7 @@ impl Processor for IniProcessor {
             };
 
             if let Some(rule) = find_matching_rule(&path, profile) {
-                let replaced = replace_value(value, rule, store)?;
+                let replaced = replace_value(value, rule, store, "ini")?;
                 output.push_str(indent);
                 output.push_str(key);
                 output.push_str(&delimiter);
