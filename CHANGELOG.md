@@ -26,6 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **No-leak hardening across input sources (found via an input-source matrix).**
+  A new `tests/input_source_matrix_tests.rs` asserts the core rule — a secret
+  never appears in output, stdout, or stderr/logs — across every combination of
+  stdin / file / archive (incl. archives nested in archives, a file per
+  processor type, canaries spanning sources, special/escaped/Unicode values),
+  reading the actual bytes of every artifact. It found two leaks, both fixed:
+  - **Literal secrets leaked into the `Redacted:` summary / findings / logs.** A
+    `literal` secrets-file entry with no explicit label defaulted its label to
+    its own pattern — the raw secret value — which is printed in the summary and
+    reports. Literals now default to `literal:<category>`; regex patterns (not
+    themselves secrets) still default to their text.
+  - **`--format` forced *file* inputs to the stdin format, leaking escaped
+    values.** Piping structured stdin needs `--format`, but it also clobbered
+    accompanying files (e.g. `--format json` made a `.yaml` file parse as JSON →
+    no structured edits → its escaped values leaked). A file whose extension
+    already maps to a structured format now keeps it; `--format` only fills in
+    for stdin and untypeable inputs.
 - **No-leak hardening across formats (found via a systematic leak matrix).**
   Six issues in the span-based path are fixed, each with regression coverage in
   `tests/leak_matrix_tests.rs` (format × value-class incl. Unicode/TSV × location
