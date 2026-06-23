@@ -27,8 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - **No-leak hardening across formats (found via a systematic leak matrix).**
-  Five issues in the span-based path are fixed, each with regression coverage in
-  `tests/leak_matrix_tests.rs` (format × value-class × location × scope × EOF):
+  Six issues in the span-based path are fixed, each with regression coverage in
+  `tests/leak_matrix_tests.rs` (format × value-class incl. Unicode/TSV × location
+  × scope × EOF/BOM):
   - **CSV:** the last field of a file with **no trailing newline** was dropped
     (and, if it matched a rule, leaked) because the `csv-core` loop broke on
     `InputEmpty` before the EOF flush call.
@@ -46,6 +47,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - **BOM-prefixed JSON/JSONL:** a leading UTF-8 BOM made jiter error, so a
     matched value was never redacted; the BOM is now skipped for parsing and
     preserved in the output.
+  - **YAML multi-byte UTF-8:** a matched scalar following multi-byte content
+    (e.g. an accented header comment) was sliced at the wrong byte position and
+    the output corrupted, because saphyr's `Marker::index()` is a character
+    count, not a byte offset; char indices are now translated to byte offsets.
+- **`process()`-path alias parity.** The non-span path (INI, env, key-value, and
+  the oversized-file fallback) now registers the same cross-format escaped
+  aliases as the span-edit path, so a value discovered on either path is redacted
+  wherever it reappears escaped in another file.
 - **Structured entries inside archives now preserve comments and formatting.**
   A profile-matched entry in a `.zip`/`.tar`/`.tar.gz` was re-serialized from its
   parsed tree, which silently dropped YAML/TOML comments and reflowed JSON
