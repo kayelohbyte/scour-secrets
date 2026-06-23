@@ -386,6 +386,32 @@ pub(crate) fn run_sanitize(
         }
     }
 
+    // Process stdin BEFORE building the final augmented scanner and the
+    // structured-file output pass, so stdin's discovered field values land in
+    // the shared store and are redacted in those files too. (Previously stdin
+    // was processed last, so a value first seen in a stdin field leaked from the
+    // structured files, which were already written.) stdin is discovered with
+    // the same store as files/archives and sees their values; because the
+    // streaming-stdin path uses the scanner directly, give it a provisional
+    // augmented scanner built from the store so far. The final augmented scanner
+    // (below) then also folds in stdin's own contributions.
+    if !profiles.is_empty() && !stdin_targets.is_empty() {
+        let stdin_scanner = build_augmented_scanner(&base_patterns, &store, scan_config.clone())?;
+        let stdin_fp = FileProcessor {
+            scanner: &stdin_scanner,
+            ..base_fp
+        };
+        for target in stdin_targets {
+            let InputTarget::Stdin { output } = target else {
+                unreachable!()
+            };
+            had_matches |= stdin_fp
+                .process_stdin(output.as_deref())
+                .map_err(|e| (e, 1))?;
+        }
+    }
+
+    // Augmented scanner over the now-complete store (files + archives + stdin).
     let augmented_scanner = build_augmented_scanner(&base_patterns, &store, scan_config)?;
     let aug_fp = FileProcessor {
         scanner: &augmented_scanner,
@@ -395,9 +421,9 @@ pub(crate) fn run_sanitize(
     // Phase 1b — output pass for structured files. Uses the base scanner (so
     // `for_structured_pass` can strip structure-corrupting patterns) with
     // `full_store_pass`, building each file's format-preserving scanner from the
-    // now fully-populated store. Sequential, in command-line order, to keep
-    // first-writer-wins deterministic for any base-pattern/entropy values these
-    // files contribute.
+    // now fully-populated store (including stdin's values). Sequential, in
+    // command-line order, to keep first-writer-wins deterministic for any
+    // base-pattern/entropy values these files contribute.
     let full_fp = FileProcessor {
         full_store_pass: true,
         ..base_fp
@@ -412,17 +438,6 @@ pub(crate) fn run_sanitize(
         had_matches |= full_fp
             .process_plain_file(&input, Some(output.as_path()))
             .map_err(|e| (e, 1))?;
-    }
-
-    if !profiles.is_empty() {
-        for target in stdin_targets {
-            let InputTarget::Stdin { output } = target else {
-                unreachable!()
-            };
-            had_matches |= aug_fp
-                .process_stdin(output.as_deref())
-                .map_err(|e| (e, 1))?;
-        }
     }
 
     let file_results: Vec<Result<bool, (String, i32)>> = if phase2_targets.len() > 1 {

@@ -481,3 +481,84 @@ fn src_everything_all_processors_all_sources() {
         Some(stdin_json()),
     );
 }
+
+/// Cross-source ordering: a value that appears ONLY as a matched field in stdin
+/// and reappears in an *unmatched* location of a file (here a YAML comment) must
+/// still be redacted in that file. stdin is now discovered before the structured
+/// files are written, so the file's scanner sees the stdin-origin value.
+/// Regression: stdin used to be processed last, so this leaked.
+#[test]
+fn stdin_origin_value_redacted_in_file_comment() {
+    let marker = "STDINORIGIN";
+    let value = format!("{marker}-a\"b\\c-tok"); // special chars too
+    let dir = tempdir().unwrap();
+    let indir = dir.path().join("in");
+    let outdir = dir.path().join("out");
+    fs::create_dir_all(&indir).unwrap();
+    fs::create_dir_all(&outdir).unwrap();
+
+    // File: the value sits in a YAML comment (no field rule matches it).
+    let yaml = format!("# note may contain: {value}\nkeep: KEEPME\n");
+    let yaml_path = indir.join("conf.yaml");
+    fs::write(&yaml_path, yaml).unwrap();
+
+    // stdin (json): the value is a matched field `s1` — the only place it is
+    // structurally discoverable.
+    let stdin_bytes = format!(r#"{{"s1":{}}}"#, e_json(&value)).into_bytes();
+
+    let secrets = dir.path().join("secrets.json");
+    // Non-empty but unrelated, so redaction can only come from stdin discovery.
+    fs::write(
+        &secrets,
+        r#"[{"pattern":"zz-unrelated","kind":"literal","category":"auth_token"}]"#,
+    )
+    .unwrap();
+    let prof = dir.path().join("profile.json");
+    fs::write(
+        &prof,
+        r#"[{"processor":"json","extensions":[".json"],"fields":[{"pattern":"s1","category":"auth_token"}]},
+           {"processor":"yaml","extensions":[".yaml"],"fields":[{"pattern":"no_such_field","category":"auth_token"}]}]"#,
+    )
+    .unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+        .args([
+            yaml_path.to_str().unwrap(),
+            "-",
+            "--format",
+            "json",
+            "-s",
+            secrets.to_str().unwrap(),
+            "--profile",
+            prof.to_str().unwrap(),
+            "--output",
+            outdir.to_str().unwrap(),
+        ])
+        .env("SANITIZE_LOG", "debug")
+        .env("SANITIZE_NO_SETTINGS", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(&stdin_bytes).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "exited non-zero; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let mut collected = Vec::new();
+    collect_dir(&outdir, &mut collected);
+    collected.extend_from_slice(&out.stdout);
+    collected.extend_from_slice(&out.stderr);
+    let hay = String::from_utf8_lossy(&collected);
+    assert!(
+        !hay.contains(marker),
+        "LEAK: stdin-origin value survived in a file output / stdout / stderr"
+    );
+    // The file is still present and its non-secret content preserved.
+    let yaml_out = fs::read_to_string(outdir.join("conf-sanitized.yaml")).unwrap();
+    assert!(yaml_out.contains("KEEPME"), "file content not preserved");
+}

@@ -26,6 +26,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **stdin is now discovered before structured files are written.** A value seen
+  only as a matched field in stdin reappearing in another file (e.g. a comment)
+  used to leak from that file, because stdin was processed *after* the structured
+  output pass. stdin discovery now runs alongside files/archives, before the
+  augmented scanner and the structured-file output, so its values are redacted
+  everywhere. (A value that is structurally undiscoverable — not in the secrets
+  file and not a matched field anywhere — still cannot be redacted, by design.)
 - **No-leak hardening across input sources (found via an input-source matrix).**
   A new `tests/input_source_matrix_tests.rs` asserts the core rule — a secret
   never appears in output, stdout, or stderr/logs — across every combination of
