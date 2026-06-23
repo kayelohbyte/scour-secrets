@@ -176,18 +176,41 @@ impl FileProcessor<'_> {
         // discarded. Prefer edit mode so discovery handles the same inputs the
         // output pass does (multi-document YAML, source-escaped values); fall
         // back to the literal structured pass for processors without span edits.
-        let discovery =
-            match try_structured_edits(&input_bytes, &filename, fp.registry, fp.store, fp.profiles)
-            {
-                Some(result) => Some(result),
-                None => try_structured_processing(
+        let discovery = match try_structured_edits(
+            &input_bytes,
+            &filename,
+            fp.registry,
+            fp.store,
+            fp.profiles,
+        ) {
+            Some(Ok(v)) => Some(Ok(v)),
+            // Strict mode surfaces the edit-pass error. Otherwise fall back
+            // to the literal structured pass so the file's field values
+            // still populate the shared store — mirroring the output path
+            // (`structured_base_bytes`). Without this, a value the strict
+            // span parser rejects but the legacy parser accepts is never
+            // discovered, the augmented scanner is built without it, and the
+            // same value leaks from *another* file (comment / plain text /
+            // unmatched field).
+            Some(Err(e)) if cli.strict => Some(Err(e)),
+            Some(Err(e)) => {
+                warn!(error = %e, file = %input.display(), "structured edit pass failed during discovery, trying literal pass");
+                try_structured_processing(
                     &input_bytes,
                     &filename,
                     fp.registry,
                     fp.store,
                     fp.profiles,
-                ),
-            };
+                )
+            }
+            None => try_structured_processing(
+                &input_bytes,
+                &filename,
+                fp.registry,
+                fp.store,
+                fp.profiles,
+            ),
+        };
         if let Some(Err(e)) = discovery {
             if cli.strict {
                 return Err(format!(

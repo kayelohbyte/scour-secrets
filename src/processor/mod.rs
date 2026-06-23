@@ -216,9 +216,11 @@ pub(crate) fn check_size_and_decode<'a>(
 /// tree walk's [`replace_value`] / [`replace_by_signal`]. Returns `None` when
 /// the value is not matched or is filtered out (and so left unedited).
 ///
-/// Unlike the tree-walk path, this does **not** register source-escaped aliases:
-/// span editing replaces the exact source bytes, so escaped occurrences are
-/// handled directly.
+/// Like the tree-walk path, this also registers the source-escaped store
+/// aliases via [`register_escaped_aliases`]. The span edit replaces this
+/// field's own bytes directly, but the aliases are the phase-2 cross-location
+/// safety net for the same value reappearing — escaped differently — in an
+/// *unmatched* field of another file (see [`register_escaped_aliases`]).
 ///
 /// # Errors
 ///
