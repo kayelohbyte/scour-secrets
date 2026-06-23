@@ -139,8 +139,11 @@ pub struct SecretEntry {
     #[serde(default = "default_category")]
     pub category: String,
 
-    /// Human-readable label for stats reporting. Defaults to a truncated
-    /// version of `pattern` if omitted.
+    /// Human-readable label for stats reporting (appears in the redaction
+    /// summary, findings, and reports). When omitted: a `regex` pattern defaults
+    /// to a truncated form of its (non-secret) pattern text; a `literal` pattern
+    /// — whose text *is* the secret value — defaults to `literal:<category>` so
+    /// the value is never exposed in reporting output.
     #[serde(default)]
     pub label: Option<String>,
 
