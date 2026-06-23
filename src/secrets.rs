@@ -558,10 +558,18 @@ pub fn entries_to_patterns(entries: &[SecretEntry]) -> PatternCompileResult {
             continue;
         }
         let category = parse_category(&entry.category);
-        let label = entry
-            .label
-            .clone()
-            .unwrap_or_else(|| truncate_label(&entry.pattern));
+        // A `literal` pattern's text IS the secret value, and labels surface in
+        // the redaction summary, findings, reports, and logs — so a literal must
+        // never default its label to its own pattern (that leaks the secret).
+        // Fall back to the category instead. A `regex` pattern is not itself a
+        // secret, so its (truncated) text remains a safe, informative default.
+        let label = entry.label.clone().unwrap_or_else(|| {
+            if entry.kind == "literal" {
+                format!("literal:{}", entry.category)
+            } else {
+                truncate_label(&entry.pattern)
+            }
+        });
 
         let result = match entry.kind.as_str() {
             "regex" => ScanPattern::from_regex(&entry.pattern, category, label),
@@ -1113,11 +1121,25 @@ label = "openai_key"
     }
 
     #[test]
-    fn default_label_from_pattern() {
+    fn literal_default_label_is_category_not_value() {
+        // A `literal` pattern's text IS the secret value, and labels surface in
+        // summaries / reports / logs — so the default label must be the
+        // category, never the value.
         let json = r#"[{"pattern": "short"}]"#;
         let entries = parse_secrets(json.as_bytes(), Some(SecretsFormat::Json)).unwrap();
         let (patterns, _) = entries_to_patterns(&entries);
-        assert_eq!(patterns[0].label(), "short");
+        assert_eq!(patterns[0].label(), "literal:custom:secret");
+        assert!(!patterns[0].label().contains("short"));
+    }
+
+    #[test]
+    fn regex_default_label_is_pattern() {
+        // A regex pattern is not itself a secret, so its text remains the
+        // informative default label.
+        let json = r#"[{"pattern": "ab[0-9]+", "kind": "regex"}]"#;
+        let entries = parse_secrets(json.as_bytes(), Some(SecretsFormat::Json)).unwrap();
+        let (patterns, _) = entries_to_patterns(&entries);
+        assert_eq!(patterns[0].label(), "ab[0-9]+");
     }
 
     // ---- looks_encrypted ----
@@ -1290,7 +1312,7 @@ label = "openai_key"
         let (patterns, errors) = entries_to_patterns(&entries);
         assert_eq!(patterns.len(), 1);
         assert!(errors.is_empty());
-        assert_eq!(patterns[0].label(), "secret");
+        assert_eq!(patterns[0].label(), "literal:custom:secret");
     }
 
     #[test]
@@ -1320,7 +1342,7 @@ label = "openai_key"
             "only the literal entry should produce a pattern"
         );
         assert!(errors.is_empty());
-        assert_eq!(patterns[0].label(), "secret");
+        assert_eq!(patterns[0].label(), "literal:custom:secret");
     }
 
     #[test]

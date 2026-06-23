@@ -2,6 +2,31 @@
 
 use super::*;
 
+/// Resolve the effective filename used for format detection of a *file* input.
+///
+/// A file whose own name already maps to a structured format keeps that format;
+/// `--format` only fills in for inputs that aren't otherwise typeable (e.g. an
+/// extensionless file, or a `.txt` that is really JSON). This prevents
+/// `--format` — which a piped stdin *requires* — from silently forcing an
+/// accompanying `.yaml`/`.csv`/… file to be parsed as the stdin format, which
+/// would produce no structured edits and leak that file's escaped values.
+fn effective_file_format_name(input: &Path, cli_format: Option<&str>) -> String {
+    let real = input
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_string();
+    if is_structured_filename(&real) {
+        return real;
+    }
+    match cli_format {
+        Some(fmt) => format_to_ext(fmt)
+            .map(|ext| format!("override.{ext}"))
+            .unwrap_or(real),
+        None => real,
+    }
+}
+
 impl FileProcessor<'_> {
     /// Process a plain (non-archive) file. Returns `true` if matches were found.
     pub(crate) fn process_plain_file(
@@ -28,17 +53,7 @@ impl FileProcessor<'_> {
             return Ok(false);
         }
 
-        let filename = if let Some(ref fmt) = cli.format {
-            format_to_ext(fmt)
-                .map(|ext| format!("override.{ext}"))
-                .unwrap_or_default()
-        } else {
-            input
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string()
-        };
+        let filename = effective_file_format_name(input, cli.format.as_deref());
 
         let structured_ext = is_structured_filename(&filename);
 
@@ -120,17 +135,7 @@ impl FileProcessor<'_> {
             return Ok(());
         }
 
-        let filename = if let Some(ref fmt) = cli.format {
-            format_to_ext(fmt)
-                .map(|ext| format!("override.{ext}"))
-                .unwrap_or_default()
-        } else {
-            input
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("")
-                .to_string()
-        };
+        let filename = effective_file_format_name(input, cli.format.as_deref());
 
         if !is_structured_filename(&filename) || cli.force_text {
             return Ok(());

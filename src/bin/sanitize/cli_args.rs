@@ -105,8 +105,11 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) encrypted_secrets: bool,
 
-    /// Force input format, overriding file-extension detection.
-    /// Required when reading from stdin with structured data.
+    /// Force input format for stdin and for inputs that aren't otherwise
+    /// typeable (e.g. an extensionless file). Required when reading structured
+    /// data from stdin. A file whose own extension already maps to a structured
+    /// format keeps that format, so this never forces an accompanying
+    /// `.yaml`/`.csv`/… file to be misparsed as the stdin format.
     /// Values: text, json, jsonl, yaml, xml, csv, key-value, toml, env, ini, log.
     #[arg(short = 'f', long, value_name = "FMT")]
     pub(crate) format: Option<String>,
