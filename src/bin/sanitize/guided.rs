@@ -190,7 +190,7 @@ pub(crate) fn template_body_balanced() -> &'static str {
   category: mac_address
   label: mac_address
 
-- pattern: '/(?:home|Users)/[A-Za-z0-9_.-]+'
+- pattern: '/(?:home|Users)/([A-Za-z0-9_-]+)'
   kind: regex
   category: file_path
   label: user_home_path
@@ -334,7 +334,7 @@ pub(crate) fn template_body_aggressive() -> &'static str {
   category: mac_address
   label: mac_address
 
-- pattern: '/(?:home|Users)/[A-Za-z0-9_.-]+'
+- pattern: '/(?:home|Users)/([A-Za-z0-9_-]+)'
   kind: regex
   category: file_path
   label: user_home_path

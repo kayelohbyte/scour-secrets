@@ -245,7 +245,13 @@ pub(super) fn load_run_resources(
 
     let nothing_specified =
         cli.secrets_file.is_none() && cli.app.is_empty() && cli.profile.is_none();
-    let load_defaults = nothing_specified || (!cli.app.is_empty() && cli.secrets_file.is_none());
+    // The built-in baseline (generic PII + common tokens) is a floor that app
+    // bundles layer on top of: load it for plain runs and for ANY `--app` run.
+    // We key off `cli.app` rather than `secrets_file.is_none()` because the app
+    // write-back sets secrets_file to the seeded app copy before we get here,
+    // which previously suppressed the baseline under `--app`. `--no-baseline`
+    // opts out for app-only precision.
+    let load_defaults = !cli.no_baseline && (nothing_specified || !cli.app.is_empty());
     if load_defaults {
         all_allow_patterns.extend(common_allow_patterns());
     }

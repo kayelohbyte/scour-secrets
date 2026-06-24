@@ -42,7 +42,9 @@ impl FileProcessor<'_> {
                 let structured_base =
                     structured_base_bytes(&input_bytes, &format!("stdin.{ext}"), &fp, cli.strict)?;
 
-                if let Some(base) = structured_base {
+                // The structured edit count is ignored here: the stdin path
+                // already derives `structured_reps` from store growth below.
+                if let Some((base, _field_edits)) = structured_base {
                     {
                         let per_content_scanner =
                             build_format_preserving_scanner(fp.scanner, fp.store, store_snapshot)

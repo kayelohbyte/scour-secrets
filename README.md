@@ -119,7 +119,7 @@ sanitize server.log -s secrets.template.balanced.yaml
 
 ### App bundles — zero config for common applications
 
-Built-in bundles for 27 applications pair a secrets pattern set with a structured field profile so field-level sanitization works out of the box, no authoring required.
+Built-in bundles for 28 applications pair a secrets pattern set with a structured field profile so field-level sanitization works out of the box, no authoring required.
 
 ```bash
 sanitize /etc/gitlab/gitlab.rb --app gitlab
@@ -130,7 +130,7 @@ sanitize values.yaml --app kubernetes
 sanitize apps
 ```
 
-Built-in bundles: `ansible`, `aws-cli`, `bruno`, `circleci`, `datadog`, `django`, `docker-compose`, `elasticsearch`, `fstab`, `github-actions`, `gitlab`, `grafana`, `har`, `heroku`, `insomnia`, `kubernetes`, `laravel`, `mongodb`, `mysql`, `nginx`, `postgresql`, `postman`, `rails`, `redis`, `splunk`, `spring-boot`, `terraform`.
+Built-in bundles: `ansible`, `aws-cli`, `bruno`, `circleci`, `datadog`, `dataiku`, `django`, `docker-compose`, `elasticsearch`, `fstab`, `github-actions`, `gitlab`, `grafana`, `har`, `heroku`, `insomnia`, `kubernetes`, `laravel`, `mongodb`, `mysql`, `nginx`, `postgresql`, `postman`, `rails`, `redis`, `splunk`, `spring-boot`, `terraform`.
 
 ---
 

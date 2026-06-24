@@ -153,10 +153,13 @@ impl ProcessorRegistry {
         content: &[u8],
         profile: &FileTypeProfile,
         store: &MappingStore,
-    ) -> Result<Option<Vec<u8>>> {
+    ) -> Result<Option<(Vec<u8>, usize)>> {
         match self.find_processor(content, profile) {
             Some(proc) => match proc.process_to_edits(content, profile, store)? {
-                Some(edits) => Ok(Some(super::apply_edits(content, edits))),
+                Some(edits) => {
+                    let count = edits.len();
+                    Ok(Some((super::apply_edits(content, edits), count)))
+                }
                 None => Ok(None),
             },
             None => Ok(None),

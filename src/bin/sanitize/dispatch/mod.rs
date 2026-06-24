@@ -360,7 +360,7 @@ fn try_structured_edits(
     registry: &Arc<ProcessorRegistry>,
     store: &Arc<MappingStore>,
     profiles: &[FileTypeProfile],
-) -> Option<Result<Vec<u8>, String>> {
+) -> Option<Result<(Vec<u8>, usize), String>> {
     let profile = profiles.iter().find(|p| p.matches_filename(filename))?;
     match registry.process_to_edits(content, profile, store) {
         Ok(Some(result)) => Some(Ok(result)),
@@ -370,27 +370,31 @@ fn try_structured_edits(
 }
 
 /// Compute the bytes the format-preserving scanner should run over for a
-/// structured file: edit-applied bytes when the processor supports span edits,
-/// the original bytes when only the literal structured pass applies (store still
-/// gets populated), or `None` when no structured processing happened (caller
-/// uses the plain scanner over the originals).
+/// structured file, paired with the number of in-place field edits made (so the
+/// caller can count profile-field redactions in the run summary): edit-applied
+/// bytes + edit count when the processor supports span edits, the original bytes
+/// + 0 when only the literal structured pass applies (store still gets populated
+/// and those values are counted later by the scanner), or `None` when no
+/// structured processing happened (caller uses the plain scanner over the
+/// originals).
 pub(crate) fn structured_base_bytes(
     input_bytes: &[u8],
     filename: &str,
     fp: &FileProcessor,
     strict: bool,
-) -> Result<Option<Vec<u8>>, String> {
+) -> Result<Option<(Vec<u8>, usize)>, String> {
     // Prefer span-based edit mode: exact, format-preserving, leak-free.
     match try_structured_edits(input_bytes, filename, fp.registry, fp.store, fp.profiles) {
-        Some(Ok(edited)) => return Ok(Some(edited)),
+        Some(Ok((edited, count))) => return Ok(Some((edited, count))),
         Some(Err(e)) if strict => return Err(format!("structured processing failed: {e}")),
         Some(Err(e)) => warn!(error = %e, "structured edit pass failed, trying literal pass"),
         None => {}
     }
     // Fall back to the literal structured pass (populates the store; the
-    // format-preserving scanner then runs over the original bytes).
+    // format-preserving scanner then runs over the original bytes and counts the
+    // re-matched values, so the edit count here is 0).
     match try_structured_processing(input_bytes, filename, fp.registry, fp.store, fp.profiles) {
-        Some(Ok(_)) => Ok(Some(input_bytes.to_vec())),
+        Some(Ok(_)) => Ok(Some((input_bytes.to_vec(), 0))),
         Some(Err(e)) if strict => Err(format!("structured processing failed: {e}")),
         Some(Err(e)) => {
             warn!(error = %e, "structured processing failed, falling back to scanner");

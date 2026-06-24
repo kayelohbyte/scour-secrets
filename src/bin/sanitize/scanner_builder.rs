@@ -129,29 +129,49 @@ pub(crate) fn balanced_secret_entries() -> Vec<SecretEntry> {
             "jwt",
             "jwt",
         ),
-        e(r#"https?://[^\s"'<>;]+"#, "url", "url"),
+        // `credential_url` must precede the generic `url` detector: both match a
+        // `https://user:pass@host` span to the same end, and on that tie the
+        // earlier pattern wins — so the precise (capture-group) rule has to come
+        // first, or every credential-bearing https URL is redacted whole.
+        //
+        // Capture group 1 is the `user:pass` credential only, so the scheme,
+        // host, port, path, and query (`@db.host:5432/orders?sslmode=require`)
+        // are preserved for troubleshooting — only the credential is redacted.
+        // The username is optional (`{0,128}`) to catch the password-only form
+        // `redis://:secret@host`, common for Redis and otherwise missed.
         e(
-            r#"[a-z][a-z0-9+.-]+://[^:@\s]{1,128}:[^@\s]{1,128}@[^\s"'<>]+"#,
+            r#"[a-z][a-z0-9+.-]+://([^:@\s]{0,128}:[^@\s]{1,128})@[^\s"'<>]+"#,
             "url",
             "credential_url",
         ),
+        e(r#"https?://[^\s"'<>;]+"#, "url", "url"),
         e(
             r"-----BEGIN (?:RSA |EC |OPENSSH |)PRIVATE KEY-----",
             "auth_token",
             "private_key_header",
         ),
+        // Capture group 1 is the value only, so the `key=` keyword and any
+        // trailing structured context (`,ssl=True`, `&sslmode=require`) are
+        // preserved for troubleshooting — only the secret itself is redacted.
         e(
-            r#"(?i)(?:api_key|api_secret|access_token|client_secret|private_key|secret_key|auth_key|signing_key|jwt_secret|jwt_key)[\s:="']+[A-Za-z0-9._~+/=-]{16,}"#,
+            r#"(?i)(?:api_key|api_secret|access_token|client_secret|private_key|secret_key|auth_key|signing_key|jwt_secret|jwt_key)[\s:="']+([A-Za-z0-9._~+/=-]{16,})"#,
             "auth_token",
             "secret_kv",
         ),
+        // Value class excludes the structured separators `, ; &` so a
+        // connection-string `password=secret,ssl=True` redacts only `secret`
+        // and keeps `,ssl=True`. Capture group 1 keeps the `password=` keyword.
         e(
-            r#"(?i)(?:password|passwd|pwd)[\s:="']+[^\s"']{6,}"#,
+            r#"(?i)(?:password|passwd|pwd)[\s:="']+([^\s"',;&]{6,})"#,
             "custom:password",
             "password_kv",
         ),
+        // Capture only the username segment so the `/home/` prefix and the rest
+        // of the path are preserved (`/home/alice/x` → `/home/‹token›/x`). No
+        // `.` in the charset: POSIX usernames never contain one, and excluding
+        // it stops the match from swallowing file paths like `/home/foo.html`.
         e(
-            r"/(?:home|Users)/[A-Za-z0-9_.-]+",
+            r"/(?:home|Users)/([A-Za-z0-9_-]+)",
             "file_path",
             "user_home_path",
         ),
@@ -172,8 +192,10 @@ pub(crate) fn balanced_secret_entries() -> Vec<SecretEntry> {
             "github_pat_fine_grained",
         ),
         e(r"\bAIza[A-Za-z0-9_-]{35}\b", "auth_token", "gcp_api_key"),
+        // Full set of AWS unique-ID prefixes (access keys, STS, roles, users,
+        // groups, etc.) so bundles don't each re-implement an AWS key rule.
         e(
-            r"\b(?:AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}\b",
+            r"\b(?:ABIA|ACCA|AGPA|AIDA|AIPA|AKIA|ANPA|ANVA|APKA|AROA|ASCA|ASIA)[A-Z0-9]{16}\b",
             "auth_token",
             "aws_access_key_id",
         ),

@@ -17,34 +17,22 @@
   include: [".env", ".env.local", ".env.production", ".env.staging",
             ".env.development", ".env.test", "*.env"]
   fields:
-    # Heroku Postgres / JDBC
-    - pattern: "DATABASE_URL"
-      category: url
-      label: heroku_database_url
-    - pattern: "JDBC_DATABASE_URL"
-      category: url
-      label: heroku_jdbc_database_url
+    # Connection-string URLs (DATABASE_URL, JDBC_DATABASE_URL, REDIS_URL,
+    # HEROKU_REDIS_*_URL, CLOUDINARY_URL, BONSAI_URL) are handled by the baseline
+    # `credential_url` / `password_kv` detectors, which redact only the embedded
+    # credential and preserve host/port/db for troubleshooting. The explicit
+    # JDBC username/password env vars below are kept (they're not URLs).
     - pattern: "JDBC_DATABASE_USERNAME"
       category: name
       label: heroku_jdbc_db_user
     - pattern: "JDBC_DATABASE_PASSWORD"
       category: custom:password
       label: heroku_jdbc_db_password
-    # Heroku Redis (plain + colored instances e.g. HEROKU_REDIS_PINK_URL)
-    - pattern: "REDIS_URL"
-      category: url
-      label: heroku_redis_url
-    - pattern: "HEROKU_REDIS_*_URL"
-      category: url
-      label: heroku_redis_instance_url
     # Rails master key (often stored in Heroku config vars)
     - pattern: "RAILS_MASTER_KEY"
       category: auth_token
       label: rails_master_key
-    # Cloudinary
-    - pattern: "CLOUDINARY_URL"
-      category: url
-      label: cloudinary_url
+    # Cloudinary URL (cloudinary://key:secret@cloud) — baseline credential_url.
     # SendGrid
     - pattern: "SENDGRID_API_KEY"
       category: auth_token
@@ -92,7 +80,4 @@
     - pattern: "SCOUT_KEY"
       category: auth_token
       label: scout_apm_key
-    # Bonsai Elasticsearch
-    - pattern: "BONSAI_URL"
-      category: url
-      label: bonsai_url
+    # Bonsai Elasticsearch URL (https://user:pass@host) — baseline credential_url.

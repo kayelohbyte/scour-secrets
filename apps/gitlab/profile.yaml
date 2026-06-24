@@ -49,6 +49,29 @@
     - pattern: "*_fingerprint*"
       category: auth_token
       label: gitlab_rb_fingerprint
+    # OAuth/Azure/object-store identifiers — also in gitlab-scrubber's
+    # sensitiveKeyPatterns but previously omitted here.
+    - pattern: "*client_id*"
+      category: auth_token
+      label: gitlab_rb_client_id
+    - pattern: "*app_id*"
+      category: auth_token
+      label: gitlab_rb_app_id
+    - pattern: "*application_id*"
+      category: auth_token
+      label: gitlab_rb_application_id
+    - pattern: "*tenant_id*"
+      category: auth_token
+      label: gitlab_rb_tenant_id
+    - pattern: "*accountname*"
+      category: auth_token
+      label: gitlab_rb_account_name
+    - pattern: "*_account_name*"
+      category: auth_token
+      label: gitlab_rb_account_name2
+    - pattern: "*bucket*"
+      category: auth_token
+      label: gitlab_rb_bucket
     - pattern: "*_dsn*"
       category: url
       label: gitlab_rb_sentry_dsn
@@ -131,7 +154,7 @@
 # --- GitLab Rails production JSON log (production_json.log) ---
 # Sensitive fields per gitlab-scrubber structured/field_extractors.go:
 # keys containing "user"/"author", "ip", "email", project path fields.
-- processor: json
+- processor: jsonl
   extensions: [".log"]
   include:
     - "production_json.log"
@@ -156,10 +179,16 @@
     - pattern: "meta.project"
       category: name
       label: rails_log_meta_project
+    - pattern: "meta.namespace"
+      category: name
+      label: rails_log_meta_namespace
+    - pattern: "meta.root_namespace"
+      category: name
+      label: rails_log_meta_root_namespace
 
 # --- Sidekiq JSON log (sidekiq.log) ---
 # "args" is scrubbed entirely — job arguments can contain arbitrary secrets.
-- processor: json
+- processor: jsonl
   extensions: [".log"]
   include:
     - "sidekiq.log"
@@ -180,7 +209,7 @@
       label: sidekiq_log_meta_remote_ip
 
 # --- GitLab Workhorse log (gitlab-workhorse.log / workhorse.log) ---
-- processor: json
+- processor: jsonl
   extensions: [".log"]
   include:
     - "gitlab-workhorse.log"
@@ -201,7 +230,7 @@
 # --- Gitaly log (gitaly.log) ---
 # grpc.request.glProjectPath contains the group/project path.
 # grpc.request.repoPath is a content-addressed hash path — not user data, skip.
-- processor: json
+- processor: jsonl
   extensions: [".log"]
   include:
     - "gitaly.log"
@@ -217,7 +246,7 @@
 
 # --- GitLab Shell log (gitlab-shell.log / gitlab_shell.log) ---
 # originalCommand leaks group/project.git from git-upload-pack / git-receive-pack calls.
-- processor: json
+- processor: jsonl
   extensions: [".log"]
   include:
     - "gitlab-shell.log"

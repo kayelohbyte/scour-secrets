@@ -628,3 +628,108 @@ fn cross_archive_duplicate_value_redacted_in_both_archives() {
         "a2 leaked the shared value (cross-archive seeding failed):\n{a2_out}"
     );
 }
+
+/// A profile that declares a non-structured extension (e.g. `.log`) must still
+/// route the file through structured processing — the file-format gate is
+/// profile-aware, not extension-only. Regression: `.log` JSONL log profiles
+/// (GitLab production/sidekiq/etc.) were silently dropped to the scanner and
+/// never fired. Also covers JSONL: every line must be scrubbed, not just the
+/// first.
+#[test]
+fn profile_custom_log_extension_is_structured() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("production_json.log");
+    // Two JSON objects on separate lines (JSONL) — the real GitLab log shape.
+    fs::write(
+        &input,
+        "{\"meta\":{\"user\":\"alice-secret\"}}\n{\"meta\":{\"user\":\"bob-secret\"}}\n",
+    )
+    .unwrap();
+    let output = dir.path().join("out.log");
+
+    let secrets = dir.path().join("secrets.json");
+    fs::write(&secrets, b"[]").unwrap();
+    let profile = dir.path().join("profile.json");
+    fs::write(
+        &profile,
+        r#"[{"processor":"jsonl","extensions":[".log"],"include":["production_json.log"],"fields":[{"pattern":"meta.user","category":"name"}]}]"#,
+    )
+    .unwrap();
+
+    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+        .args([
+            input.to_str().unwrap(),
+            "-s",
+            secrets.to_str().unwrap(),
+            "--profile",
+            profile.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .env("SANITIZE_LOG", "error")
+        .env("SANITIZE_NO_SETTINGS", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let result = fs::read_to_string(&output).unwrap();
+    assert!(
+        !result.contains("alice-secret"),
+        "first-line value leaked (profile .log not structured):\n{result}"
+    );
+    assert!(
+        !result.contains("bob-secret"),
+        "second-line value leaked (JSONL only scrubbed first object):\n{result}"
+    );
+}
+
+/// In-place structured field edits must be counted in the run summary.
+/// Regression: profile field redactions on a plain structured file were applied
+/// but never reflected in `total_matches`, so the summary printed
+/// "Redacted: nothing" while the file was correctly scrubbed.
+#[test]
+fn structured_field_edits_are_counted_in_summary() {
+    let dir = tempdir().unwrap();
+    let input = dir.path().join("values.yaml");
+    // Two Helm credential fields the gitlab bundle redacts via span edits only
+    // (no baseline scanner pattern matches these key paths).
+    fs::write(
+        &input,
+        "global:\n  initialRootPassword: superSecret123\n  smtp:\n    password: smtpPass456\n",
+    )
+    .unwrap();
+    let output = dir.path().join("out.yaml");
+
+    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+        .args([
+            input.to_str().unwrap(),
+            "--app",
+            "gitlab",
+            "-o",
+            output.to_str().unwrap(),
+        ])
+        .env("SANITIZE_LOG", "error")
+        .env("SANITIZE_NO_SETTINGS", "1")
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    // The summary is printed to stderr. It must report the field edits, not
+    // "nothing".
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("profile-field"),
+        "summary should count structured field edits; stderr was:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Redacted: nothing"),
+        "summary undercounted structured edits; stderr was:\n{stderr}"
+    );
+    // And the values were actually redacted.
+    let result = fs::read_to_string(&output).unwrap();
+    assert!(!result.contains("superSecret123") && !result.contains("smtpPass456"));
+}

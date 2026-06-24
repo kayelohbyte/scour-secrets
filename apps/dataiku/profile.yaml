@@ -1,0 +1,238 @@
+# Dataiku DSS — instance diagnosis (run_diagnosis) + DATA_DIR config/run files
+#
+# Targets the structured JSON/INI files a DSS diagnosis bundle ships under
+# DATA_DIR (home/<user>/dss/...): connection credentials, local user password
+# hashes, internal DB server keys, LDAP/SSO/SMTP settings, the license block,
+# API keys, and the install id.
+#
+# Design note (generalization to files we don't have): credential fields are
+# matched by *substring* globs (`*password*`, `*secret*`) which match at ANY
+# nesting depth and across array elements, so connection types and config keys
+# not present in the sample dump are still caught. `min_length` guards keep the
+# broad globs from redacting `false` / `0` / `[]`. Values discovered here are
+# auto-seeded as literals so the streaming scanner scrubs them from the
+# unstructured dumps too (diag.txt, stacks.txt, *.log, *_listing.txt).
+
+# --- Connections (config/connections.json) -------------------------------
+# Credentials live under connections.<name>.params.* — shape varies by type
+# (SQL, S3/GCS/Azure, Snowflake, OAuth, SSH...). Match by credential keyword.
+- processor: json
+  extensions: [".json"]
+  include: ["connections.json", "*/connections.json"]
+  fields:
+    - pattern: "*password*"
+      category: custom:password
+      label: dku_connection_password
+      min_length: 1
+    - pattern: "*passphrase*"
+      category: custom:password
+      label: dku_connection_passphrase
+      min_length: 1
+    - pattern: "*secret*"
+      category: auth_token
+      label: dku_connection_secret
+      min_length: 8
+    - pattern: "*token*"
+      category: auth_token
+      label: dku_connection_token
+      min_length: 8
+    - pattern: "*accessKey*"
+      category: auth_token
+      label: dku_connection_access_key
+      min_length: 8
+    - pattern: "*.privateKey"
+      category: auth_token
+      label: dku_connection_private_key
+      min_length: 8
+    - pattern: "*.apiKey"
+      category: auth_token
+      label: dku_connection_api_key
+      min_length: 8
+    - pattern: "*.credentials"
+      category: auth_token
+      label: dku_connection_credentials
+      min_length: 8
+    - pattern: "*.user"
+      category: name
+      label: dku_connection_user
+      min_length: 3
+    - pattern: "*.host"
+      category: hostname
+      label: dku_connection_host
+      min_length: 4
+
+# --- Local users (config/users.json) -------------------------------------
+# Password hashes (pbkdf2_sha256:...), emails, display names, per-user secrets,
+# and IdP group mappings.
+- processor: json
+  extensions: [".json"]
+  include: ["users.json", "*/users.json"]
+  fields:
+    - pattern: "*.password"
+      category: custom:password
+      label: dku_user_password_hash
+      min_length: 1
+    - pattern: "*.email"
+      category: email
+      label: dku_user_email
+    - pattern: "*.displayName"
+      category: name
+      label: dku_user_display_name
+      min_length: 3
+    - pattern: "*.login"
+      category: name
+      label: dku_user_login
+      min_length: 3
+    - pattern: "*secret*"
+      category: auth_token
+      label: dku_user_secret
+      min_length: 8
+    - pattern: "*GroupNames"
+      category: name
+      label: dku_user_idp_group
+      min_length: 3
+
+# --- General settings (config/general-settings.json) ---------------------
+# LDAP bind credentials, SSO/OAuth client secrets, SMTP, signing/auth keys.
+- processor: json
+  extensions: [".json"]
+  include: ["general-settings.json", "*/general-settings.json"]
+  fields:
+    - pattern: "*password*"
+      category: custom:password
+      label: dku_settings_password
+      min_length: 1
+    - pattern: "*secret*"
+      category: auth_token
+      label: dku_settings_secret
+      min_length: 8
+    - pattern: "*bindDN*"
+      category: custom:dn
+      label: dku_settings_ldap_bind_dn
+      min_length: 1
+    - pattern: "*.clientSecret"
+      category: auth_token
+      label: dku_settings_client_secret
+      min_length: 8
+    - pattern: "*.clientId"
+      category: auth_token
+      label: dku_settings_client_id
+      min_length: 8
+    - pattern: "*AuthenticationKeys"
+      category: auth_token
+      label: dku_settings_auth_keys
+      min_length: 8
+
+# --- License block (config/license.json) ---------------------------------
+- processor: json
+  extensions: [".json"]
+  include: ["license.json", "*/license.json"]
+  fields:
+    - pattern: "*.email"
+      category: email
+      label: dku_license_email
+    - pattern: "*.company"
+      category: name
+      label: dku_license_company
+      min_length: 3
+    - pattern: "*.name"
+      category: name
+      label: dku_license_name
+      min_length: 3
+    - pattern: "content.instanceId"
+      category: custom:instance_id
+      label: dku_license_instance_id
+    - pattern: "content.licenseId"
+      category: auth_token
+      label: dku_license_id
+    - pattern: "r1Sig"
+      category: auth_token
+      label: dku_license_sig
+    - pattern: "r1Pub"
+      category: auth_token
+      label: dku_license_pubkey
+    - pattern: "r1PubSig"
+      category: auth_token
+      label: dku_license_pubkey_sig
+
+# --- Internal DB server keys (run/dbservers.json) ------------------------
+# servers.<name>.key — per-database access keys for the embedded H2 servers.
+- processor: json
+  extensions: [".json"]
+  include: ["dbservers.json", "*/dbservers.json"]
+  fields:
+    - pattern: "*.key"
+      category: auth_token
+      label: dku_dbserver_key
+      min_length: 8
+
+# --- API keys + config key (apikeys.json, public-apikeys.json, configkey.json) ---
+- processor: json
+  extensions: [".json"]
+  include:
+    - "apikeys.json"
+    - "public-apikeys.json"
+    - "configkey.json"
+    - "*/apikeys.json"
+    - "*/public-apikeys.json"
+    - "*/configkey.json"
+  fields:
+    - pattern: "*key*"
+      category: auth_token
+      label: dku_apikey
+      min_length: 8
+    - pattern: "*secret*"
+      category: auth_token
+      label: dku_apikey_secret
+      min_length: 8
+    - pattern: "*.label"
+      category: name
+      label: dku_apikey_label
+      min_length: 3
+
+# --- Project variables (params.json, variables.json, localvariables.json) ---
+# User-defined project variables routinely hold inlined credentials.
+- processor: json
+  extensions: [".json"]
+  include:
+    - "params.json"
+    - "variables.json"
+    - "localvariables.json"
+    - "*/params.json"
+    - "*/variables.json"
+    - "*/localvariables.json"
+  fields:
+    - pattern: "*password*"
+      category: custom:password
+      label: dku_project_var_password
+      min_length: 1
+    - pattern: "*secret*"
+      category: auth_token
+      label: dku_project_var_secret
+      min_length: 8
+    - pattern: "*token*"
+      category: auth_token
+      label: dku_project_var_token
+      min_length: 8
+    - pattern: "*key*"
+      category: auth_token
+      label: dku_project_var_key
+      min_length: 12
+    - pattern: "*credential*"
+      category: auth_token
+      label: dku_project_var_credential
+      min_length: 8
+
+# --- Install descriptor (install.ini) ------------------------------------
+# [general] installid is a stable per-install identifier.
+- processor: ini
+  extensions: [".ini"]
+  include: ["install.ini", "*/install.ini"]
+  fields:
+    - pattern: "*.installid"
+      category: auth_token
+      label: dku_install_id
+    - pattern: "*password*"
+      category: custom:password
+      label: dku_ini_password
+      min_length: 1

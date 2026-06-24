@@ -7,15 +7,11 @@
     - pattern: "SECRET_KEY"
       category: auth_token
       label: django_secret_key
-    - pattern: "DATABASE_URL"
-      category: url
-      label: django_db_url
-    - pattern: "CELERY_BROKER_URL"
-      category: url
-      label: django_broker_url
-    - pattern: "REDIS_URL"
-      category: url
-      label: django_redis_url
+    # DATABASE_URL / CELERY_BROKER_URL / REDIS_URL connection strings are handled
+    # by the baseline `credential_url` detector, which redacts only the embedded
+    # credential and preserves scheme/host/port/db/query for troubleshooting. A
+    # whole-value field rule here would over-redact (host included, even with no
+    # credential present).
     - pattern: "EMAIL_HOST_PASSWORD"
       category: custom:password
       label: django_email_password

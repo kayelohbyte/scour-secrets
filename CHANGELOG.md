@@ -7,7 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`--no-baseline` flag.** Opts out of the built-in baseline detectors for
+  app-only precision (use an app bundle's curated rules and nothing else). The
+  baseline is composed by default; this is the escape hatch when over-redaction
+  matters more than recall.
+
 ### Changed
+
+- **Connection-string and `key=value` secrets are redacted in place, preserving
+  surrounding context.** The baseline `credential_url`, `password_kv`, and
+  `secret_kv` detectors now capture just the secret, so the scheme, host, port,
+  database, query params, and the `key=` name survive:
+  `postgres://app:secret@db:5432/orders?sslmode=require` →
+  `postgres://‹token›@db:5432/orders?sslmode=require`, and
+  `password=secret,ssl=True` → `password=‹token›,ssl=True`. The `password_kv`
+  value class also stops at the structured separators `, ; &` so trailing
+  parameters aren't swallowed. Previously the whole URI / whole `key=value…` run
+  was replaced, destroying troubleshooting context. `credential_url` also now
+  matches the password-only form `redis://:secret@host` (empty username), which
+  was previously only caught incidentally (by the email detector) and leaked on
+  `localhost`/IP hosts. (These improvements made the whole-URI connection-string
+  rules in the `mongodb`, `mysql`, and `redis` bundles redundant — removed; see
+  Fixed — and the `DATABASE_URL` / `REDIS_URL` / `CELERY_BROKER_URL` /
+  `JDBC_DATABASE_URL` / `CLOUDINARY_URL` / `BONSAI_URL` whole-value field rules
+  in the `django`, `mysql`, `heroku`, `rails`, and `redis` bundles were removed
+  in favor of the precise baseline, plus `ELASTICSEARCH_HOSTS` in the
+  `elasticsearch` bundle and `*.datasource.url` / `spring.datasource.url` in the
+  `spring-boot` bundle, whose URL holds no secret — the credentials are separate
+  username/password properties.) `credential_url` is now ordered before the generic
+  `url` detector so a credential-bearing `https://user:pass@host` URL is redacted
+  precisely rather than whole (the generic detector still redacts plain URLs).
+- **The built-in baseline detectors are now composed under `--app`, not just on
+  a plain run.** App bundles are now a layer *on top of* the generic baseline
+  (email, IP, UUID, URL, home path, common token shapes) rather than a
+  replacement for it, so `sanitize --app <name>` scrubs generic PII in
+  unstructured dumps that the bundle's curated rules don't target. Previously the
+  baseline only loaded when no app/secrets file was given, so e.g. a Dataiku
+  diagnosis sanitized with `--app dataiku` still shipped every email, IP, UUID,
+  and `/home/<user>` path in its `*.txt`/log files. Pass `--no-baseline` for the
+  old app-only behavior. This raises recall (the right default for a one-way
+  egress scrubber) at the cost of more aggressive redaction; bundle allow-lists
+  tune the false positives.
+- **`user_home_path` redacts only the username, preserving the path.**
+  `/home/alice/.ssh/id_rsa` now becomes `/home/‹token›/.ssh/id_rsa` instead of
+  replacing the whole `/home/alice` span, so sanitized paths stay readable. The
+  segment charset no longer includes `.`, so the match can't swallow file
+  extensions (`/home/foo.html` → `/home/‹token›.html`), which also makes the
+  `/home/`-namespaced web-route false positives cosmetically harmless. No real
+  usernames are missed (POSIX usernames contain neither dots nor slashes).
+- **Baseline `aws_access_key_id` now covers all AWS unique-ID prefixes**
+  (`ABIA ACCA AGPA AIDA AIPA AKIA ANPA ANVA APKA AROA ASCA ASIA`), not just the
+  four access-key/STS prefixes — so role (`AROA`), user (`AIDA`), and other
+  unique IDs are caught everywhere. The redundant per-bundle JWT and AWS-key
+  rules that re-implemented baseline detectors were removed from `aws-cli`,
+  `bruno`, `har`, `insomnia`, `postman`, and the `postgres://…@…` rule from
+  `postgresql` (all now covered by the composed baseline `jwt` / `credential_url`
+  detectors). No detection coverage is lost.
+- **Dataiku bundle: allow the DSS service-account paths and vendor URLs.**
+  `/home/dataiku` (via the already-allowed `dataiku` username), `/home/projects`
+  (via `projects`), and `https://*.dataiku.com*` (public docs/help/update — not
+  customer endpoints) are passed through, now that the baseline composes under
+  `--app dataiku`.
+- **GitLab bundle: added 6 missing token types, fixed the log profiles, and
+  expanded `gitlab.rb` coverage.** New token-prefix detectors for OAuth
+  application secrets (`gloas-`), pipeline trigger (`glptt-`), incoming mail
+  (`glimt-`), workspace (`glwt-`), feature-flags client (`glffct-`) tokens, and
+  the `glrtr-` runner-registration variant — previously only 7 of GitLab's token
+  types were caught. The `gitlab.rb` profile now also redacts the
+  OAuth/Azure/object-store identifiers from gitlab-scrubber's `sensitiveKeyPatterns`
+  (`client_id`, `app_id`, `application_id`, `tenant_id`, `accountname`,
+  `_account_name`, `bucket`), and the production-log profile adds
+  `meta.namespace` / `meta.root_namespace`.
 
 - **Structured redaction is now span-based — fully format-preserving and
   leak-free.** JSON, JSONL, YAML, TOML, XML, and CSV are sanitized by replacing
@@ -26,6 +98,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Extensionless config files matched by a profile now redact.** A profile's
+  extension gate is a hard prerequisite, so a profile listing `extensions:
+  [".yaml"]` (etc.) skipped extensionless files even when its `include` named
+  them — the standard kubeconfig `~/.kube/config` leaked `client-key-data` /
+  `client-certificate-data`, and extensionless nginx vhosts under
+  `sites-available/` / `sites-enabled/` leaked `server_name` and proxy targets.
+  Both bundles now also list `""` in `extensions` (matching the aws-cli pattern),
+  so the include list governs the match.
+- **fstab: server addresses after the first mount line no longer leak.** The
+  CIFS (`//host/share`) and NFS (`host:/export`) server-address patterns were
+  anchored with `^` but lacked the multiline flag, so `^` matched only the start
+  of the whole file — every mount line after the first kept its server address
+  unredacted. The patterns now use `(?m)`. (The redundant first-column device-IP
+  rule was dropped; the baseline `ipv4` detector already matches every line.)
+- **Profiles with a path-anchored `include` now match plain files.** The
+  structured-vs-scanner decision and profile lookup for a plain file used only
+  its basename, so an `include` with a path component — `group_vars/*.yml`,
+  `.aws/credentials`, `.circleci/config.yml` — matched during the phase
+  partition (which uses the full path) but failed during actual processing,
+  silently dropping the file to the plain scanner with its profile inert. The
+  field rules in the `ansible`, `aws-cli`, and `circleci` bundles (and any
+  path-anchored profile) were effectively dead for on-disk files. File dispatch
+  now matches on the full path, consistent with the partition. (Archive entries
+  were unaffected — they already matched on the entry path.)
+- **Three app bundles had silently-dropped (non-compiling) regex patterns.**
+  The Rust regex engine rejected them at load — `mongodb` and `mysql` connection-
+  URI rules used an unsupported trailing look-ahead `(?=…)`, and `redis`'s Azure
+  connection-string rule blew past the compiled-size limit via a unicode
+  `[\w\d.-]{1,100}` host class — so those detectors never ran. No leaks resulted
+  (the composed baseline covered these cases), and with the baseline now redacting
+  connection-string secrets precisely (below), all four URI rules in those bundles
+  were removed as redundant — the baseline handles them with less collateral. The
+  `kubernetes` service-account-token rule, a plain JWT already covered by the
+  baseline `jwt` detector, was likewise removed.
+- **The run summary now counts in-place structured field redactions.** Profile
+  field edits on a plain structured file are applied as exact span replacements
+  and never re-matched by the scanner, so they were invisible to `total_matches`
+  — the summary printed `Redacted: nothing` (or undercounted) while the file was
+  correctly scrubbed. The structured edit pass now reports its edit count, folded
+  into the summary under a `profile-field` bucket (per-category attribution isn't
+  available at the span-edit layer). Archive and stdin paths, which already count
+  these via the augmented scanner / store growth, are unchanged.
+- **A profile that declares a non-structured extension now actually runs.**
+  The structured-vs-scanner decision was made purely from the file extension
+  (`is_structured_filename`), so a profile declaring e.g. `extensions: [".log"]`
+  was silently dropped to the plain scanner and its field rules never fired —
+  even though profile *selection* already matched the file. The gate is now
+  profile-aware (a file is structured-eligible if its extension is structured
+  **or** a loaded profile matches it), applied to both the discovery pre-pass and
+  the output pass. This revived the GitLab bundle's five `.log` log profiles
+  (production/sidekiq/workhorse/gitaly/shell), which were dead code; they are also
+  switched from the single-document `json` processor to `jsonl` so every line of
+  these line-delimited logs is scrubbed, not just the first. Regression test in
+  `tests/app_bundle_tests.rs`.
 - **VCS and hidden directories are now actually pruned during a directory walk.**
   Skipping the directory *entry* still let walkdir descend into it, so `.git/`
   contents and hidden-directory contents (e.g. `.secretdir/inner.txt`) were

@@ -22,9 +22,8 @@
     - pattern: "REDIS_PASSWORD"
       category: custom:password
       label: redis_password
-    - pattern: "REDIS_URL"
-      category: url
-      label: redis_url
+    # REDIS_URL (redis://:pass@host) is handled by the baseline `credential_url`
+    # detector (redacts only the password, preserves host/port/db).
     - pattern: "REDIS_TLS_CERT"
       category: auth_token
       label: redis_tls_cert

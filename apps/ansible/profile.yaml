@@ -24,6 +24,17 @@
     - pattern: "ansible_ssh_pass"
       category: custom:password
       label: ansible_ssh_pass
+    # Become/sudo/su password aliases — the `*_password` glob below misses these
+    # `*_pass` spellings, which still appear in inventories and older playbooks.
+    - pattern: "ansible_become_pass"
+      category: custom:password
+      label: ansible_become_pass
+    - pattern: "ansible_sudo_pass"
+      category: custom:password
+      label: ansible_sudo_pass
+    - pattern: "ansible_su_pass"
+      category: custom:password
+      label: ansible_su_pass
     - pattern: "vault_password"
       category: auth_token
       label: ansible_vault_password

@@ -11,9 +11,10 @@
     - pattern: "*.datasource.username"
       category: name
       label: spring_datasource_username
-    - pattern: "*.datasource.url"
-      category: url
-      label: spring_datasource_url
+    # datasource.url holds no secret in Spring (credentials are the separate
+    # username/password properties above); a whole-value rule would destroy the
+    # JDBC host/db for no benefit. Any credential embedded in a URL is handled
+    # precisely by the baseline credential_url / password_kv detectors.
     - pattern: "*.datasource.hikari.password"
       category: custom:password
       label: spring_hikari_password
@@ -67,9 +68,9 @@
     - pattern: "spring.datasource.username"
       category: name
       label: spring_datasource_username
-    - pattern: "spring.datasource.url"
-      category: url
-      label: spring_datasource_url
+    # spring.datasource.url holds no secret (credentials are separate
+    # username/password properties); handled precisely by the baseline if a URL
+    # ever does embed a credential.
     - pattern: "spring.security.oauth2.client.registration.*.client-secret"
       category: auth_token
       label: spring_oauth_client_secret

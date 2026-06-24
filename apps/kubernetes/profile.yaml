@@ -1,7 +1,11 @@
 # Kubernetes — kubeconfig, Secret manifests, Helm values, workload specs, kubectl output
 
+# The standard kubeconfig is the extensionless `~/.kube/config`; `""` lets the
+# extension gate accept it (and a bare `kubeconfig`) while the include list
+# narrows the match. Without it the profile required a `.yaml`/`.yml` name and
+# silently skipped the most common kubeconfig path, leaking client-key/cert-data.
 - processor: yaml
-  extensions: [".yaml", ".yml"]
+  extensions: ["", ".yaml", ".yml"]
   include: ["kubeconfig", "*.kubeconfig", "config", "kube-config.yaml", "kube-config.yml"]
   fields:
     - pattern: "*.user.token"

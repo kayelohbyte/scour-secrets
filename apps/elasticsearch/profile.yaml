@@ -52,6 +52,7 @@
     - pattern: "LOGSTASH_KEYSTORE_PASS"
       category: custom:password
       label: logstash_keystore_pass
-    - pattern: "ELASTICSEARCH_HOSTS"
-      category: url
-      label: elasticsearch_hosts
+    # ELASTICSEARCH_HOSTS (https://user:pass@es:9200) is handled by the baseline
+    # `credential_url` detector — redacts only an embedded credential and leaves
+    # the host list intact for troubleshooting (a whole-value rule redacted the
+    # hosts even when no credential was present).

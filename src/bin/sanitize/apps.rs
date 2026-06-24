@@ -60,6 +60,12 @@ pub(crate) const BUILTIN_APPS: &[BuiltinApp] = &[
         profile_yaml: Some(include_str!("../../../apps/datadog/profile.yaml")),
     },
     BuiltinApp {
+        name: "dataiku",
+        description: "Dataiku DSS — diagnosis bundle: connection creds, user password hashes, DB server keys, LDAP/SSO settings, license, API keys",
+        secrets_yaml: Some(include_str!("../../../apps/dataiku/secrets.yaml")),
+        profile_yaml: Some(include_str!("../../../apps/dataiku/profile.yaml")),
+    },
+    BuiltinApp {
         name: "django",
         description: "Django — .env files, SECRET_KEY, database credentials, third-party API keys",
         secrets_yaml: Some(include_str!("../../../apps/django/secrets.yaml")),

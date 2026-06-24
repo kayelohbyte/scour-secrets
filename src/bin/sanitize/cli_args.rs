@@ -151,6 +151,11 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) no_field_signal: bool,
 
+    /// Do not add the built-in baseline detectors (email, IP, UUID, home path, common tokens).
+    /// These are composed under the app/profile rules by default; pass this for app-only precision.
+    #[arg(long)]
+    pub(crate) no_baseline: bool,
+
     /// Process entries that appear to be binary data (default: skip).
     #[arg(long)]
     pub(crate) include_binary: bool,
@@ -352,6 +357,7 @@ impl Default for Cli {
             deterministic: false,
             no_structured_handoff: false,
             no_field_signal: false,
+            no_baseline: false,
             include_binary: false,
             hidden: false,
             force_text: false,

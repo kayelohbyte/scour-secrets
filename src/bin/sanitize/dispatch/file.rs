@@ -11,11 +11,15 @@ use super::*;
 /// accompanying `.yaml`/`.csv`/… file to be parsed as the stdin format, which
 /// would produce no structured edits and leak that file's escaped values.
 fn effective_file_format_name(input: &Path, cli_format: Option<&str>) -> String {
-    let real = input
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("")
-        .to_string();
+    // The full path (not just the basename) so profile `include` globs with a
+    // path component — `group_vars/*.yml`, `.aws/credentials`,
+    // `.circleci/config.yml` — match here exactly as they do in the phase
+    // partition (which uses `input.to_string_lossy()`). Extension detection
+    // (`rsplit('.')`) and `is_structured_filename` work the same on a path, so
+    // using the full path is strictly more permissive for matching without
+    // changing format detection. (Previously this returned only the basename,
+    // which silently dropped every path-anchored profile to the plain scanner.)
+    let real = input.to_string_lossy().to_string();
     if is_structured_filename(&real) {
         return real;
     }
@@ -25,6 +29,27 @@ fn effective_file_format_name(input: &Path, cli_format: Option<&str>) -> String 
             .unwrap_or(real),
         None => real,
     }
+}
+
+/// Label under which in-place structured field redactions are counted in the
+/// run summary. They cannot be attributed per-category at this layer (the span
+/// `Replacement` carries only byte offsets), so they share one honest bucket;
+/// the scanner's own matches keep their per-pattern labels.
+const FIELD_EDIT_LABEL: &str = "profile-field";
+
+/// Fold `count` in-place structured field edits into `stats` so they appear in
+/// `total_matches` and the run summary. No-op when `count == 0`.
+fn record_field_edits(stats: &mut rust_sanitize::scanner::ScanStats, count: usize) {
+    if count == 0 {
+        return;
+    }
+    let count = count as u64;
+    stats.matches_found += count;
+    stats.replacements_applied += count;
+    *stats
+        .pattern_counts
+        .entry(FIELD_EDIT_LABEL.to_string())
+        .or_insert(0) += count;
 }
 
 impl FileProcessor<'_> {
@@ -55,7 +80,12 @@ impl FileProcessor<'_> {
 
         let filename = effective_file_format_name(input, cli.format.as_deref());
 
-        let structured_ext = is_structured_filename(&filename);
+        // Structured-eligible if the extension is inherently structured OR a
+        // loaded profile explicitly targets this file (e.g. a bundle declaring
+        // `extensions: [".log"]` for JSON/JSONL logs). Without the profile check,
+        // a profile's custom extension would be silently dropped to the scanner.
+        let structured_ext = is_structured_filename(&filename)
+            || fp.profiles.iter().any(|p| p.matches_filename(&filename));
 
         let output_path = if output_path.is_some_and(|p| p == Path::new("-")) {
             None
@@ -137,7 +167,12 @@ impl FileProcessor<'_> {
 
         let filename = effective_file_format_name(input, cli.format.as_deref());
 
-        if !is_structured_filename(&filename) || cli.force_text {
+        // Mirror the output pass: a file is structured-eligible if its extension
+        // is structured OR a loaded profile explicitly targets it (custom
+        // extensions like `.log`). Keeps discovery and output in agreement.
+        let structured = is_structured_filename(&filename)
+            || fp.profiles.iter().any(|p| p.matches_filename(&filename));
+        if !structured || cli.force_text {
             return Ok(());
         }
 
@@ -183,7 +218,9 @@ impl FileProcessor<'_> {
             fp.store,
             fp.profiles,
         ) {
-            Some(Ok(v)) => Some(Ok(v)),
+            // Discovery discards the produced bytes and edit count; only the
+            // store side effect and any error matter here.
+            Some(Ok((v, _count))) => Some(Ok(v)),
             // Strict mode surfaces the edit-pass error. Otherwise fall back
             // to the literal structured pass so the file's field values
             // still populate the shared store — mirroring the output path
@@ -477,8 +514,8 @@ impl FileProcessor<'_> {
             // fall back to the literal structured pass, then to the plain scanner.
             let structured_base = structured_base_bytes(&input_bytes, filename, &fp, cli.strict)?;
 
-            let (output_bytes, method, fallback_stats) = match structured_base {
-                Some(base) => {
+            let (output_bytes, method, fallback_stats, field_edits) = match structured_base {
+                Some((base, edit_count)) => {
                     let ext = filename.rsplit('.').next().unwrap_or("unknown");
                     let per_file_scanner =
                         build_format_preserving_scanner(fp.scanner, fp.store, store_snapshot)
@@ -490,15 +527,20 @@ impl FileProcessor<'_> {
                         scanned_bytes,
                         format!("structured+scan:{ext}"),
                         Some(scan_stats),
+                        edit_count,
                     )
                 }
                 None => {
                     let (out, stats) = scanner_fallback(fp.scanner, &input_bytes)?;
-                    (out, "scanner".into(), Some(stats))
+                    (out, "scanner".into(), Some(stats), 0)
                 }
             };
 
             let mut stats = fallback_stats.unwrap_or_default();
+            // Field values edited in place are never re-matched by the scanner
+            // (the bytes are already redacted), so fold them into the stats here
+            // or they would be invisible to the run summary / total.
+            record_field_edits(&mut stats, field_edits);
             let output_bytes = apply_entropy_inplace(output_bytes, &mut stats, fp);
             // Normalise bytes_processed/bytes_output to the file's actual sizes.
             stats.bytes_processed = input_bytes.len() as u64;

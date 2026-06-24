@@ -43,6 +43,6 @@
     - pattern: "MARIADB_ROOT_PASSWORD"
       category: custom:password
       label: mariadb_root_password
-    - pattern: "DATABASE_URL"
-      category: url
-      label: mysql_database_url
+    # DATABASE_URL is handled by the baseline `credential_url` detector (redacts
+    # only the embedded credential, preserves host/port/db). A whole-value field
+    # rule here would over-redact the host.

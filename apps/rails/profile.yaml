@@ -62,12 +62,8 @@
     - pattern: "SECRET_KEY_BASE"
       category: auth_token
       label: rails_secret_key_base
-    - pattern: "DATABASE_URL"
-      category: url
-      label: rails_db_url
-    - pattern: "REDIS_URL"
-      category: url
-      label: rails_redis_url
+    # DATABASE_URL / REDIS_URL connection strings are handled by the baseline
+    # `credential_url` detector (redacts only the credential, preserves host).
     - pattern: "*PASSWORD"
       category: custom:password
       label: env_password

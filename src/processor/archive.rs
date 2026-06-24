@@ -646,7 +646,7 @@ impl ArchiveProcessor {
                         .registry
                         .process_to_edits(&content, profile, &self.store)
                     {
-                        Ok(Some(edited)) => Some(edited),
+                        Ok(Some((edited, _count))) => Some(edited),
                         Ok(None) => match self.registry.process(&content, profile, &self.store) {
                             Ok(Some(_)) => Some(content.clone()),
                             _ => None,

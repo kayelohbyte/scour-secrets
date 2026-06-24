@@ -1,8 +1,11 @@
 # nginx — nginx.conf, virtual host configs, proxy upstreams, server names
 # Access log and error log sensitive fields are covered by secrets.yaml regex patterns.
 
+# `""` is included because nginx vhost files under sites-available/ and
+# sites-enabled/ are conventionally extensionless (e.g. `sites-available/default`);
+# without it the `.conf` gate skipped them, leaking server_name and proxy targets.
 - processor: key-value
-  extensions: [".conf"]
+  extensions: ["", ".conf"]
   include:
     - "nginx.conf"
     - "conf.d/*.conf"

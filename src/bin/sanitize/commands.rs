@@ -59,6 +59,7 @@ pub(crate) fn run_scan(args: &ScanArgs) -> Result<(), (String, i32)> {
         deterministic: false,
         no_structured_handoff: true,
         no_field_signal: false,
+        no_baseline: false,
         include_binary: false,
         hidden: args.hidden,
         exclude_path: args.exclude_path.clone(),
