@@ -371,12 +371,14 @@ fn try_structured_edits(
 
 /// Compute the bytes the format-preserving scanner should run over for a
 /// structured file, paired with the number of in-place field edits made (so the
-/// caller can count profile-field redactions in the run summary): edit-applied
-/// bytes + edit count when the processor supports span edits, the original bytes
-/// + 0 when only the literal structured pass applies (store still gets populated
-/// and those values are counted later by the scanner), or `None` when no
-/// structured processing happened (caller uses the plain scanner over the
-/// originals).
+/// caller can count profile-field redactions in the run summary). Returns:
+///
+/// - edit-applied bytes with the edit count, when the processor supports span edits;
+/// - the original bytes with a zero count, when only the literal structured pass
+///   applies (the store still gets populated and those values are counted later
+///   by the scanner);
+/// - `None` when no structured processing happened (caller uses the plain
+///   scanner over the originals).
 pub(crate) fn structured_base_bytes(
     input_bytes: &[u8],
     filename: &str,
