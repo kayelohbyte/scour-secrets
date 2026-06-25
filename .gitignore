@@ -36,3 +36,8 @@ deno.lock
 
 # Local sanitize-run output dirs (e.g. <name>-sanitized/); never part of the crate
 *-sanitized/
+
+# cargo-fuzz build artifacts and corpora (fuzz/Cargo.lock is tracked for repro)
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/

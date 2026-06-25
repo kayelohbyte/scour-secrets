@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-06-24
+
 ### Added
 
 - **`--no-baseline` flag.** Opts out of the built-in baseline detectors for
@@ -219,6 +221,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   original bytes, matching the plain-file path: comments, key order, and
   whitespace are preserved, and a secret that also appears in a comment is still
   redacted.
+
+### Upgrade notes
+
+- **A previously-seeded local app copy shadows these built-in bundle changes.**
+  The first time you run `--app <name>`, sanitize writes a user-local copy of the
+  bundle to `$SANITIZE_APPS_DIR/<name>/` (the two-pass write-back target), and on
+  later runs `load_app_bundle` loads that copy in preference to the embedded
+  built-in. So if you ran a bundle under 0.14.0, the connection-string rule
+  removals, new GitLab token types, expanded AWS prefixes, and Dataiku allow-list
+  above will **not** take effect until you refresh the copy. Re-sync with
+  `sanitize apps remove <name> --yes` (then re-run `--app <name>`), or delete the
+  stale directory under `$SANITIZE_APPS_DIR`. Custom edits you made to that copy
+  are intentionally preserved — this only matters for bundles you hadn't
+  customized.
 
 ## [0.14.0] - 2026-06-21
 
@@ -953,7 +969,8 @@ contract and MSRV policy.
 - **290+ tests** including unit, integration, property-based (proptest), and
   4 fuzz targets.
 
-[Unreleased]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.14.0...v0.14.1
 [0.14.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.13.1...v0.14.0
 [0.13.1]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.13.0...v0.13.1
 [0.13.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.12.0...v0.13.0
