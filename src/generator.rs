@@ -34,6 +34,27 @@ pub trait ReplacementGenerator: Send + Sync {
     fn generate(&self, category: &Category, original: &str) -> String;
 }
 
+/// Controls whether a replacement preserves the original's byte length or draws
+/// a fresh, category-appropriate length independent of it.
+///
+/// `Preserve` (the default) keeps today's behavior: the replacement's byte
+/// length exactly matches the original, so length and rough structure are
+/// retained. `Randomized` instead picks each replacement's length from a
+/// per-category band derived from the hash, uncorrelated to the original — the
+/// output stays type-valid (digits stay digits, an email stays an email) but no
+/// longer leaks the original's length. Non-secret structure that is copied
+/// verbatim (email domain, hostname suffix, file extension, ARN/Azure known
+/// segments) is unaffected by this policy.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub enum LengthPolicy {
+    /// Output byte length exactly matches the original (default).
+    #[default]
+    Preserve,
+    /// Output length is drawn from a per-category band, hiding the original's
+    /// length.
+    Randomized,
+}
+
 // ---------------------------------------------------------------------------
 // HMAC-SHA256 deterministic generator
 // ---------------------------------------------------------------------------
@@ -48,6 +69,7 @@ pub trait ReplacementGenerator: Send + Sync {
 /// Different keys yield completely different outputs with overwhelming probability.
 pub struct HmacGenerator {
     key: [u8; 32],
+    policy: LengthPolicy,
 }
 
 impl Drop for HmacGenerator {
@@ -60,7 +82,10 @@ impl HmacGenerator {
     /// Create a new generator from a 32-byte seed.
     #[must_use]
     pub fn new(key: [u8; 32]) -> Self {
-        Self { key }
+        Self {
+            key,
+            policy: LengthPolicy::Preserve,
+        }
     }
 
     /// Create a generator from a byte slice (must be exactly 32 bytes).
@@ -74,7 +99,17 @@ impl HmacGenerator {
         }
         let mut key = [0u8; 32];
         key.copy_from_slice(bytes);
-        Ok(Self { key })
+        Ok(Self {
+            key,
+            policy: LengthPolicy::Preserve,
+        })
+    }
+
+    /// Set the [`LengthPolicy`] for this generator (builder style).
+    #[must_use]
+    pub fn with_length_policy(mut self, policy: LengthPolicy) -> Self {
+        self.policy = policy;
+        self
     }
 
     /// Derive the raw 32-byte HMAC digest for `(category, original)`.
@@ -95,7 +130,7 @@ impl HmacGenerator {
 impl ReplacementGenerator for HmacGenerator {
     fn generate(&self, category: &Category, original: &str) -> String {
         let hash = self.derive(category, original);
-        format_replacement(category, &hash, original)
+        format_replacement(category, &hash, original, self.policy)
     }
 }
 
@@ -108,12 +143,23 @@ impl ReplacementGenerator for HmacGenerator {
 /// Each call to `generate` produces a fresh random value. Determinism is
 /// achieved externally by the `MappingStore`, which calls `generate` only
 /// once per unique `(category, original)` pair and caches the result.
-pub struct RandomGenerator;
+pub struct RandomGenerator {
+    policy: LengthPolicy,
+}
 
 impl RandomGenerator {
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self {
+            policy: LengthPolicy::Preserve,
+        }
+    }
+
+    /// Set the [`LengthPolicy`] for this generator (builder style).
+    #[must_use]
+    pub fn with_length_policy(mut self, policy: LengthPolicy) -> Self {
+        self.policy = policy;
+        self
     }
 }
 
@@ -128,7 +174,7 @@ impl ReplacementGenerator for RandomGenerator {
         let mut rng = rand::rng();
         let mut hash = [0u8; 32];
         rng.fill(&mut hash);
-        format_replacement(category, &hash, original)
+        format_replacement(category, &hash, original, self.policy)
     }
 }
 
@@ -136,11 +182,26 @@ impl ReplacementGenerator for RandomGenerator {
 // Category-aware formatting helpers
 // ---------------------------------------------------------------------------
 
-/// Format a 32-byte hash into a length-preserving replacement whose
-/// byte length exactly matches `original.len()`. The shape is
-/// category-aware and deterministic for the same `(hash, original)` pair.
-pub(crate) fn format_replacement(category: &Category, hash: &[u8; 32], original: &str) -> String {
-    let target = original.len();
+/// Format a 32-byte hash into a category-aware replacement.
+///
+/// Under [`LengthPolicy::Preserve`] (default) the output's byte length exactly
+/// matches `original.len()`. Under [`LengthPolicy::Randomized`] the length is
+/// drawn from a per-category band (see [`randomized_target`]) so it no longer
+/// leaks the original's length, while the output stays type-valid. The shape is
+/// deterministic for the same `(hash, original, policy)` triple.
+pub(crate) fn format_replacement(
+    category: &Category,
+    hash: &[u8; 32],
+    original: &str,
+    policy: LengthPolicy,
+) -> String {
+    let randomized = matches!(policy, LengthPolicy::Randomized);
+    let target = match policy {
+        LengthPolicy::Preserve => original.len(),
+        LengthPolicy::Randomized => {
+            randomized_target(category, hash, original).unwrap_or(original.len())
+        }
+    };
     if target == 0 {
         return String::new();
     }
@@ -148,6 +209,12 @@ pub(crate) fn format_replacement(category: &Category, hash: &[u8; 32], original:
     match category {
         Category::Email => format_email_lp(&hex, original, target),
         Category::Name => format_name_lp(hash, &hex, target),
+        // Digit categories with no canonical length: under `Randomized` we emit a
+        // fresh run of `target` digits (separators dropped); IPv4 stays canonical.
+        Category::Phone | Category::CreditCard if randomized => {
+            format_digits_synth(hash, target, false)
+        }
+        Category::Ssn if randomized => format_digits_synth(hash, target, true),
         Category::Phone | Category::CreditCard | Category::IpV4 => {
             format_digits_lp(hash, original, target)
         }
@@ -157,13 +224,136 @@ pub(crate) fn format_replacement(category: &Category, hash: &[u8; 32], original:
         Category::Ssn => format_ssn_lp(hash, original, target),
         Category::Hostname => format_hostname_lp(&hex, original, target),
         Category::Jwt => format_jwt_lp(hash, original, target),
-        Category::FilePath => format_filepath_lp(&hex, original, target),
+        Category::FilePath => format_filepath_lp(&hex, original, target, randomized),
         Category::WindowsSid => format_windows_sid_lp(hash, original, target),
-        Category::Url => format_url_lp(&hex, original, target),
-        Category::AwsArn => format_arn_lp(&hex, original, target),
-        Category::AzureResourceId => format_azure_resource_id_lp(&hex, original, target),
+        Category::Url => format_url_lp(&hex, original, target, randomized),
+        Category::AwsArn => format_arn_lp(&hex, original, target, randomized),
+        Category::AzureResourceId => {
+            format_azure_resource_id_lp(&hex, original, target, randomized)
+        }
         Category::AuthToken | Category::Custom(_) => format_custom_lp(&hex, target),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Length-randomizing helpers (LengthPolicy::Randomized)
+// ---------------------------------------------------------------------------
+
+// Per-category length bands for `LengthPolicy::Randomized`. Tunable in one
+// place. Digits cap at 18 so the value stays parseable as an `i64`.
+const DIGITS_BAND: (usize, usize) = (8, 18);
+const EMAIL_USER_BAND: (usize, usize) = (6, 16);
+const HOSTNAME_PREFIX_BAND: (usize, usize) = (6, 16);
+const NAME_BAND: (usize, usize) = (12, 28);
+const TOKEN_BAND: (usize, usize) = (24, 48);
+const SEGMENT_BAND: (usize, usize) = (6, 20);
+
+/// Pick a length in `[lo, hi]` deterministically from `bytes`, mixing in `idx`
+/// so callers can draw independent lengths for successive segments. Stable for
+/// the same `(bytes, idx)`, so per-value consistency is preserved.
+fn band_pick(bytes: &[u8], idx: usize, lo: usize, hi: usize) -> usize {
+    debug_assert!(lo <= hi);
+    debug_assert!(!bytes.is_empty());
+    let span = (hi - lo + 1) as u64;
+    let mut w = 0u64;
+    for k in 0..8 {
+        let b = bytes[(idx.wrapping_mul(8).wrapping_add(k)) % bytes.len()];
+        w = (w << 8) | u64::from(b);
+    }
+    #[allow(clippy::cast_possible_truncation)] // (w % span) < span <= band max, fits usize
+    let offset = (w % span) as usize;
+    lo + offset
+}
+
+/// Total target byte length for a category under [`LengthPolicy::Randomized`].
+///
+/// Returns `None` for categories whose length must not change — canonical /
+/// fixed-shape values (UUID, MAC, IPv4/6, container ID, Windows SID), JWT
+/// (deliberate exception), and the variable-segment categories
+/// (file path / URL / ARN / Azure) whose lengths are synthesized per-segment
+/// inside their own formatters. For the remaining free-length categories it
+/// returns a band-derived total that includes any verbatim structural overhead
+/// (the `@domain`, hostname suffix, or `__SANITIZED_…__` wrapper) so the
+/// existing generate-to-target formatters can be reused unchanged.
+fn randomized_target(category: &Category, hash: &[u8; 32], original: &str) -> Option<usize> {
+    match category {
+        Category::Phone | Category::CreditCard | Category::Ssn => {
+            Some(band_pick(hash, 0, DIGITS_BAND.0, DIGITS_BAND.1))
+        }
+        Category::Name => Some(band_pick(hash, 0, NAME_BAND.0, NAME_BAND.1)),
+        Category::AuthToken | Category::Custom(_) => {
+            let overhead = "__SANITIZED_".len() + "__".len();
+            Some(band_pick(hash, 0, TOKEN_BAND.0, TOKEN_BAND.1) + overhead)
+        }
+        Category::Email => {
+            let domain = original.rfind('@').map_or("x.co", |p| &original[p + 1..]);
+            Some(band_pick(hash, 0, EMAIL_USER_BAND.0, EMAIL_USER_BAND.1) + 1 + domain.len())
+        }
+        Category::Hostname => {
+            let suffix = original.find('.').map_or("", |p| &original[p..]);
+            Some(band_pick(hash, 0, HOSTNAME_PREFIX_BAND.0, HOSTNAME_PREFIX_BAND.1) + suffix.len())
+        }
+        // Variable-segment categories synthesize per-segment lengths in their own
+        // formatters; canonical/fixed-shape categories and JWT never randomize.
+        Category::FilePath
+        | Category::Url
+        | Category::AwsArn
+        | Category::AzureResourceId
+        | Category::Uuid
+        | Category::MacAddress
+        | Category::IpV4
+        | Category::IpV6
+        | Category::ContainerId
+        | Category::WindowsSid
+        | Category::Jwt => None,
+    }
+}
+
+/// Emit a fresh run of `target` deterministic digits (length-randomized digit
+/// categories). When `ssn` is set the leading digit is forced to `0`, keeping
+/// the value clearly synthetic.
+fn format_digits_synth(hash: &[u8; 32], target: usize, ssn: bool) -> String {
+    let mut buf = String::with_capacity(target);
+    for i in 0..target {
+        if ssn && i == 0 {
+            buf.push('0');
+        } else {
+            buf.push((b'0' + hash[i % 32] % 10) as char);
+        }
+    }
+    buf
+}
+
+/// Randomized variant of [`format_preserving_hex_lp`]: copy structural
+/// characters verbatim, but replace each maximal run of non-structural
+/// ("variable") characters with a band-derived-length hex run. Segment lengths
+/// are independent of the original, so per-segment length no longer leaks.
+fn format_preserving_hex_rand(
+    hex: &[u8; 64],
+    original: &str,
+    is_structural: impl Fn(char) -> bool,
+) -> String {
+    let mut buf = String::with_capacity(original.len());
+    let mut seg_idx = 0usize;
+    let mut hi = 0usize;
+    let mut in_var = false;
+    for ch in original.chars() {
+        if is_structural(ch) {
+            buf.push(ch);
+            in_var = false;
+        } else if !in_var {
+            // Start of a new variable segment: emit one synth-length hex run and
+            // suppress the original characters of this segment.
+            let seg_len = band_pick(hex, seg_idx + 1, SEGMENT_BAND.0, SEGMENT_BAND.1);
+            for _ in 0..seg_len {
+                buf.push(hex[hi % 64] as char);
+                hi += 1;
+            }
+            seg_idx += 1;
+            in_var = true;
+        }
+    }
+    buf
 }
 
 // ---------------------------------------------------------------------------
@@ -374,15 +564,50 @@ fn format_jwt_lp(hash: &[u8; 32], original: &str, target: usize) -> String {
     buf
 }
 
-/// Length-preserving file path replacement.
+/// File path replacement.
 /// Preserves separators (`/`, `\`) and the final extension (from last `.`
 /// in the last segment). Replaces other characters with deterministic hex.
-fn format_filepath_lp(hex: &[u8; 64], original: &str, target: usize) -> String {
+///
+/// Under `randomized`, the filename **stem** (between the last separator and the
+/// extension) is emitted as a band-derived-length hex run instead of being
+/// length-preserving, so the stem length no longer leaks. Other path segments
+/// stay length-preserving; separators and the trailing extension stay verbatim
+/// (and in place — this is the fix for the trailing-pad bug that would otherwise
+/// append filler *after* the extension for a longer target).
+fn format_filepath_lp(hex: &[u8; 64], original: &str, target: usize, randomized: bool) -> String {
     // Find the last path separator position to identify the filename segment.
     let last_sep = original.rfind(['/', '\\']).map_or(0, |p| p + 1);
     let filename = &original[last_sep..];
     // Find extension in the filename (last `.` that isn't at position 0).
     let ext_start = filename.rfind('.').filter(|&p| p > 0).map(|p| last_sep + p);
+
+    if randomized {
+        let mut buf = String::new();
+        let mut hi = 0usize;
+        // Directory prefix (up to and including the last separator): preserve
+        // separators, replace other characters byte-for-byte.
+        for ch in original[..last_sep].chars() {
+            if matches!(ch, '/' | '\\') {
+                buf.push(ch);
+            } else {
+                for _ in 0..ch.len_utf8() {
+                    buf.push(hex[hi % 64] as char);
+                    hi += 1;
+                }
+            }
+        }
+        // Filename stem: band-derived length.
+        let stem_len = band_pick(hex, 0, SEGMENT_BAND.0, SEGMENT_BAND.1);
+        for _ in 0..stem_len {
+            buf.push(hex[hi % 64] as char);
+            hi += 1;
+        }
+        // Extension (from the `.` to end of the original), verbatim.
+        if let Some(es) = ext_start {
+            buf.push_str(&original[es..]);
+        }
+        return buf;
+    }
 
     let mut buf = String::with_capacity(target);
     let mut hi = 0usize;
@@ -466,20 +691,30 @@ fn format_preserving_hex_lp(
     had_content.then_some(buf)
 }
 
-/// Length-preserving URL replacement.
+/// URL replacement.
 /// Preserves scheme prefix and structural characters
 /// (`://`, `/`, `?`, `=`, `&`, `#`, `:`); replaces content characters
-/// with deterministic hex.
-fn format_url_lp(hex: &[u8; 64], original: &str, target: usize) -> String {
-    format_preserving_hex_lp(hex, original, target, |ch| "/:?=&#@.".contains(ch))
+/// with deterministic hex. Under `randomized`, each variable segment is
+/// emitted with a band-derived length instead of being length-preserving.
+fn format_url_lp(hex: &[u8; 64], original: &str, target: usize, randomized: bool) -> String {
+    let is_structural = |ch| "/:?=&#@.".contains(ch);
+    if randomized {
+        return format_preserving_hex_rand(hex, original, is_structural);
+    }
+    format_preserving_hex_lp(hex, original, target, is_structural)
         .unwrap_or_else(|| pad_or_truncate("", target, hex))
 }
 
-/// Length-preserving AWS ARN replacement.
+/// AWS ARN replacement.
 /// Preserves `:` and `/` separators; replaces alphanumeric content
-/// in account/resource segments with deterministic hex.
-fn format_arn_lp(hex: &[u8; 64], original: &str, target: usize) -> String {
-    format_preserving_hex_lp(hex, original, target, |ch| ch == ':' || ch == '/')
+/// in account/resource segments with deterministic hex. Under `randomized`,
+/// each variable segment is emitted with a band-derived length.
+fn format_arn_lp(hex: &[u8; 64], original: &str, target: usize, randomized: bool) -> String {
+    let is_structural = |ch| ch == ':' || ch == '/';
+    if randomized {
+        return format_preserving_hex_rand(hex, original, is_structural);
+    }
+    format_preserving_hex_lp(hex, original, target, is_structural)
         .unwrap_or_else(|| pad_or_truncate("", target, hex))
 }
 
@@ -487,7 +722,12 @@ fn format_arn_lp(hex: &[u8; 64], original: &str, target: usize) -> String {
 /// Preserves `/` path separators and well-known Azure segment names
 /// (`subscriptions`, `resourceGroups`, `providers`, `resourcegroups`).
 /// Replaces variable segments (IDs, names) with deterministic hex.
-fn format_azure_resource_id_lp(hex: &[u8; 64], original: &str, target: usize) -> String {
+fn format_azure_resource_id_lp(
+    hex: &[u8; 64],
+    original: &str,
+    target: usize,
+    randomized: bool,
+) -> String {
     const KNOWN_SEGMENTS: &[&str] = &[
         "subscriptions",
         "resourceGroups",
@@ -497,6 +737,7 @@ fn format_azure_resource_id_lp(hex: &[u8; 64], original: &str, target: usize) ->
 
     let mut buf = String::with_capacity(target);
     let mut hi = 0usize;
+    let mut seg_idx = 0usize;
 
     // Split on `/`, rebuild with deterministic replacement for non-known segments.
     let mut prev_was_providers = false;
@@ -511,6 +752,15 @@ fn format_azure_resource_id_lp(hex: &[u8; 64], original: &str, target: usize) ->
         let is_provider_namespace = prev_was_providers && part.contains('.');
         if part.is_empty() || KNOWN_SEGMENTS.contains(&part) || is_provider_namespace {
             buf.push_str(part);
+        } else if randomized {
+            // Emit a band-derived-length hex run so the variable segment's length
+            // no longer leaks.
+            let seg_len = band_pick(hex, seg_idx + 1, SEGMENT_BAND.0, SEGMENT_BAND.1);
+            for _ in 0..seg_len {
+                buf.push(hex[hi % 64] as char);
+                hi += 1;
+            }
+            seg_idx += 1;
         } else {
             // Replace this segment character-by-character to preserve byte length.
             for ch in part.chars() {
@@ -522,7 +772,7 @@ fn format_azure_resource_id_lp(hex: &[u8; 64], original: &str, target: usize) ->
         }
         prev_was_providers = part == "providers" || part == "Providers";
     }
-    if buf.len() != target {
+    if !randomized && buf.len() != target {
         return pad_or_truncate(&buf, target, hex);
     }
     buf
@@ -997,5 +1247,175 @@ mod tests {
             !out.contains("rg-prod"),
             "variable resource group name must be replaced, got: {out}"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // LengthPolicy::Randomized
+    // -----------------------------------------------------------------------
+
+    fn rand_gen(seed: u8) -> HmacGenerator {
+        HmacGenerator::new([seed; 32]).with_length_policy(LengthPolicy::Randomized)
+    }
+
+    #[test]
+    fn randomized_digits_decoupled_from_input_length() {
+        let gen = rand_gen(42);
+        for cat in [Category::Phone, Category::CreditCard, Category::Ssn] {
+            for len in 1..40usize {
+                // Build a digit input of byte length `len`.
+                let orig: String = "1234567890".chars().cycle().take(len).collect();
+                let out = gen.generate(&cat, &orig);
+                assert!(
+                    out.chars().all(|c| c.is_ascii_digit()),
+                    "{cat:?} output must be all digits: {out}"
+                );
+                assert!(
+                    out.len() >= DIGITS_BAND.0 && out.len() <= DIGITS_BAND.1,
+                    "{cat:?} length {} out of band for input len {len}",
+                    out.len()
+                );
+                if cat == Category::Ssn {
+                    assert!(out.starts_with('0'), "ssn must start with 0: {out}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn randomized_is_stable_per_value() {
+        let gen = rand_gen(7);
+        for (cat, orig) in [
+            (Category::Phone, "+1-212-555-0100"),
+            (Category::Email, "alice@corp.com"),
+            (Category::Hostname, "db-prod-01.internal"),
+            (Category::FilePath, "/home/jsmith/config.yaml"),
+            (Category::AuthToken, "ghp_abc123secrettoken"),
+        ] {
+            let a = gen.generate(&cat, orig);
+            let b = gen.generate(&cat, orig);
+            assert_eq!(a, b, "{cat:?} must be stable for the same value");
+        }
+    }
+
+    #[test]
+    fn randomized_email_keeps_domain_varies_user() {
+        let gen = rand_gen(3);
+        // Same domain, many username lengths → output user length stays in band,
+        // independent of the input's username length.
+        for ulen in 1..30usize {
+            let user = "a".repeat(ulen);
+            let orig = format!("{user}@corp.com");
+            let out = gen.generate(&Category::Email, &orig);
+            assert!(out.ends_with("@corp.com"), "domain must be preserved: {out}");
+            assert!(out.contains('@'));
+            let out_user = out.split('@').next().unwrap().len();
+            assert!(
+                out_user >= EMAIL_USER_BAND.0 && out_user <= EMAIL_USER_BAND.1,
+                "email user length {out_user} out of band for input ulen {ulen}"
+            );
+        }
+    }
+
+    #[test]
+    fn randomized_hostname_keeps_suffix() {
+        let gen = rand_gen(5);
+        let out = gen.generate(&Category::Hostname, "db-prod-01.internal");
+        assert!(out.ends_with(".internal"), "suffix must be preserved: {out}");
+        let prefix = out.strip_suffix(".internal").unwrap().len();
+        assert!(prefix >= HOSTNAME_PREFIX_BAND.0 && prefix <= HOSTNAME_PREFIX_BAND.1);
+    }
+
+    #[test]
+    fn randomized_filepath_keeps_extension_and_separators() {
+        let gen = rand_gen(13);
+        let orig = "/home/jsmith/config.yaml";
+        let out = gen.generate(&Category::FilePath, orig);
+        assert_eq!(
+            std::path::Path::new(&out)
+                .extension()
+                .and_then(|e| e.to_str()),
+            Some("yaml"),
+            "extension must stay at the end: {out}"
+        );
+        assert_eq!(
+            out.chars().filter(|c| *c == '/').count(),
+            orig.chars().filter(|c| *c == '/').count(),
+            "separators must be preserved: {out}"
+        );
+        assert!(
+            !out.ends_with("yaml") || out.contains(".yaml"),
+            "must contain the .yaml extension verbatim: {out}"
+        );
+    }
+
+    #[test]
+    fn randomized_url_arn_keep_structure() {
+        let gen = rand_gen(9);
+        let url = gen.generate(&Category::Url, "https://internal.corp.com/api/users?token=abc123");
+        assert!(url.contains("://"), "url scheme separator preserved: {url}");
+        assert!(url.contains('?') && url.contains('='), "url query preserved: {url}");
+
+        let arn = gen.generate(&Category::AwsArn, "arn:aws:iam::123456789012:user/admin");
+        assert_eq!(
+            arn.chars().filter(|c| *c == ':').count(),
+            "arn:aws:iam::123456789012:user/admin"
+                .chars()
+                .filter(|c| *c == ':')
+                .count(),
+            "arn colons preserved: {arn}"
+        );
+        assert!(arn.contains('/'), "arn slash preserved: {arn}");
+    }
+
+    #[test]
+    fn randomized_azure_keeps_known_segments() {
+        let gen = rand_gen(11);
+        let orig = "/subscriptions/550e8400-e29b/resourceGroups/rg-prod/providers/Microsoft.Compute/virtualMachines/vm-01";
+        let out = gen.generate(&Category::AzureResourceId, orig);
+        assert!(out.contains("/subscriptions/"));
+        assert!(out.contains("/resourceGroups/"));
+        assert!(out.contains("/providers/"));
+        assert!(out.contains("Microsoft.Compute"));
+        assert!(!out.contains("rg-prod"), "variable segment must be replaced: {out}");
+    }
+
+    #[test]
+    fn randomized_canonical_categories_are_noop() {
+        // These categories have a canonical/fixed shape (and JWT is a deliberate
+        // exception); Randomized must leave their length unchanged.
+        let gen = rand_gen(1);
+        let cases: Vec<(Category, &str)> = vec![
+            (Category::Uuid, "550e8400-e29b-41d4-a716-446655440000"),
+            (Category::MacAddress, "AA:BB:CC:DD:EE:FF"),
+            (Category::IpV4, "192.168.1.1"),
+            (Category::IpV6, "fd00:abcd:1234:5678::1"),
+            (Category::ContainerId, "a1b2c3d4e5f6"),
+            (Category::WindowsSid, "S-1-5-21-3623811015-3361044348"),
+            (Category::Jwt, "eyJhbGciOiJI.eyJzdWIiOiIx.SflKxwRJSMeK"),
+        ];
+        for (cat, orig) in &cases {
+            let out = gen.generate(cat, orig);
+            assert_eq!(
+                out.len(),
+                orig.len(),
+                "{cat:?} must stay length-preserving under Randomized: {orig} -> {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn randomized_token_is_valid_and_in_band() {
+        let gen = rand_gen(9);
+        for cat in [Category::AuthToken, Category::Custom("api_key".into())] {
+            let out = gen.generate(&cat, "sk-abc123-some-secret-value");
+            assert!(out.starts_with("__SANITIZED_"), "{cat:?}: {out}");
+            assert!(out.ends_with("__"), "{cat:?}: {out}");
+            let overhead = "__SANITIZED_".len() + "__".len();
+            let hex_len = out.len() - overhead;
+            assert!(
+                hex_len >= TOKEN_BAND.0 && hex_len <= TOKEN_BAND.1,
+                "{cat:?} token hex length {hex_len} out of band"
+            );
+        }
     }
 }

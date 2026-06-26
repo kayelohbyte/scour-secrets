@@ -57,6 +57,8 @@ pub(crate) fn run_scan(args: &ScanArgs) -> Result<(), (String, i32)> {
         report_format: args.report_format.clone(),
         strict: false,
         deterministic: false,
+        seed_salt_file: None,
+        randomize_length: false,
         no_structured_handoff: true,
         no_field_signal: false,
         no_baseline: false,

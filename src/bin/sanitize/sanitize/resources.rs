@@ -268,11 +268,18 @@ pub(super) fn load_run_resources(
             info!(patterns = matcher.pattern_count(), "allowlist loaded");
             Some(matcher)
         };
+    let length_policy = if cli.randomize_length {
+        rust_sanitize::LengthPolicy::Randomized
+    } else {
+        rust_sanitize::LengthPolicy::Preserve
+    };
     let store = build_store(
         cli.deterministic,
         effective_password.as_ref().map(|s| s.as_str()),
+        cli.seed_salt_file.as_deref(),
         cli.max_mappings,
         allowlist,
+        length_policy,
     )
     .map_err(|e| (e, 1))?;
 

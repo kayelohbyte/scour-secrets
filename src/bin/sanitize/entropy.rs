@@ -335,7 +335,7 @@ mod tests {
     use std::sync::Arc;
 
     fn test_store() -> Arc<MappingStore> {
-        Arc::new(MappingStore::new(Arc::new(RandomGenerator), None))
+        Arc::new(MappingStore::new(Arc::new(RandomGenerator::new()), None))
     }
 
     fn make_entropy_entry(

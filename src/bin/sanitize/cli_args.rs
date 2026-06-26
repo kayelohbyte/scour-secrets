@@ -143,6 +143,20 @@ pub(crate) struct Cli {
     #[arg(short = 'd', long)]
     pub(crate) deterministic: bool,
 
+    /// File holding the deterministic seed salt (used verbatim as the PBKDF2 salt).
+    /// Overrides the per-install salt and the SANITIZE_SEED_SALT env var. Share this
+    /// file across machines to reproduce identical deterministic output for a team.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) seed_salt_file: Option<PathBuf>,
+
+    /// Draw each replacement's length independently of the original instead of
+    /// preserving it. Output stays type-valid (a number stays digits, an email
+    /// stays an email) but the length no longer leaks the original's length.
+    /// Preserved substrings (email domain, file extension, ARN/Azure segments)
+    /// are unaffected. Composes with `--deterministic`.
+    #[arg(long)]
+    pub(crate) randomize_length: bool,
+
     /// Suppress writing newly-discovered field values back to the secrets file.
     #[arg(long)]
     pub(crate) no_structured_handoff: bool,
@@ -355,6 +369,8 @@ impl Default for Cli {
             report_format: ReportFormat::Json,
             strict: false,
             deterministic: false,
+            seed_salt_file: None,
+            randomize_length: false,
             no_structured_handoff: false,
             no_field_signal: false,
             no_baseline: false,

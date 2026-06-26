@@ -29,13 +29,19 @@
 //! 1. Read `chunk_size` bytes of new data.
 //! 2. Prepend the `carry` buffer (tail of previous window).
 //! 3. Scan the combined `window` for all pattern matches.
-//! 4. Compute `commit_point = window.len() - overlap_size` (adjusted
-//!    upward if a match straddles the boundary).
+//! 4. Compute `commit_point = window.len() - overlap_size`, then adjust:
+//!    a match fully inside the window that straddles the boundary moves the
+//!    commit point *up* (so it is emitted whole); a match that runs to the
+//!    right edge of the window may be truncated by the buffer, so the commit
+//!    point is pulled *back* to its start and the whole match is carried.
 //! 5. Emit output for `window[..commit_point]` with replacements applied.
 //! 6. Set `carry = window[commit_point..]` for the next iteration.
 //!
-//! The `overlap_size` should be ≥ the maximum expected match length to
-//! guarantee no matches are missed at boundaries.
+//! Matches up to `chunk_size` bytes are therefore always seen in full before
+//! being committed. A single match longer than `chunk_size` (a pathological
+//! unbroken token) can never be buffered; rather than leak its tail, the
+//! scanner fails closed and replaces the whole run with a fixed redaction
+//! marker (see [`OVERLONG_MARKER`]).
 //!
 //! # Thread Safety
 //!
@@ -95,6 +101,17 @@ const REGEX_SET_SIZE_CAP: usize = 256 * 1024 * 1024; // 256 MiB
 /// accidental resource exhaustion.  Override via
 /// [`StreamScanner::new_with_max_patterns`] if needed.
 const DEFAULT_MAX_PATTERNS: usize = 10_000;
+
+/// Fixed marker emitted in place of a single match that is longer than the
+/// scanner is willing to buffer (see [`StreamScanner::scan_reader_with_callbacks`]).
+///
+/// Such a match cannot be length-preserved (we never hold all of it in memory),
+/// so the scanner fails closed: it redacts the entire over-long run with this
+/// marker rather than risk emitting any of its bytes verbatim.
+const OVERLONG_MARKER: &[u8] = b"__SANITIZED_OVERLONG__";
+
+/// Pattern label reported via `on_match` for an over-long redaction.
+const OVERLONG_LABEL: &str = "overlong-redacted";
 
 /// Label suffix that marks patterns as key-value-only.
 ///
@@ -209,11 +226,17 @@ pub struct ScanPattern {
     /// Stored so `StreamScanner` can build an Aho-Corasick automaton for
     /// fast SIMD literal matching instead of running the regex engine.
     literal: Option<String>,
-    /// Minimum window size (bytes) required to produce a match.
-    /// For literal patterns this equals the byte length of the literal itself.
-    /// For regex patterns this is `0` (no guaranteed minimum).
-    /// Used to skip `captures_iter` when the window is provably too short.
+    /// Minimum match length (bytes). Matches shorter than this are discarded.
+    /// For literal patterns this defaults to the byte length of the literal
+    /// itself; for regex patterns it defaults to `0` (no minimum). Set from a
+    /// secrets entry's `min_length` to suppress short false positives.
     pub min_length: usize,
+    /// Maximum match length (bytes). Matches longer than this are discarded.
+    /// Defaults to [`usize::MAX`] (no maximum). Set from a secrets entry's
+    /// `max_length` to bound a greedy pattern — this also caps how far an
+    /// unbounded pattern can run before the streaming scanner's over-long
+    /// redaction takes over.
+    pub max_length: usize,
 }
 
 impl std::fmt::Debug for ScanPattern {
@@ -224,6 +247,7 @@ impl std::fmt::Debug for ScanPattern {
             .field("label", &self.label)
             .field("literal", &self.literal.as_deref())
             .field("min_length", &self.min_length)
+            .field("max_length", &self.max_length)
             .finish()
     }
 }
@@ -236,6 +260,7 @@ impl Clone for ScanPattern {
             label: self.label.clone(),
             literal: self.literal.clone(),
             min_length: self.min_length,
+            max_length: self.max_length,
         }
     }
 }
@@ -294,7 +319,21 @@ impl ScanPattern {
             label: label.into(),
             literal: None,
             min_length: 0,
+            max_length: usize::MAX,
         })
+    }
+
+    /// Set the inclusive match-length bounds (bytes) for this pattern.
+    ///
+    /// Matches shorter than `min` or longer than `max` are discarded during
+    /// scanning. `min == 0` and `max == usize::MAX` impose no bound. Used to
+    /// plumb a secrets entry's `min_length` / `max_length` onto a compiled
+    /// pattern without changing the public constructor signatures.
+    #[must_use]
+    pub fn with_length_bounds(mut self, min: usize, max: usize) -> Self {
+        self.min_length = min;
+        self.max_length = max;
+        self
     }
 
     /// Create a pattern from a literal string.
@@ -334,6 +373,7 @@ impl ScanPattern {
             category,
             label: label.into(),
             min_length: literal.len(),
+            max_length: usize::MAX,
             literal: Some(literal.to_owned()),
         })
     }
@@ -405,6 +445,18 @@ struct ScanScratch {
     pattern_counts: Vec<u64>,
 }
 
+/// Result of processing one scan window.
+struct WindowOutcome {
+    /// How many bytes of the window were committed (emitted) this iteration.
+    /// The tail `window[commit_point..]` becomes the carry for the next chunk
+    /// (or, when `overlong` is set, is dropped as part of the redacted run).
+    commit_point: usize,
+    /// True when a single match was longer than the scanner will buffer and was
+    /// redacted with [`OVERLONG_MARKER`]. The caller must drop the rest of the
+    /// window and keep consuming the run until a whitespace boundary is reached.
+    overlong: bool,
+}
+
 impl ScanScratch {
     fn new(pattern_count: usize, chunk_size: usize, overlap_size: usize) -> Self {
         Self {
@@ -452,8 +504,11 @@ pub struct ScanStats {
     pub bytes_processed: u64,
     /// Total bytes written to the output.
     ///
-    /// Always equals `bytes_processed` for this engine because all
-    /// replacements are length-preserving by design.
+    /// Equals `bytes_processed` under the default length-preserving policy
+    /// ([`LengthPolicy::Preserve`](crate::LengthPolicy)), because replacements
+    /// then match the original byte length. Under
+    /// [`LengthPolicy::Randomized`](crate::LengthPolicy) replacement lengths are
+    /// drawn independently of the original, so the two can differ.
     pub bytes_output: u64,
     /// Total number of matches found across all patterns.
     pub matches_found: u64,
@@ -838,6 +893,12 @@ impl StreamScanner {
         // Cumulative newline count in the file before window[0].
         let mut newlines_before_window: u64 = 0;
 
+        // True while dropping the tail of an over-long match that was already
+        // replaced with `OVERLONG_MARKER`. The run is consumed (emitting
+        // nothing) until the next whitespace byte ends it. See the over-long
+        // handling in `process_committed_window`.
+        let mut consuming_overlong = false;
+
         loop {
             // Read the next chunk.
             let bytes_read = read_fully(&mut reader, &mut read_buf)?;
@@ -860,10 +921,40 @@ impl StreamScanner {
                 break;
             }
 
+            // If we are still consuming an over-long redacted run, drop its
+            // bytes until the first whitespace boundary, then resume normal
+            // scanning on whatever follows.
+            if consuming_overlong {
+                if let Some(pos) = window.iter().position(u8::is_ascii_whitespace) {
+                    // Run ends at the first whitespace. Drop the run bytes
+                    // (already represented by the marker) and continue from the
+                    // boundary byte. A non-whitespace run contains no newlines,
+                    // so the newline counter is unchanged.
+                    consuming_overlong = false;
+                    window_file_offset += pos as u64;
+                    window.drain(..pos);
+                    if window.is_empty() {
+                        if is_eof {
+                            break;
+                        }
+                        carry.clear();
+                        continue;
+                    }
+                    // Fall through to normal processing of the remainder.
+                } else {
+                    // Whole window is still part of the run — drop it all.
+                    window_file_offset += window.len() as u64;
+                    carry.clear();
+                    if is_eof {
+                        break;
+                    }
+                    continue;
+                }
+            }
+
             // Scan the window: find matches, determine commit point, apply
             // replacements, and flush the committed region to the writer.
-            // Returns the commit_point so we can slice the carry for next iter.
-            let commit_point = self.process_committed_window(
+            let outcome = self.process_committed_window(
                 &window,
                 is_eof,
                 &mut scratch,
@@ -873,6 +964,7 @@ impl StreamScanner {
                 newlines_before_window,
                 &mut on_match,
             )?;
+            let commit_point = outcome.commit_point;
 
             // Advance file-level position counters for the next iteration.
             // window[commit_point] is where the next window's carry starts,
@@ -890,6 +982,16 @@ impl StreamScanner {
                 matches_found: stats.matches_found,
                 replacements_applied: stats.replacements_applied,
             });
+
+            if outcome.overlong {
+                // The marker was emitted for the run head; drop the rest of this
+                // window and keep consuming the run in following windows until a
+                // whitespace boundary is reached. (`overlong` implies `!is_eof`.)
+                window_file_offset += (window.len() - commit_point) as u64;
+                consuming_overlong = true;
+                carry.clear();
+                continue;
+            }
 
             // Update carry for next iteration.
             if is_eof {
@@ -917,7 +1019,7 @@ impl StreamScanner {
         window_file_offset: u64,
         newlines_before_window: u64,
         on_match: &mut dyn FnMut(MatchLocation),
-    ) -> Result<usize> {
+    ) -> Result<WindowOutcome> {
         // Find all non-overlapping matches in the window.
         self.find_matches(window, scratch);
 
@@ -929,6 +1031,16 @@ impl StreamScanner {
         };
         let commit_point =
             self.adjusted_commit_point(&scratch.selected, base_commit, window.len(), is_eof);
+
+        // If `adjusted_commit_point` pulled the commit back to carry an
+        // edge-touching match, the carry is `window[commit_point..]`. When that
+        // carry would exceed `max_carry`, a single match is longer than we are
+        // willing to hold in memory (a pathological unbroken token larger than a
+        // chunk). We can neither length-preserve it nor safely commit it, so we
+        // fail closed: redact the run with a fixed marker. `max_carry` is the
+        // chunk size, so peak memory stays ≈ `2 * chunk_size + overlap`.
+        let max_carry = self.config.chunk_size;
+        let overlong = !is_eof && window.len().saturating_sub(commit_point) > max_carry;
 
         // Build output for the committed region (fills scratch.output).
         self.apply_replacements(
@@ -945,7 +1057,28 @@ impl StreamScanner {
         writer.write_all(&scratch.output)?;
         stats.bytes_output += scratch.output.len() as u64;
 
-        Ok(commit_point)
+        if overlong {
+            // The over-long match starts exactly at `commit_point` (it is the
+            // sole match occupying the window tail) and continues past the
+            // window edge. Emit one redaction marker for it; the caller drops
+            // the remaining run bytes across this and following windows.
+            writer.write_all(OVERLONG_MARKER)?;
+            stats.bytes_output += OVERLONG_MARKER.len() as u64;
+            stats.matches_found += 1;
+            stats.replacements_applied += 1;
+            on_match(MatchLocation {
+                line: newlines_before_window
+                    + count_newlines(&window[..commit_point])
+                    + 1,
+                byte_offset: window_file_offset + commit_point as u64,
+                pattern: OVERLONG_LABEL.to_string(),
+            });
+        }
+
+        Ok(WindowOutcome {
+            commit_point,
+            overlong,
+        })
     }
 
     /// Fold per-chunk pattern hit counts into the cumulative `stats.pattern_counts`
@@ -1135,10 +1268,14 @@ impl StreamScanner {
         // Literals never have capture groups — capture is always None.
         if let Some(ac) = &self.aho_corasick {
             for mat in ac.find_overlapping_iter(window) {
+                let pattern_idx = self.literal_indices[mat.pattern().as_usize()];
+                if self.length_out_of_bounds(pattern_idx, mat.end() - mat.start()) {
+                    continue;
+                }
                 scratch.all_matches.push(RawMatch {
                     start: mat.start(),
                     end: mat.end(),
-                    pattern_idx: self.literal_indices[mat.pattern().as_usize()],
+                    pattern_idx,
                     capture: None,
                 });
             }
@@ -1152,11 +1289,14 @@ impl StreamScanner {
         // replacing the full match.
         for rs_idx in self.regex_set.matches(window) {
             let pattern_idx = self.regex_indices[rs_idx];
-            if window.len() < self.patterns[pattern_idx].min_length {
-                continue;
-            }
             for cap in self.patterns[pattern_idx].regex.captures_iter(window) {
                 let full = cap.get(0).expect("group 0 always exists");
+                // Drop matches outside the pattern's configured length bounds
+                // (e.g. a `min_length`/`max_length` from the secrets file). The
+                // check is on the *match* length, not the window length.
+                if self.length_out_of_bounds(pattern_idx, full.end() - full.start()) {
+                    continue;
+                }
                 let capture = cap.get(1).map(|g| (g.start(), g.end()));
                 scratch.all_matches.push(RawMatch {
                     start: full.start(),
@@ -1191,6 +1331,14 @@ impl StreamScanner {
         }
     }
 
+    /// Whether a match of `len` bytes falls outside pattern `idx`'s configured
+    /// min/max length bounds and should be discarded.
+    #[inline]
+    fn length_out_of_bounds(&self, idx: usize, len: usize) -> bool {
+        let p = &self.patterns[idx];
+        len < p.min_length || len > p.max_length
+    }
+
     /// Adjust the commit point to avoid splitting a match across the
     /// commit / carry boundary.
     ///
@@ -1213,7 +1361,22 @@ impl StreamScanner {
 
         for m in matches {
             if m.start < commit && m.end > commit {
-                // Match straddles the boundary — extend commit to include it.
+                // Match straddles the boundary.
+                if m.end >= window_len {
+                    // The match runs to the right edge of the window, so it may
+                    // be truncated by the buffer — more of it could arrive in
+                    // the next chunk. Committing it now would emit a replacement
+                    // for a *partial* secret and leak the continuation verbatim
+                    // (the continuation no longer matches the pattern). Pull the
+                    // commit point back to the match start so the whole match is
+                    // carried into the next window and re-scanned with more
+                    // context. `matches` is sorted and non-overlapping, so no
+                    // earlier match ends after `m.start`; lowering `commit` to it
+                    // never strands a partial match in the committed region.
+                    commit = m.start;
+                    break;
+                }
+                // Fully contained — safe to commit in this iteration.
                 commit = m.end;
             }
         }
@@ -1580,6 +1743,109 @@ mod tests {
         assert!(out_str.contains("@corp.com"), "domain must be preserved");
     }
 
+    /// Helper: unbounded token pattern (no length cap), like a URL/key body.
+    fn token_pattern() -> ScanPattern {
+        ScanPattern::from_regex(r"TOK[A-Za-z0-9]+", Category::AuthToken, "tok").unwrap()
+    }
+
+    // ---- Over-long match boundary leak (regression) ----
+
+    #[test]
+    fn long_match_exceeding_overlap_is_fully_replaced() {
+        // A token longer than `overlap` (16) but shorter than `chunk` (64) must
+        // be carried whole across the boundary and replaced exactly once — no
+        // raw bytes may survive and it must not be split into two mappings.
+        let gen = Arc::new(HmacGenerator::new([42u8; 32]));
+        let store = Arc::new(MappingStore::new(gen, None));
+        let scanner = StreamScanner::new(
+            vec![token_pattern()],
+            Arc::clone(&store),
+            ScanConfig {
+                chunk_size: 64,
+                overlap_size: 16,
+            },
+        )
+        .unwrap();
+
+        let secret = format!("TOK{}", "A".repeat(40)); // 43 bytes > overlap, < chunk
+        let input = format!("{} {} {}", "X".repeat(30), secret, "Y".repeat(30));
+        let (output, stats) = scanner.scan_bytes(input.as_bytes()).unwrap();
+        let out = String::from_utf8_lossy(&output);
+
+        assert!(
+            !out.contains("AAAAAAAAAA"),
+            "raw token bytes leaked: {out}"
+        );
+        assert!(!out.contains(&secret), "full token survived: {out}");
+        assert_eq!(stats.matches_found, 1, "token must match exactly once");
+        assert_eq!(store.len(), 1, "token must map to a single replacement");
+        assert_eq!(
+            output.len(),
+            input.len(),
+            "length must be preserved for a non-overlong match"
+        );
+    }
+
+    #[test]
+    fn overlong_match_is_redacted_not_leaked() {
+        // A single token longer than `max_carry` (== chunk_size, 64) cannot be
+        // buffered; it must be redacted with the marker and leak zero bytes.
+        let scanner = test_scanner(vec![token_pattern()]); // chunk 64, overlap 16
+        let secret = format!("TOK{}", "A".repeat(500)); // 503 bytes > chunk
+        let input = format!("before {secret} after");
+        let (output, _stats) = scanner.scan_bytes(input.as_bytes()).unwrap();
+        let out = String::from_utf8_lossy(&output);
+
+        assert!(
+            !out.contains("AAAAAAAAAA"),
+            "overlong token leaked raw bytes: {out}"
+        );
+        assert!(
+            out.contains(std::str::from_utf8(OVERLONG_MARKER).unwrap()),
+            "overlong token must be redacted with the marker: {out}"
+        );
+        assert!(out.starts_with("before "), "prefix preserved: {out}");
+        assert!(out.ends_with(" after"), "suffix after the run preserved: {out}");
+    }
+
+    #[test]
+    fn overlong_match_running_to_eof_is_redacted() {
+        // The over-long run never hits a whitespace boundary before EOF — every
+        // remaining byte must be consumed, leaking nothing.
+        let scanner = test_scanner(vec![token_pattern()]);
+        let secret = format!("TOK{}", "A".repeat(500));
+        let input = format!("before {secret}");
+        let (output, _stats) = scanner.scan_bytes(input.as_bytes()).unwrap();
+        let out = String::from_utf8_lossy(&output);
+
+        assert!(!out.contains("AAAAAAAAAA"), "leaked to EOF: {out}");
+        assert!(
+            out.contains(std::str::from_utf8(OVERLONG_MARKER).unwrap()),
+            "must redact with marker: {out}"
+        );
+        assert!(out.starts_with("before "), "prefix preserved: {out}");
+    }
+
+    #[test]
+    fn length_bounds_filter_matches() {
+        // A digit-run pattern bounded to 4..=8 bytes: shorter and longer runs
+        // pass through untouched; in-range runs are replaced.
+        let pat = ScanPattern::from_regex(r"[0-9]+", Category::Custom("num".into()), "num")
+            .unwrap()
+            .with_length_bounds(4, 8);
+        let scanner = test_scanner(vec![pat]);
+
+        let input = b"a 12 b 1234 c 1234567890 d";
+        let (output, stats) = scanner.scan_bytes(input).unwrap();
+        let out = String::from_utf8_lossy(&output);
+
+        assert_eq!(stats.matches_found, 1, "only the 4-digit run is in range");
+        assert!(out.contains("12 "), "short run preserved: {out}");
+        assert!(out.contains("1234567890"), "long run preserved: {out}");
+        assert!(!out.contains(" 1234 "), "in-range run replaced: {out}");
+        assert_eq!(output.len(), input.len(), "length preserved");
+    }
+
     // ---- Large input requiring many chunks ----
 
     #[test]
@@ -1832,5 +2098,38 @@ mod tests {
         assert_eq!(stats.bytes_output, output.len() as u64);
         // Length-preserving: output length matches input length.
         assert_eq!(output.len(), input.len());
+    }
+
+    #[test]
+    fn randomized_length_decorrelates_numeric_output() {
+        use crate::generator::{LengthPolicy, RandomGenerator};
+        // A short numeric value under Randomized is replaced by a band-length
+        // digit run (8..=18 digits), so the output no longer matches the input
+        // length and bytes_output diverges from bytes_processed.
+        let gen = Arc::new(RandomGenerator::new().with_length_policy(LengthPolicy::Randomized));
+        let store = Arc::new(MappingStore::new(gen, None));
+        let pat = ScanPattern::from_regex(r"\b\d{4,}\b", Category::Phone, "num").unwrap();
+        let scanner = StreamScanner::new(
+            vec![pat],
+            store,
+            ScanConfig {
+                chunk_size: 64,
+                overlap_size: 16,
+            },
+        )
+        .unwrap();
+        let input = b"id=123456 end"; // the value "123456" is 6 digits
+        let (output, stats) = scanner.scan_bytes(input).unwrap();
+        let out = String::from_utf8(output).unwrap();
+        assert!(!out.contains("123456"), "value must be replaced: {out}");
+        assert_eq!(stats.replacements_applied, 1);
+        assert_eq!(stats.bytes_output, out.len() as u64);
+        assert!(
+            stats.bytes_output > stats.bytes_processed,
+            "randomized replacement (>=8 digits) must lengthen a 6-digit value: \
+             processed={} output={}",
+            stats.bytes_processed,
+            stats.bytes_output
+        );
     }
 }

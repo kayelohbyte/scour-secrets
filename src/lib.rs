@@ -139,7 +139,7 @@ pub mod strip_values;
 pub use atomic::{atomic_write, atomic_write_private, AtomicFileWriter};
 pub use category::Category;
 pub use error::{Result, SanitizeError};
-pub use generator::{HmacGenerator, RandomGenerator, ReplacementGenerator};
+pub use generator::{HmacGenerator, LengthPolicy, RandomGenerator, ReplacementGenerator};
 pub use llm::{
     format_llm_prompt, format_llm_prompt_reference, resolve_llm_template, LlmEntry, LlmPathEntry,
     PROMPT_PREAMBLE, TEMPLATE_REVIEW_CONFIG, TEMPLATE_REVIEW_SECURITY, TEMPLATE_TROUBLESHOOT,

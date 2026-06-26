@@ -1,30 +1,100 @@
+use std::path::Path;
 use std::sync::Arc;
 use tracing::{info, warn};
 use zeroize::Zeroizing;
 
 use rust_sanitize::secrets::{entries_to_patterns, parse_category, SecretEntry};
 use rust_sanitize::{
-    FieldNameSignal, HmacGenerator, MappingStore, RandomGenerator, ReplacementGenerator,
-    ScanConfig, ScanPattern, StreamScanner, DEFAULT_FIELD_SIGNAL_THRESHOLD,
+    atomic_write_private, FieldNameSignal, HmacGenerator, LengthPolicy, MappingStore,
+    RandomGenerator, ReplacementGenerator, ScanConfig, ScanPattern, StreamScanner,
+    DEFAULT_FIELD_SIGNAL_THRESHOLD,
 };
+
+/// Environment variable supplying the deterministic seed salt directly.
+///
+/// To reproduce deterministic output created before per-install salts existed
+/// (pre-0.14.2), set this to the legacy constant
+/// `rust-sanitize:deterministic-seed:v1`.
+const SEED_SALT_ENV: &str = "SANITIZE_SEED_SALT";
+
+/// Resolve the deterministic seed salt used as the PBKDF2 salt.
+///
+/// Priority:
+/// 1. `--seed-salt-file <PATH>` — file contents used verbatim.
+/// 2. `SANITIZE_SEED_SALT` env var — string bytes used verbatim.
+/// 3. Persisted per-install salt at `<config_dir>/seed-salt`.
+/// 4. Freshly generated 32 random bytes, persisted (mode 0600) for reuse.
+///
+/// The salt is used directly as the PBKDF2 salt (any length is valid), so the
+/// legacy constant remains reproducible via the env var.
+fn resolve_seed_salt(seed_salt_file: Option<&Path>) -> std::result::Result<Zeroizing<Vec<u8>>, String> {
+    use rand::Rng;
+
+    if let Some(path) = seed_salt_file {
+        let bytes = std::fs::read(path)
+            .map_err(|e| format!("cannot read seed-salt file {}: {e}", path.display()))?;
+        if bytes.is_empty() {
+            return Err(format!("seed-salt file {} is empty", path.display()));
+        }
+        return Ok(Zeroizing::new(bytes));
+    }
+
+    if let Ok(env) = std::env::var(SEED_SALT_ENV) {
+        if !env.is_empty() {
+            return Ok(Zeroizing::new(env.into_bytes()));
+        }
+    }
+
+    let path = crate::hooks::sanitize_config_dir().join("seed-salt");
+    if path.exists() {
+        let bytes = std::fs::read(&path)
+            .map_err(|e| format!("cannot read seed-salt file {}: {e}", path.display()))?;
+        if bytes.is_empty() {
+            return Err(format!(
+                "seed-salt file {} is empty; delete it to regenerate",
+                path.display()
+            ));
+        }
+        return Ok(Zeroizing::new(bytes));
+    }
+
+    // Generate and persist a fresh per-install salt.
+    let mut salt = Zeroizing::new(vec![0u8; 32]);
+    rand::rng().fill(salt.as_mut_slice());
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create config dir {}: {e}", dir.display()))?;
+    }
+    atomic_write_private(&path, &salt)
+        .map_err(|e| format!("cannot write seed-salt file {}: {e}", path.display()))?;
+    info!(path = %path.display(), "created a new per-install deterministic seed salt");
+    eprintln!(
+        "info: created a new per-install deterministic seed salt at {}.\n\
+         info: copy this file (or set {SEED_SALT_ENV}) to reproduce identical output on other machines.",
+        path.display()
+    );
+    Ok(salt)
+}
 
 /// Build an `Arc<MappingStore>` with the chosen generator mode.
 pub(crate) fn build_store(
     deterministic: bool,
     password: Option<&str>,
+    seed_salt_file: Option<&Path>,
     max_mappings: usize,
     allowlist: Option<Arc<rust_sanitize::allowlist::AllowlistMatcher>>,
+    length_policy: LengthPolicy,
 ) -> std::result::Result<Arc<MappingStore>, String> {
     let generator: Arc<dyn ReplacementGenerator> = if deterministic {
         match password {
             Some(k) => {
                 use hmac::Hmac;
                 use sha2::Sha256;
+                let salt = resolve_seed_salt(seed_salt_file)?;
                 let mut buf = Zeroizing::new([0u8; 32]);
-                let salt = b"rust-sanitize:deterministic-seed:v1";
-                pbkdf2::pbkdf2::<Hmac<Sha256>>(k.as_bytes(), salt, 600_000, buf.as_mut())
+                pbkdf2::pbkdf2::<Hmac<Sha256>>(k.as_bytes(), &salt, 600_000, buf.as_mut())
                     .expect("PBKDF2 output length is valid");
-                Arc::new(HmacGenerator::new(*buf))
+                Arc::new(HmacGenerator::new(*buf).with_length_policy(length_policy))
             }
             None => {
                 return Err(
@@ -35,7 +105,7 @@ pub(crate) fn build_store(
             }
         }
     } else {
-        Arc::new(RandomGenerator::new())
+        Arc::new(RandomGenerator::new().with_length_policy(length_policy))
     };
     let capacity = if max_mappings == 0 {
         None
@@ -349,4 +419,71 @@ pub(crate) fn build_scan_config(chunk_size: usize) -> Result<ScanConfig, String>
     let cfg = ScanConfig::new(chunk_size, overlap);
     cfg.validate().map_err(|e| e.to_string())?;
     Ok(cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn seed_salt_file_used_verbatim() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(b"rust-sanitize:deterministic-seed:v1").unwrap();
+        f.flush().unwrap();
+        let salt = resolve_seed_salt(Some(f.path())).unwrap();
+        assert_eq!(&salt[..], b"rust-sanitize:deterministic-seed:v1");
+    }
+
+    #[test]
+    fn seed_salt_file_empty_is_error() {
+        let f = tempfile::NamedTempFile::new().unwrap();
+        let err = resolve_seed_salt(Some(f.path())).unwrap_err();
+        assert!(err.contains("empty"), "expected empty error, got: {err}");
+    }
+
+    #[test]
+    fn deterministic_requires_password() {
+        match build_store(true, None, None, 0, None, LengthPolicy::Preserve) {
+            Ok(_) => panic!("expected an error without a password"),
+            Err(err) => assert!(err.contains("--password"), "got: {err}"),
+        }
+    }
+
+    #[test]
+    fn length_policy_applies_to_both_generator_modes() {
+        use rust_sanitize::category::Category;
+
+        // Use an explicit seed-salt file for the deterministic arm so the test
+        // never touches the per-install config dir.
+        let mut salt = tempfile::NamedTempFile::new().unwrap();
+        salt.write_all(b"unit-test-salt").unwrap();
+        salt.flush().unwrap();
+
+        // A 6-digit phone value: under Randomized it becomes a band-length digit
+        // run (>= 8 digits), so its length must differ from the input regardless
+        // of which generator mode build_store selected.
+        let stores = [
+            build_store(false, None, None, 0, None, LengthPolicy::Randomized).unwrap(),
+            build_store(
+                true,
+                Some("pw"),
+                Some(salt.path()),
+                0,
+                None,
+                LengthPolicy::Randomized,
+            )
+            .unwrap(),
+        ];
+        for store in stores {
+            let out = store.get_or_insert(&Category::Phone, "123456").unwrap();
+            assert!(out.chars().all(|c| c.is_ascii_digit()), "got: {out}");
+            assert!(out.len() >= 8, "randomized digit run must be >= 8: {out}");
+        }
+
+        // Sanity: under Preserve the same value keeps its length.
+        let store = build_store(false, None, None, 0, None, LengthPolicy::Preserve).unwrap();
+        let out = store.get_or_insert(&Category::Phone, "123456").unwrap();
+        assert_eq!(out.len(), 6, "preserve must keep length: {out}");
+    }
 }

@@ -51,6 +51,8 @@ All public types are re-exported from the crate root (`rust_sanitize::*`) for co
 | `HmacGenerator::from_slice(bytes)` | Create from a byte slice (must be exactly 32 bytes). |
 | `RandomGenerator` | Non-deterministic generator using OS CSPRNG (`rand::rng()`). |
 | `RandomGenerator::new()` | Create a new random generator. |
+| `LengthPolicy` | `Preserve` (default) keeps each replacement's byte length equal to the original; `Randomized` draws the length from a per-category band, independent of the original (hides the secret's length while keeping output type-valid). |
+| `Generator::with_length_policy(policy)` | Builder on both `HmacGenerator` and `RandomGenerator`; returns the generator with the given `LengthPolicy`. Defaults to `Preserve`. |
 
 ## Strategy Module (`strategy`)
 
@@ -197,7 +199,7 @@ When `--extract-context` is used, each file entry in the report's `files` array 
 
 | Type / Function | Description |
 |-----------------|-------------|
-| `SecretEntry` | A single secret: `pattern`, `kind` (`"regex"`, `"literal"`, or `"allow"`), `category`, `label`, `values` (optional `Vec<String>` for compact multi-value `kind: allow` entries). Zeroized on drop. |
+| `SecretEntry` | A single secret: `pattern`, `kind` (`"regex"`, `"literal"`, or `"allow"`), `category`, `label`, `values` (optional `Vec<String>` for compact multi-value `kind: allow` entries), `min_length` / `max_length` (optional — `regex`/`literal` matches outside these byte bounds are discarded; `max_length` also caps greedy patterns). Zeroized on drop. |
 | `SecretsFormat` | Enum: `Json`, `Yaml`, `Toml`. |
 | `load_secrets_auto(data, password, format, force_plaintext)` | Detect encrypted vs plaintext and load secret patterns accordingly. Returns `(PatternCompileResult, was_encrypted)`. |
 | `looks_encrypted(data)` | Heuristic: returns `true` if the data does not look like plaintext JSON/YAML/TOML (i.e. it's likely encrypted). |

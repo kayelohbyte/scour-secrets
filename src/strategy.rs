@@ -520,7 +520,12 @@ impl Strategy for CategoryAwareStrategy {
     }
 
     fn replace(&self, category: &Category, original: &str, entropy: &[u8; 32]) -> String {
-        crate::generator::format_replacement(category, entropy, original)
+        crate::generator::format_replacement(
+            category,
+            entropy,
+            original,
+            crate::generator::LengthPolicy::Preserve,
+        )
     }
 }
 

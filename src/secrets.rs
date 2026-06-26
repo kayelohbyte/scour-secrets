@@ -590,7 +590,14 @@ pub fn entries_to_patterns(entries: &[SecretEntry]) -> PatternCompileResult {
         };
 
         match result {
-            Ok(pat) => patterns.push(pat),
+            Ok(pat) => {
+                // Apply the entry's optional match-length bounds. Unset bounds
+                // keep the pattern's defaults (min 0 for regex / literal length
+                // for literals, max unbounded).
+                let min = entry.min_length.unwrap_or(pat.min_length);
+                let max = entry.max_length.unwrap_or(pat.max_length);
+                patterns.push(pat.with_length_bounds(min, max));
+            }
             Err(e) => errors.push((i, e)),
         }
     }
@@ -917,6 +924,24 @@ label = "openai_key"
         let (patterns, errors) = entries_to_patterns(&entries);
         assert_eq!(patterns.len(), 2);
         assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn entries_to_patterns_applies_length_bounds() {
+        let json = r#"[
+            {"pattern": "[0-9]+", "kind": "regex", "category": "custom:num",
+             "min_length": 4, "max_length": 8},
+            {"pattern": "[a-z]+", "kind": "regex", "category": "custom:word"}
+        ]"#;
+        let entries = parse_secrets(json.as_bytes(), Some(SecretsFormat::Json)).unwrap();
+        let (patterns, errors) = entries_to_patterns(&entries);
+        assert!(errors.is_empty());
+        assert_eq!(patterns.len(), 2);
+        assert_eq!(patterns[0].min_length, 4);
+        assert_eq!(patterns[0].max_length, 8);
+        // Unset bounds keep regex defaults (0 / unbounded).
+        assert_eq!(patterns[1].min_length, 0);
+        assert_eq!(patterns[1].max_length, usize::MAX);
     }
 
     #[test]

@@ -691,7 +691,9 @@ When neither `-s`/`--secrets-file` nor `--app` is provided, the built-in pattern
 | `--fail-on-match` | | Exit with code 2 if any matches are found. |
 | `-r, --report [PATH]` | `-r` | Write a JSON report to `PATH` (or stderr if no path given). Use `--report -` to write the report to stdout. The report includes: `metadata` (tool version, flags), `summary` (totals, `duration_ms`, `pattern_counts`), and a `files` array with per-file `matches`, `replacements`, byte counts, `pattern_counts`, and `method`. `pattern_counts` maps each pattern `label` to its scanner hit count; it is empty (`{}`) when all matches came from the structured-processor pass or when patterns have no label. |
 | `--strict` | | Abort on the first error instead of skipping and continuing. |
-| `-d, --deterministic` | `-d` | Use HMAC-deterministic replacements (reproducible across runs with the same password). Requires a password via `SANITIZE_PASSWORD`, `--password-file`, or `-p`. |
+| `-d, --deterministic` | `-d` | Use HMAC-deterministic replacements (reproducible across runs with the same password **and** seed salt). Requires a password via `SANITIZE_PASSWORD`, `--password-file`, or `-p`. The seed salt is unique per install by default (generated at `<config_dir>/seed-salt`, mode `0600`); see `--seed-salt-file`. |
+| `--seed-salt-file <PATH>` | | File whose contents are used verbatim as the deterministic seed salt. Overrides the per-install salt and the `SANITIZE_SEED_SALT` env var. Share this file (or the env var) across machines to reproduce identical deterministic output for a team. To reproduce pre-0.14.2 output, set `SANITIZE_SEED_SALT=rust-sanitize:deterministic-seed:v1`. |
+| `--randomize-length` | | Draw each replacement's length from a per-category band instead of preserving the original's length, so the output no longer leaks how long the secret was. Output stays type-valid (a number stays digits, an email stays an email, a path keeps its extension) and preserved substrings (email domain, file extension, ARN/Azure segments) are unchanged. Canonical-shape categories (UUID, MAC, IPv4/6, container ID, Windows SID, JWT) keep their natural length. Composes with `--deterministic`. See SECURITY.md §4. |
 | `--no-structured-handoff` | | Suppress the structured-to-scanner value handoff. By default, when a profile is active (`--profile` or `--app` with a profile) and `--secrets-file` is provided, values discovered in typed fields are appended to that file as `kind: literal` entries so the scanner pass can catch those same values in logs, comments, and unstructured text. Disabling this weakens coverage — the scanner will no longer see values that were only found by the structured pass. |
 | `--include-binary` | | Process entries that appear to be binary data (default: skip). |
 | `--threads <N>` | | Number of worker threads. When multiple input files are given, files are processed in parallel up to this limit. For a single archive input, entries are sanitized in parallel using the same budget. Defaults to the number of logical CPUs. Capped to available parallelism. |
@@ -1364,6 +1366,25 @@ SANITIZE_PASSWORD=secret sanitize server.log \
 
 ```bash
 sanitize data.csv -s s.enc --encrypted-secrets --password -d
+```
+
+The seed salt is unique per install by default. To reproduce identical output
+on another machine, share the salt:
+
+```bash
+# Machine A: copy ~/.config/sanitize/seed-salt to machine B, or:
+SANITIZE_SEED_SALT="team-shared-value" sanitize data.csv --password -d
+# Machine B: same env var (or --seed-salt-file) → identical mappings
+```
+
+**Length-randomizing mode (hide how long each secret was):**
+
+```bash
+# id=123456 → a digit run of a different length; the @corp.com domain is kept
+echo 'id=123456 e=alice@corp.com' | sanitize -s secrets.yaml --randomize-length
+
+# Composes with -d: reproducible across runs, but length ≠ input length
+echo 'id=123456' | SANITIZE_PASSWORD=secret sanitize -s secrets.yaml -d --randomize-length
 ```
 
 **Process a tar.gz archive with strict error handling:**

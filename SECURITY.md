@@ -69,14 +69,48 @@ a priority chain designed to balance convenience with security:
 When using `HmacGenerator`, replacements are derived from:
 
 ```
-HMAC-SHA256(seed, category_tag || "\x00" || plaintext_value)
+seed         = PBKDF2-HMAC-SHA256(password, salt, 600_000)   // 32 bytes
+replacement  = HMAC-SHA256(seed, category_tag || "\x00" || plaintext_value)
 ```
 
-- The **seed** is a 32-byte key provided at CLI invocation. Same seed +
-  same value → same replacement across runs.
+- The **seed** is a 32-byte key derived from the `--password` (or
+  `SANITIZE_PASSWORD`) via PBKDF2. Same password + same salt + same value →
+  same replacement across runs.
 - The seed is zeroized on `HmacGenerator` drop.
 - Category `domain_tag_hmac()` provides domain separation so e.g. an email
   `"alice"` and a hostname `"alice"` produce different replacements.
+
+### Seed salt (per-install by default)
+
+The PBKDF2 salt is **unique per install**, not a global constant. On the first
+`--deterministic` run a 32-byte CSPRNG salt is generated and persisted at
+`<config_dir>/seed-salt` (mode `0600`), then reused on every later run.
+
+This closes the realistic off-box attack: an adversary who has only the
+**shared sanitized output** (the artifact this tool is built to produce) cannot
+run the dictionary-confirmation attack below without also possessing the salt,
+which never leaves the machine. A global constant salt would let one
+password→seed table attack every install at once.
+
+Salt resolution order (deterministic mode):
+
+1. `--seed-salt-file <PATH>` — file contents, used verbatim as the PBKDF2 salt.
+2. `SANITIZE_SEED_SALT` env var — string bytes, used verbatim.
+3. Persisted per-install salt at `<config_dir>/seed-salt`.
+4. Freshly generated and persisted (the default first-run path).
+
+**Cross-machine reproducibility** now requires sharing the salt: copy the
+`seed-salt` file, or set `SANITIZE_SEED_SALT` / `--seed-salt-file` to a common
+value across machines. **Migration:** output produced before per-install salts
+existed is reproducible by setting `SANITIZE_SEED_SALT` to the legacy constant
+`rust-sanitize:deterministic-seed:v1`.
+
+> **One password, two uses.** The same password seeds both secrets-file
+> decryption and the deterministic generator (with distinct salts). Guessing it
+> offline compromises both, but the per-install secret salt means an off-box
+> attacker cannot mount that guess against the seed at all. An in-process
+> attacker who could read the live seed already sees the plaintext input (§8),
+> so a separate seed secret would add no protection there.
 
 ### Determinism trade-offs
 
@@ -92,6 +126,13 @@ structure. Callers should understand what the output still reveals:
   **length-preserving** and category-shaped, so the output preserves the
   length and rough format of each secret. This can narrow the space of
   candidate plaintexts for low-entropy values.
+- **Preserved-substring leakage.** To stay format-accurate, replacements
+  retain non-secret structure verbatim: an email's domain, a hostname's
+  suffix, a URL's host, a file extension, ARN/Azure known segments. If those
+  substrings are themselves sensitive (e.g. an internal project name in a
+  domain), add an explicit secrets-file rule for them or rely on the profile
+  pass to discover and map them — the format-preserving formatters will not
+  redact them on their own.
 - **Dictionary confirmation with a weak/shared seed.** Because the
   mapping is `HMAC(seed, value)`, anyone who knows or guesses the seed can
   compute the replacement for any candidate value and confirm it against
@@ -99,9 +140,65 @@ structure. Callers should understand what the output still reveals:
   confirmation of low-entropy values (short IDs, enum-like fields,
   common usernames). Use a high-entropy seed and treat it as a secret.
 
-For maximum unlinkability where cross-run consistency is *not* required,
-prefer the non-deterministic (random) generator, which breaks all three
-of the above by mapping equal inputs to independent random replacements.
+### What the non-deterministic (random) generator does and does not change
+
+For workloads that do not need cross-run consistency, the random generator
+(`RandomGenerator`, the default when `--deterministic` is not set) draws each
+new replacement from the OS CSPRNG instead of `HMAC(seed, value)`. It changes
+exactly two of the properties above:
+
+- **Removes the dictionary-confirmation oracle.** There is no seed to guess, so
+  an attacker cannot recompute a replacement from a candidate value.
+- **Breaks cross-run equality linkage.** The same value sanitized in two
+  *separate* invocations maps to unrelated replacements.
+
+It deliberately leaves the other two properties **unchanged**:
+
+- **Within-run / in-document equality still leaks.** The `MappingStore` caches
+  the first replacement per value (first-writer-wins) for *both* generators,
+  because "every occurrence of one secret maps to one replacement" is a core
+  requirement of the tool. So inside a single sanitized document an observer can
+  still tell which values were equal.
+- **Structure / length still leaks.** Random replacements use the same
+  length-preserving, category-shaped formatters, so length and rough format are
+  preserved just as in deterministic mode.
+
+In short: random mode buys cross-run unlinkability and removes the dictionary
+oracle; it is **not** a way to hide value structure or in-document equality.
+Hiding those would require abandoning the format-preserving and
+same-secret-same-replacement guarantees, which is outside this tool's design.
+
+### What the length-randomizing mode does and does not change
+
+`--randomize-length` (`LengthPolicy::Randomized`) addresses the first residual
+leak above — **structural / length leakage** — for callers who do not need
+byte-accurate format preservation. Instead of sizing each replacement to the
+original, it draws the length from a per-category band derived from the hash,
+uncorrelated to the original. It composes with both the deterministic and the
+random generator.
+
+- **Hides the original's length.** A 6-digit number and a 14-digit number both
+  map to a digit run whose length is decided by the hash, not the input. The
+  output stays type-valid (digits stay digits, an email stays an email, a path
+  keeps its extension).
+
+It deliberately leaves these **unchanged**:
+
+- **Preserved substrings still leak.** Non-secret structure that is copied
+  verbatim — email domain, hostname suffix, file extension, ARN/Azure known
+  segments — is unaffected; if those are themselves sensitive, add an explicit
+  rule for them (same caveat as above).
+- **In-document equality still leaks.** Within-run consistency is preserved via
+  the `MappingStore` cache, so equal values still map to equal replacements
+  inside one document.
+- **Canonical-shape categories are not length-randomized.** UUID, MAC, IPv4,
+  IPv6, container ID, Windows SID, and JWT keep their natural length, because a
+  different length would make them structurally invalid (or, for JWT, buys
+  little — these values are already high-entropy).
+
+In short: length-randomizing mode hides the original's length while keeping
+output type-valid; it does not hide preserved substrings or in-document
+equality.
 
 ---
 
@@ -123,7 +220,7 @@ exhaustion:
 | XML element depth | 256 | Prevents stack overflow |
 | CSV input size | 256 MiB | Bounds memory for full parse |
 | Structured archive entry | 256 MiB | Oversized entries fall to streaming scanner |
-| Scanner chunk size | Configurable (default 1 MiB) | Peak memory ≈ chunk + overlap |
+| Scanner chunk size | Configurable (default 1 MiB) | Peak memory ≈ 2 × chunk + overlap (a single match is carried up to `chunk_size`; longer matches are redacted, see §16) |
 
 ---
 
@@ -279,10 +376,36 @@ and error descriptions.
 | YAML alias bomb | Input size + node count + depth caps |
 | XML billion-laughs | Input size + element depth limits |
 | Unbounded memory from large files | Streaming scanner (chunk + overlap) |
+| Secret leak at a chunk boundary | Edge-touching matches are carried, not committed; over-long matches are redacted (§16) |
 | Partial output after crash | Atomic file writes (tmp → fsync → rename) |
 | Secret leakage in logs | No secret values in tracing output |
 | Plaintext lingering in memory | Zeroize on Drop for keys, secrets, mappings |
 | Reverse-engineering replacements | One-way only; no mapping table persisted |
-| Equality/structure leakage in deterministic mode | Documented trade-off (§4); use random generator when unlinkability matters |
+| Equality/structure leakage in deterministic mode | Documented trade-off (§4); random generator removes cross-run linkage + the dictionary oracle, but not in-document equality or length/structure |
 | Dictionary confirmation of low-entropy values | High-entropy, secret seed; non-deterministic mode removes the oracle (§4) |
 | Thread oversubscription | CLI caps threads to `available_parallelism()` |
+
+---
+
+## 16. Chunk-Boundary Leak Mitigation
+
+The streaming scanner processes input in `chunk_size` windows. A match that
+runs to the right edge of a window may be **truncated** by the buffer — more of
+it could arrive in the next chunk. Committing such a match would emit a
+replacement for a *partial* secret and pass the continuation through verbatim
+(the continuation no longer matches the pattern). The scanner prevents this:
+
+1. **Carry, don't commit.** A match that ends at the window edge (and is not at
+   EOF) is **not** committed. The commit point is pulled back to the match
+   start so the whole match is carried into the next window and re-scanned with
+   more context. Matches up to `chunk_size` bytes are therefore always seen in
+   full before replacement, and a value split across windows still maps to a
+   single replacement.
+2. **Fail closed on over-long matches.** A single match longer than
+   `chunk_size` can never be buffered. Rather than risk leaking its tail, the
+   scanner replaces the entire run with a fixed marker
+   (`__SANITIZED_OVERLONG__`) and consumes the rest of the run up to the next
+   whitespace boundary. This is not length-preserving, but such a match (an
+   unbroken token larger than a chunk) is pathological; redaction is the safe
+   default. A per-pattern `max_length` in the secrets file bounds greedy
+   patterns before they reach this point.
