@@ -40,3 +40,13 @@ doc = false
 name = "fuzz_ini"
 path = "fuzz_targets/fuzz_ini.rs"
 doc = false
+
+[[bin]]
+name = "fuzz_toml"
+path = "fuzz_targets/fuzz_toml.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_csv"
+path = "fuzz_targets/fuzz_csv.rs"
+doc = false
