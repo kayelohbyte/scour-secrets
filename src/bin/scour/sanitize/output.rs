@@ -12,6 +12,15 @@ pub(super) struct OutputPhase {
     pub(super) report_no_path_auto: Option<PathBuf>,
 }
 
+/// What the structured-handoff write-back needs to update the secrets file in
+/// its own on-disk form: re-encrypted with the same password when the file was
+/// encrypted, and in its own plaintext format (JSON/YAML/TOML) otherwise.
+pub(super) struct SecretsWriteback {
+    pub(super) password: Option<Zeroizing<String>>,
+    pub(super) was_encrypted: bool,
+    pub(super) format: Option<SecretsFormat>,
+}
+
 pub(super) fn write_run_output(
     cli: &Cli,
     phase: OutputPhase,
@@ -19,10 +28,17 @@ pub(super) fn write_run_output(
     profiles: &[FileTypeProfile],
     had_matches: bool,
     entropy_histogram_acc: Option<Arc<Mutex<Vec<EntropyBuckets>>>>,
+    writeback: SecretsWriteback,
 ) -> Result<(), (String, i32)> {
     if !cli.no_structured_handoff && !profiles.is_empty() {
         if let Some(save_path) = &cli.secrets_file {
-            match save_discovered_secrets(store, save_path) {
+            match save_discovered_secrets(
+                store,
+                save_path,
+                writeback.password.as_ref().map(|p| p.as_str()),
+                writeback.was_encrypted,
+                writeback.format,
+            ) {
                 Ok(0) => {}
                 Ok(n) => info!(
                     path = %save_path.display(),

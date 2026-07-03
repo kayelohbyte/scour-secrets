@@ -733,3 +733,119 @@ fn structured_field_edits_are_counted_in_summary() {
     let result = fs::read_to_string(&output).unwrap();
     assert!(!result.contains("superSecret123") && !result.contains("smtpPass456"));
 }
+
+/// Encrypted structured handoff: with `--encrypted-secrets`, discovered
+/// literals must be written back into the encrypted secrets file — decrypted,
+/// merged, and re-encrypted with the same password — never as plaintext.
+/// A later run using only the updated secrets file must then replace the
+/// discovered value in plain logs (proving the write-back is real).
+#[test]
+fn encrypted_handoff_writes_back_reencrypted() {
+    use scour::secrets::{decrypt_secrets, encrypt_secrets, looks_encrypted, parse_secrets};
+
+    let dir = tempdir().unwrap();
+    let outdir = dir.path().join("out");
+    fs::create_dir_all(&outdir).unwrap();
+
+    let password = "enc-handoff-db-password-unique";
+    let file_pw = "secrets-file-pw";
+
+    let config = dir.path().join("config.yaml");
+    fs::write(
+        &config,
+        format!("database:\n  password: {password}\n  host: db.internal\n"),
+    )
+    .unwrap();
+
+    let secrets = dir.path().join("secrets.yaml.enc");
+    fs::write(
+        &secrets,
+        encrypt_secrets(
+            b"- pattern: preexisting_literal\n  kind: literal\n",
+            file_pw,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    let profile = dir.path().join("profile.json");
+    fs::write(
+        &profile,
+        r#"[{"processor":"yaml","extensions":[".yaml"],"fields":[{"pattern":"database.password"}]}]"#,
+    )
+    .unwrap();
+
+    // Run 1: structured scan discovers the password; handoff re-encrypts.
+    let out = Command::new(env!("CARGO_BIN_EXE_scour"))
+        .args([
+            config.to_str().unwrap(),
+            "-s",
+            secrets.to_str().unwrap(),
+            "--encrypted-secrets",
+            "--profile",
+            profile.to_str().unwrap(),
+            "--output",
+            outdir.to_str().unwrap(),
+        ])
+        .env("SCOUR_PASSWORD", file_pw)
+        .env("SCOUR_LOG", "error")
+        .env("SCOUR_NO_SETTINGS", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "run 1 stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // Secrets file must still be ciphertext, with no plaintext leak.
+    let raw = fs::read(&secrets).unwrap();
+    assert!(
+        looks_encrypted(&raw),
+        "write-back must keep the secrets file encrypted"
+    );
+    assert!(
+        !raw.windows(password.len())
+            .any(|w| w == password.as_bytes()),
+        "ciphertext must not contain the discovered value in plaintext"
+    );
+
+    // Same password decrypts; both preexisting and discovered entries present.
+    let plaintext = decrypt_secrets(&raw, file_pw).unwrap();
+    let entries = parse_secrets(&plaintext, None).unwrap();
+    let patterns: Vec<&str> = entries.iter().map(|e| e.pattern.as_str()).collect();
+    assert!(patterns.contains(&"preexisting_literal"));
+    assert!(
+        patterns.contains(&password),
+        "discovered password must be merged into the encrypted file; got {patterns:?}"
+    );
+
+    // Run 2: no profile — a plain log is sanitized purely via the updated
+    // encrypted secrets file, proving cross-run usefulness of the write-back.
+    let log = dir.path().join("later.log");
+    fs::write(&log, format!("ERROR auth failed using {password}\n")).unwrap();
+    let out2 = Command::new(env!("CARGO_BIN_EXE_scour"))
+        .args([
+            log.to_str().unwrap(),
+            "-s",
+            secrets.to_str().unwrap(),
+            "--encrypted-secrets",
+            "--output",
+            outdir.to_str().unwrap(),
+        ])
+        .env("SCOUR_PASSWORD", file_pw)
+        .env("SCOUR_LOG", "error")
+        .env("SCOUR_NO_SETTINGS", "1")
+        .output()
+        .unwrap();
+    assert!(
+        out2.status.success(),
+        "run 2 stderr: {}",
+        String::from_utf8_lossy(&out2.stderr)
+    );
+    let log_out = fs::read_to_string(outdir.join("later-sanitized.log")).unwrap();
+    assert!(
+        !log_out.contains(password),
+        "second run must replace the value discovered in run 1; got:\n{log_out}"
+    );
+}
