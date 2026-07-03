@@ -117,7 +117,7 @@ export SCOUR_SECRETS_LLM_KEY=ollama    # any non-empty value
 sanitize server.log -s patterns.yaml --llm troubleshoot
 
 # LM Studio (default port 1234):
-sanitize config.yaml -s patterns.yaml --llm review-config \
+scour config.yaml -s patterns.yaml --llm review-config \
   --llm-endpoint http://localhost:1234/v1 \
   --llm-model lmstudio-community/Meta-Llama-3-8B-Instruct-GGUF \
   --llm-key lm-studio
@@ -129,7 +129,7 @@ sanitize nginx.conf --app nginx --llm review-security \
   --llm-model gpt-4o
 
 # Combine with --extract-context to include notable log events:
-sanitize server.log -s patterns.yaml \
+scour server.log -s patterns.yaml \
   --report report.json --extract-context \
   --llm troubleshoot \
   --llm-endpoint http://localhost:11434/v1 \

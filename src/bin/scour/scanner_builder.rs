@@ -171,8 +171,7 @@ pub(crate) fn build_store(
                 return Err(
                     "--deterministic requires --password (or SCOUR_SECRETS_PASSWORD). \
                      A deterministic seed cannot be derived without a key."
-                        .into(),
-                );
+                    .into());
             }
         }
     } else {
@@ -265,7 +264,7 @@ pub(crate) fn write_default_secrets(path: &Path) -> std::result::Result<(), Stri
 /// Build the canonical balanced set of `SecretEntry` values.
 ///
 /// Used both to compile the in-memory scanner and to write the starter
-/// `~/.config/sanitize/secrets.yaml` on first run.
+/// `~/.config/scour/secrets.yaml` on first run.
 pub(crate) fn balanced_secret_entries() -> Vec<SecretEntry> {
     fn e(pattern: &str, category: &str, label: &str) -> SecretEntry {
         SecretEntry {

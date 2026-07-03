@@ -22,7 +22,7 @@ re-render is identical. All sample inputs contain **only clearly-fake secrets**
 ## Regenerate
 
 ```bash
-cargo build --release          # produce target/release/sanitize
+cargo build --release          # produce target/release/scour
 docs/demos/render.sh           # rewrites every out/*.gif and out/*.cast
 ```
 
@@ -44,7 +44,7 @@ docs/demos/
 
 `lib.sh` redirects `HOME` into a throwaway work dir, so recordings never show
 the operator's real home path or depend on a personal
-`~/.config/sanitize/secrets.yaml`.
+`~/.config/scour/secrets.yaml`.
 
 ## Embedding
 

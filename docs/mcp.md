@@ -134,7 +134,7 @@ openssl rand -hex 32
 # e.g. a3f8c2...  — store this; you'll need it in both the service file and your MCP client config
 ```
 
-**macOS — launchd plist** (`/Library/LaunchDaemons/com.sanitize.mcp.plist`):
+**macOS — launchd plist** (`/Library/LaunchDaemons/com.scour.mcp.plist`):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -164,8 +164,8 @@ openssl rand -hex 32
 
 ```bash
 # Restrict the plist — it contains the token
-sudo chmod 0600 /Library/LaunchDaemons/com.sanitize.mcp.plist
-sudo launchctl load /Library/LaunchDaemons/com.sanitize.mcp.plist
+sudo chmod 0600 /Library/LaunchDaemons/com.scour.mcp.plist
+sudo launchctl load /Library/LaunchDaemons/com.scour.mcp.plist
 ```
 
 **Linux — systemd unit** (`/etc/systemd/system/scour-secrets-mcp.service`):
@@ -207,8 +207,8 @@ ProtectControlGroups=yes
 RestrictAddressFamilies=AF_INET AF_INET6
 # Only the trees the daemon must read/write. Add each directory holding files
 # you intend to sanitize; everything else becomes unreadable to the process.
-ReadOnlyPaths=/var/sanitize/secrets
-ReadWritePaths=/var/sanitize/work
+ReadOnlyPaths=/var/scour/secrets
+ReadWritePaths=/var/scour/work
 
 [Install]
 WantedBy=multi-user.target
@@ -303,7 +303,7 @@ OpenCode has a built-in `permission.read` system that supports path-pattern deny
   "permission": {
     "read": {
       "*": "allow",
-      "/var/sanitize/secrets/**": "deny",
+      "/var/scour/secrets/**": "deny",
       "/var/data/sensitive/**": "deny"
     }
   }
@@ -372,7 +372,7 @@ Codex uses a TOML permission profile with `deny` rules enforced at the OS level 
 
 ```toml
 [permissions.project-edit.filesystem]
-"/var/sanitize/secrets" = "deny"
+"/var/scour/secrets" = "deny"
 "/var/data/sensitive" = "deny"
 
 [permissions.project-edit.filesystem.":workspace_roots"]
@@ -399,7 +399,7 @@ For Claude Code, a `PreToolUse` hook intercepts `Read` tool calls before they ex
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"\nimport json, sys, os\nd = json.load(sys.stdin)\npath = os.path.realpath(d.get('tool_input', {}).get('file_path', ''))\nblocked = [\n  '/var/sanitize/secrets',\n  '/var/data/sensitive',\n]\nif any(path.startswith(b) for b in blocked):\n    print(json.dumps({'decision': 'block', 'reason': 'Path is restricted — pass it to the sanitize MCP tool instead.'}))\n    sys.exit(2)\n\""
+            "command": "python3 -c \"\nimport json, sys, os\nd = json.load(sys.stdin)\npath = os.path.realpath(d.get('tool_input', {}).get('file_path', ''))\nblocked = [\n  '/var/scour/secrets',\n  '/var/data/sensitive',\n]\nif any(path.startswith(b) for b in blocked):\n    print(json.dumps({'decision': 'block', 'reason': 'Path is restricted — pass it to the sanitize MCP tool instead.'}))\n    sys.exit(2)\n\""
           }
         ]
       }
@@ -1072,7 +1072,7 @@ Available presets: `balanced` (default — mirrors the built-in runtime detectio
 Set `SCOUR_SECRETS_SECRETS_DIR` to a directory and create one subdirectory per customer or software type:
 
 ```
-/var/sanitize/secrets/
+/var/scour/secrets/
   acme-corp/
     secrets.yaml        # or secrets.yaml.enc — required
     profile.yaml        # optional: structured field-level rules
@@ -1091,7 +1091,7 @@ Pass `namespace` in `scour-secrets` or `scan` tool calls. The server loads only 
 A `settings.yaml` file in the namespace directory sets default behavior flags for every tool call that uses that namespace. All the same fields as the global `~/.config/scour-secrets/settings.yaml` are accepted. Per-call tool parameters always override namespace defaults.
 
 ```yaml
-# /var/sanitize/secrets/acme-corp/settings.yaml
+# /var/scour/secrets/acme-corp/settings.yaml
 
 # Pre-allow values that are safe for this customer.
 allow:

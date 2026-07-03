@@ -531,7 +531,7 @@ EXAMPLES:\n  \
 
     /// Show the effective configuration that will be applied on the next run.
     ///
-    /// Prints the paths and active values from `~/.config/sanitize/settings.yaml`
+    /// Prints the paths and active values from `~/.config/scour/settings.yaml`
     /// and reports whether the default secrets file is present. Useful for
     /// debugging unexpected behaviour or verifying CI setup.
     #[command(name = "show-config")]
@@ -540,8 +540,8 @@ EXAMPLES:\n  \
     /// One-time repo setup: create the global settings file and install a git
     /// hook for the current repository.
     ///
-    /// The settings file is written to ~/.config/sanitize/settings.yaml
-    /// (or $XDG_CONFIG_HOME/sanitize/settings.yaml) and lets you set persistent
+    /// The settings file is written to ~/.config/scour/settings.yaml
+    /// (or $XDG_CONFIG_HOME/scour/settings.yaml) and lets you set persistent
     /// flag defaults. The global secrets file is created automatically on the
     /// first plain `scour-secrets` run — no explicit setup needed.
     #[command(
@@ -840,7 +840,7 @@ EXAMPLES:\n  \
     /// Copy a built-in app bundle to the user apps directory for editing.
     ///
     /// For built-in apps, copies profile.yaml and/or secrets.yaml into
-    /// `~/.config/sanitize/apps/<name>/` so they can be customised. The local
+    /// `~/.config/scour/apps/<name>/` so they can be customised. The local
     /// copy takes precedence over the built-in automatically — no extra flags
     /// needed. For user-defined apps the existing directory path is printed.
     ///

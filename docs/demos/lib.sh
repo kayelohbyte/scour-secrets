@@ -8,7 +8,7 @@
 #
 # Reproducibility: every recording regenerates the work dir from scratch, and
 # HOME is redirected into the work dir so a recording never shows the operator's
-# real home path or depends on their personal ~/.config/sanitize/secrets.yaml.
+# real home path or depends on their personal ~/.config/scour/secrets.yaml.
 #
 # NOTE: this file is meant to be *sourced* by the recording shell, so it must
 # not enable `set -e` at top level — a deliberately non-zero exit (e.g. the

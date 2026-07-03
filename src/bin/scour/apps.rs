@@ -224,7 +224,7 @@ pub(crate) fn user_apps_dir() -> Option<PathBuf> {
     std::env::var("HOME").ok().map(|home| {
         PathBuf::from(home)
             .join(".config")
-            .join("sanitize")
+            .join("scour")
             .join("apps")
     })
 }
@@ -438,7 +438,7 @@ fn run_apps_list() -> Result<(), (String, i32)> {
     let dir_display = apps_dir
         .as_ref()
         .map(|d| d.display().to_string())
-        .unwrap_or_else(|| "~/.config/sanitize/apps".into());
+        .unwrap_or_else(|| "~/.config/scour/apps".into());
 
     if let Some(ref dir) = apps_dir {
         if dir.is_dir() {

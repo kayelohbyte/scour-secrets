@@ -361,13 +361,9 @@ mod tests {
 
     #[test]
     fn project_layer_adds_exclude_path_additively() {
-        let mut cli = Cli::try_parse_from([
-            "sanitize",
-            "file.txt",
-            "--exclude-path",
-            "tests/fixtures/**",
-        ])
-        .unwrap();
+        let mut cli =
+            Cli::try_parse_from(["scour", "file.txt", "--exclude-path", "tests/fixtures/**"])
+                .unwrap();
         let pc = SanitizeConfig {
             exclude_path: vec!["*.generated.yaml".into()],
             ..Default::default()

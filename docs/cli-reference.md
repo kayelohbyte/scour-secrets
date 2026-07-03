@@ -401,7 +401,7 @@ When running in interactive mode (`--progress auto` on a TTY or `--progress on`)
 Example:
 
 ```
-  secrets:  /home/user/.config/sanitize/secrets.yaml
+  secrets:  /home/user/.config/scour/secrets.yaml
   profile:  /repo/.sanitize/k8s-profile.yaml  [config]
   apps:     k8s, database  [config]
   flags:    --strict  [config]
