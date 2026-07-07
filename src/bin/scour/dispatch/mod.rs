@@ -5,13 +5,17 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 
-use scour_secrets::secrets::SecretEntry;
+use scour_secrets::secrets::{
+    decrypt_secrets, encrypt_secrets, looks_encrypted, parse_secrets, serialize_secrets,
+    SecretEntry, SecretsFormat,
+};
 use scour_secrets::{
     atomic_write, atomic_write_private, extract_context, extract_context_reader, ArchiveFilter,
     ArchiveFormat, ArchiveProcessor, ArchiveProgress, AtomicFileWriter, EntryCallback, FileReport,
     FileTypeProfile, LlmEntry, LogContextConfig, LogContextResult, MappingStore, Processor,
     ProcessorRegistry, ReportBuilder, ScanPattern, ScanStats, StreamScanner,
 };
+use zeroize::Zeroizing;
 
 use crate::cli_args::Cli;
 use crate::entropy::{
@@ -467,9 +471,22 @@ pub(crate) fn load_profiles(path: &Path) -> Result<Vec<FileTypeProfile>, String>
     Ok(profiles)
 }
 
+/// Append store-discovered literal values to the secrets file at `path`,
+/// preserving the file's on-disk form:
+///
+/// - **Encrypted file** (`was_encrypted`, requires `password`): decrypt →
+///   parse → merge → serialize → re-encrypt (fresh salt + nonce) → atomic
+///   write. Plaintext exists only in zeroizing memory; the file on disk is
+///   never downgraded to plaintext.
+/// - **Plaintext file**: parse and re-serialize in the file's own format
+///   (extension-derived `format`, falling back to content detection, then
+///   YAML for new files) — a `.json` or `.toml` secrets file keeps its format.
 pub(crate) fn save_discovered_secrets(
     store: &Arc<MappingStore>,
     path: &Path,
+    password: Option<&str>,
+    was_encrypted: bool,
+    format: Option<SecretsFormat>,
 ) -> std::result::Result<usize, String> {
     let mut new_entries: Vec<SecretEntry> = store
         .iter()
@@ -491,14 +508,40 @@ pub(crate) fn save_discovered_secrets(
         return Ok(0);
     }
 
-    let existing: Vec<SecretEntry> = if path.exists() {
-        let raw = fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-        let text = std::str::from_utf8(&raw)
-            .map_err(|_| format!("{} is not valid UTF-8", path.display()))?;
-        serde_yaml_ng::from_str::<Vec<SecretEntry>>(text)
-            .map_err(|e| format!("failed to parse {}: {e}", path.display()))?
+    // Fail closed if the recorded flag and the bytes on disk disagree (e.g.
+    // the file was swapped between load and write-back): never write plaintext
+    // over a file that currently looks encrypted.
+    let raw: Option<Zeroizing<Vec<u8>>> = if path.exists() {
+        Some(Zeroizing::new(fs::read(path).map_err(|e| {
+            format!("failed to read {}: {e}", path.display())
+        })?))
     } else {
-        vec![]
+        None
+    };
+    let encrypted_now = raw.as_deref().is_some_and(|r| looks_encrypted(r));
+
+    let (existing, effective_format): (Vec<SecretEntry>, SecretsFormat) = match &raw {
+        Some(raw) if was_encrypted || encrypted_now => {
+            let pw = password.ok_or_else(|| {
+                format!(
+                    "{} is encrypted but no password is available for write-back",
+                    path.display()
+                )
+            })?;
+            let plaintext = decrypt_secrets(raw, pw)
+                .map_err(|e| format!("failed to decrypt {}: {e}", path.display()))?;
+            let fmt = format.unwrap_or_else(|| SecretsFormat::detect(&plaintext));
+            let entries = parse_secrets(&plaintext, Some(fmt))
+                .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+            (entries, fmt)
+        }
+        Some(raw) => {
+            let fmt = format.unwrap_or_else(|| SecretsFormat::detect(raw));
+            let entries = parse_secrets(raw, Some(fmt))
+                .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;
+            (entries, fmt)
+        }
+        None => (vec![], format.unwrap_or(SecretsFormat::Yaml)),
     };
 
     let existing_patterns: std::collections::HashSet<&str> =
@@ -511,13 +554,25 @@ pub(crate) fn save_discovered_secrets(
         return Ok(0);
     }
 
-    let mut all_entries: Vec<&SecretEntry> = existing.iter().collect();
-    all_entries.extend(new_entries.iter());
+    let mut all_entries: Vec<SecretEntry> = existing;
+    all_entries.extend(new_entries);
 
-    let yaml = serde_yaml_ng::to_string(&all_entries)
-        .map_err(|e| format!("failed to serialize discovered secrets: {e}"))?;
+    let serialized = Zeroizing::new(
+        serialize_secrets(&all_entries, effective_format)
+            .map_err(|e| format!("failed to serialize discovered secrets: {e}"))?,
+    );
 
-    atomic_write_private(path, yaml.as_bytes())
+    let output: Zeroizing<Vec<u8>> = if was_encrypted || encrypted_now {
+        let pw = password.expect("checked above: encrypted path requires a password");
+        Zeroizing::new(
+            encrypt_secrets(&serialized, pw)
+                .map_err(|e| format!("failed to re-encrypt {}: {e}", path.display()))?,
+        )
+    } else {
+        serialized
+    };
+
+    atomic_write_private(path, &output)
         .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
 
     Ok(added)
@@ -602,7 +657,7 @@ mod tests {
     fn save_discovered_secrets_empty_store_returns_zero() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("secrets.yaml");
-        let n = save_discovered_secrets(&empty_store(), &path).unwrap();
+        let n = save_discovered_secrets(&empty_store(), &path, None, false, None).unwrap();
         assert_eq!(n, 0);
         assert!(
             !path.exists(),
@@ -616,7 +671,7 @@ mod tests {
         let path = dir.path().join("secrets.yaml");
         let store = store_with_entry("abc123");
 
-        let n = save_discovered_secrets(&store, &path).unwrap();
+        let n = save_discovered_secrets(&store, &path, None, false, None).unwrap();
         assert_eq!(n, 1);
         let content = fs::read_to_string(&path).unwrap();
         assert!(
@@ -636,10 +691,10 @@ mod tests {
 
         // First write.
         let store = store_with_entry("abc123");
-        save_discovered_secrets(&store, &path).unwrap();
+        save_discovered_secrets(&store, &path, None, false, None).unwrap();
 
         // Second write with the same value — should add 0 new entries.
-        let n = save_discovered_secrets(&store, &path).unwrap();
+        let n = save_discovered_secrets(&store, &path, None, false, None).unwrap();
         assert_eq!(n, 0);
 
         // File should still have exactly one entry.
@@ -653,10 +708,10 @@ mod tests {
         let path = dir.path().join("secrets.yaml");
 
         let store1 = store_with_entry("first_secret");
-        save_discovered_secrets(&store1, &path).unwrap();
+        save_discovered_secrets(&store1, &path, None, false, None).unwrap();
 
         let store2 = store_with_entry("second_secret");
-        let n = save_discovered_secrets(&store2, &path).unwrap();
+        let n = save_discovered_secrets(&store2, &path, None, false, None).unwrap();
         assert_eq!(n, 1);
 
         let content = fs::read_to_string(&path).unwrap();
@@ -671,11 +726,119 @@ mod tests {
         fs::write(&path, b"this: is: not: valid: yaml: ][[[").unwrap();
 
         let store = store_with_entry("abc123");
-        let result = save_discovered_secrets(&store, &path);
+        let result = save_discovered_secrets(&store, &path, None, false, None);
         assert!(
             result.is_err(),
             "malformed YAML should return an error, not silently lose data"
         );
+    }
+
+    #[test]
+    fn save_discovered_secrets_encrypted_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.yaml.enc");
+        let pw = "writeback-pw";
+
+        // Seed an encrypted file with one existing entry.
+        let initial = b"- pattern: existing_secret\n  kind: literal\n";
+        fs::write(&path, encrypt_secrets(initial, pw).unwrap()).unwrap();
+
+        let store = store_with_entry("discovered_secret");
+        let n = save_discovered_secrets(&store, &path, Some(pw), true, None).unwrap();
+        assert_eq!(n, 1);
+
+        // File must still be encrypted — never downgraded to plaintext.
+        let raw = fs::read(&path).unwrap();
+        assert!(
+            looks_encrypted(&raw),
+            "write-back must keep the file encrypted"
+        );
+        assert!(
+            !raw.windows(b"discovered_secret".len())
+                .any(|w| w == b"discovered_secret"),
+            "ciphertext must not contain the plaintext value"
+        );
+
+        // Same password decrypts; both old and new entries survive the merge.
+        let plaintext = decrypt_secrets(&raw, pw).unwrap();
+        let entries = parse_secrets(&plaintext, None).unwrap();
+        let patterns: Vec<&str> = entries.iter().map(|e| e.pattern.as_str()).collect();
+        assert!(patterns.contains(&"existing_secret"));
+        assert!(patterns.contains(&"discovered_secret"));
+    }
+
+    #[test]
+    fn save_discovered_secrets_encrypted_wrong_password_fails_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.yaml.enc");
+        fs::write(
+            &path,
+            encrypt_secrets(b"- pattern: existing\n  kind: literal\n", "right").unwrap(),
+        )
+        .unwrap();
+        let before = fs::read(&path).unwrap();
+
+        let store = store_with_entry("discovered");
+        let result = save_discovered_secrets(&store, &path, Some("wrong"), true, None);
+        assert!(result.is_err(), "wrong password must fail the write-back");
+        assert_eq!(fs::read(&path).unwrap(), before, "file must be unchanged");
+    }
+
+    #[test]
+    fn save_discovered_secrets_encrypted_without_password_fails_closed() {
+        // Flag says plaintext but the bytes on disk are encrypted (file swapped
+        // between load and write-back): must refuse rather than corrupt.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.yaml");
+        fs::write(&path, encrypt_secrets(b"- pattern: x\n", "pw").unwrap()).unwrap();
+        let before = fs::read(&path).unwrap();
+
+        let store = store_with_entry("discovered");
+        let result = save_discovered_secrets(&store, &path, None, false, None);
+        assert!(
+            result.is_err(),
+            "encrypted-looking file without password must fail"
+        );
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn save_discovered_secrets_preserves_json_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.json");
+        fs::write(&path, br#"[{"pattern":"existing","kind":"literal"}]"#).unwrap();
+
+        let store = store_with_entry("discovered");
+        let n =
+            save_discovered_secrets(&store, &path, None, false, Some(SecretsFormat::Json)).unwrap();
+        assert_eq!(n, 1);
+
+        // Must reparse as JSON — not YAML-overwritten.
+        let raw = fs::read(&path).unwrap();
+        let entries = parse_secrets(&raw, Some(SecretsFormat::Json))
+            .expect("write-back must keep the file valid JSON");
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn save_discovered_secrets_preserves_toml_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.toml");
+        fs::write(
+            &path,
+            b"[[secrets]]\npattern = \"existing\"\nkind = \"literal\"\n",
+        )
+        .unwrap();
+
+        let store = store_with_entry("discovered");
+        let n =
+            save_discovered_secrets(&store, &path, None, false, Some(SecretsFormat::Toml)).unwrap();
+        assert_eq!(n, 1);
+
+        let raw = fs::read(&path).unwrap();
+        let entries = parse_secrets(&raw, Some(SecretsFormat::Toml))
+            .expect("write-back must keep the file valid TOML");
+        assert_eq!(entries.len(), 2);
     }
 
     // ── looks_binary ─────────────────────────────────────────────────────────

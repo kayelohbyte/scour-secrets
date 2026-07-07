@@ -158,6 +158,9 @@ pub(crate) fn run_sanitize(
         entropy_histogram_acc,
         base_patterns,
         scan_config,
+        secrets_password,
+        secrets_was_encrypted,
+        secrets_format,
     } = resources::load_run_resources(&cli, pre_resolved_password)?;
 
     let report_enabled = cli.report.is_some()
@@ -492,5 +495,10 @@ pub(crate) fn run_sanitize(
         &profiles,
         had_matches,
         entropy_histogram_acc,
+        output::SecretsWriteback {
+            password: secrets_password,
+            was_encrypted: secrets_was_encrypted,
+            format: secrets_format,
+        },
     )
 }

@@ -12,6 +12,12 @@ struct LoadedSecrets {
     /// Stored here so `apply_field_name_signals` can reuse it without a second
     /// PBKDF2+AES-GCM round.
     plaintext_bytes: Option<Zeroizing<Vec<u8>>>,
+    /// Whether the file on disk was AES-256-GCM encrypted. The structured
+    /// handoff must re-encrypt on write-back when this is set.
+    was_encrypted: bool,
+    /// Extension-derived plaintext format, used so the handoff write-back
+    /// preserves the file's own format instead of assuming YAML.
+    format: Option<SecretsFormat>,
 }
 
 fn load_secrets_data(
@@ -93,6 +99,8 @@ fn load_secrets_data(
         entropy_configs,
         raw_bytes,
         plaintext_bytes,
+        was_encrypted,
+        format: secrets_format,
     }))
 }
 
@@ -143,6 +151,14 @@ pub(super) struct RunResources {
     pub(super) entropy_histogram_acc: Option<Arc<Mutex<Vec<EntropyBuckets>>>>,
     pub(super) base_patterns: Vec<ScanPattern>,
     pub(super) scan_config: ScanConfig,
+    /// Password retained for the structured-handoff write-back: an encrypted
+    /// secrets file is re-encrypted with the same password after discovered
+    /// literals are merged. `None` for plaintext runs. Zeroized on drop.
+    pub(super) secrets_password: Option<Zeroizing<String>>,
+    /// Whether the loaded secrets file was encrypted on disk.
+    pub(super) secrets_was_encrypted: bool,
+    /// Extension-derived secrets file format for format-preserving write-back.
+    pub(super) secrets_format: Option<SecretsFormat>,
 }
 
 pub(super) fn load_run_resources(
@@ -349,6 +365,10 @@ pub(super) fn load_run_resources(
         }
     }
 
+    let (secrets_was_encrypted, secrets_format) = loaded_secrets
+        .as_ref()
+        .map_or((false, None), |ls| (ls.was_encrypted, ls.format));
+
     Ok(RunResources {
         scanner,
         store,
@@ -358,5 +378,8 @@ pub(super) fn load_run_resources(
         entropy_histogram_acc,
         base_patterns,
         scan_config,
+        secrets_password: effective_password,
+        secrets_was_encrypted,
+        secrets_format,
     })
 }
