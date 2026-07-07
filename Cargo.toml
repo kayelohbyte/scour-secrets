@@ -56,7 +56,7 @@ jiter = { version = "0.13", default-features = false }
 # Span-aware YAML event parser for format-preserving YAML value redaction.
 saphyr-parser = "0.0.6"
 # Structured processors (feature = "structured")
-quick-xml = { version = "0.38", optional = true }
+quick-xml = { version = "0.41", optional = true }
 csv = { version = "1", optional = true }
 # Low-level CSV state machine (byte-accurate field spans for in-place editing).
 csv-core = { version = "0.1", optional = true }

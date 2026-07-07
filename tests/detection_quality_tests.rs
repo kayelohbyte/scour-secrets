@@ -250,7 +250,8 @@ fn scorecard_path() -> PathBuf {
 fn scorecard_is_current() {
     let expected = render_scorecard();
     let committed = fs::read_to_string(scorecard_path())
-        .expect("docs/detection-quality.md missing — run the regenerate_scorecard test");
+        .expect("docs/detection-quality.md missing — run the regenerate_scorecard test")
+        .replace("\r\n", "\n");
     assert_eq!(
         committed, expected,
         "docs/detection-quality.md is stale — regenerate with:\n\

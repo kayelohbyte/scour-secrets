@@ -22,7 +22,7 @@ use crate::processor::{
 };
 use crate::store::MappingStore;
 use quick_xml::events::{BytesStart, BytesText, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 use std::io::Cursor;
 
 /// Scan a start/empty-tag's raw bytes (`<el a="v" b='w'/>`) for each attribute's
@@ -366,7 +366,7 @@ fn collect_attr_edits(
         let key = String::from_utf8_lossy(attr.key.as_ref()).into_owned();
         let attr_path = format!("{element_path}/@{key}");
         let value = attr
-            .unescape_value()
+            .normalized_value(XmlVersion::Implicit1_0)
             .map_err(|e| SanitizeError::ParseError {
                 format: "XML".into(),
                 message: format!("XML attr decode error: {e}"),
@@ -402,7 +402,7 @@ fn process_attributes(
 
         if let Some(rule) = find_matching_rule(&attr_path, profile) {
             let attr_value = attr
-                .unescape_value()
+                .normalized_value(XmlVersion::Implicit1_0)
                 .map_err(|e| SanitizeError::ParseError {
                     format: "XML".into(),
                     message: format!("XML attr decode error: {}", e),
@@ -411,7 +411,7 @@ fn process_attributes(
             new_elem.push_attribute((attr_key.as_str(), replaced.as_str()));
         } else {
             let attr_value = attr
-                .unescape_value()
+                .normalized_value(XmlVersion::Implicit1_0)
                 .map_err(|e| SanitizeError::ParseError {
                     format: "XML".into(),
                     message: format!("XML attr decode error: {}", e),
