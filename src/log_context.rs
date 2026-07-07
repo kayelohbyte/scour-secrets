@@ -66,6 +66,7 @@ pub const DEFAULT_MAX_MATCHES: usize = 50;
 ///     .with_max_matches(100);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LogContextConfig {
     /// Keywords to scan for. Each is matched as a substring of the line.
     pub keywords: Vec<String>,
@@ -144,6 +145,7 @@ impl LogContextConfig {
 
 /// A single keyword match with surrounding context lines.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct LogContextMatch {
     /// 1-based line number of the matching line.
     pub line_number: usize,
@@ -166,6 +168,7 @@ pub struct LogContextMatch {
 
 /// Output of [`extract_context`].
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct LogContextResult {
     /// Total number of lines in the input.
     pub total_lines: usize,

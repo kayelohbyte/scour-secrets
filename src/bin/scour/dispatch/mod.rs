@@ -491,16 +491,9 @@ pub(crate) fn save_discovered_secrets(
     let mut new_entries: Vec<SecretEntry> = store
         .iter()
         .filter(|(_, original, _)| !original.is_empty())
-        .map(|(category, original, _)| SecretEntry {
-            pattern: original.to_string(),
-            kind: "literal".into(),
-            category: category.to_string(),
-            label: Some("discovered".into()),
-            values: vec![],
-            min_length: None,
-            max_length: None,
-            threshold: None,
-            charset: None,
+        .map(|(category, original, _)| {
+            SecretEntry::new(original.to_string(), "literal", category.to_string())
+                .with_label("discovered")
         })
         .collect();
 
@@ -587,35 +580,21 @@ fn record_archive_stats(rb: &ReportBuilder, stats: &scour_secrets::ArchiveStats)
                 method.clone(),
             ));
         } else {
-            rb.record_file(FileReport {
-                path: path.clone(),
-                matches: 0,
-                replacements: 0,
-                bytes_processed: 0,
-                bytes_output: 0,
-                pattern_counts: std::collections::HashMap::new(),
-                method: method.clone(),
-                log_context: None,
-                match_locations: None,
-            });
+            rb.record_file(FileReport::new(path.clone(), method.clone()));
         }
     }
 
     if stats.file_methods.is_empty() {
-        rb.record_file(FileReport {
-            path: "(archive)".into(),
-            matches: 0,
-            replacements: 0,
-            bytes_processed: stats.total_input_bytes,
-            bytes_output: stats.total_output_bytes,
-            pattern_counts: std::collections::HashMap::new(),
-            method: format!(
+        let mut fr = FileReport::new(
+            "(archive)",
+            format!(
                 "archive({} files, {} structured, {} scanner)",
                 stats.files_processed, stats.structured_hits, stats.scanner_fallback
             ),
-            log_context: None,
-            match_locations: None,
-        });
+        );
+        fr.bytes_processed = stats.total_input_bytes;
+        fr.bytes_output = stats.total_output_bytes;
+        rb.record_file(fr);
     }
 }
 

@@ -85,6 +85,13 @@ use std::io;
 ///   values in fields matched by the profile's [`FieldRule`]s.
 /// - Replacements are **one-way** via the `MappingStore` — no reverse
 ///   mapping is produced.
+///
+/// # Stability
+///
+/// This trait is open for third-party implementations. New methods will
+/// always ship with default implementations (as `process_to_edits` and
+/// `process_stream` already do), so implementing it today remains
+/// forward-compatible.
 pub trait Processor: Send + Sync {
     /// Unique name for this processor (e.g. `"json"`, `"yaml"`, `"key_value"`).
     fn name(&self) -> &'static str;
@@ -310,6 +317,7 @@ fn register_escaped_aliases(
 /// what makes structured sanitization both leak-free (the real bytes are hit,
 /// regardless of how the value was escaped) and fully format-preserving.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Replacement {
     /// Start byte offset (inclusive) of the range to replace.
     pub start: usize,
@@ -318,6 +326,20 @@ pub struct Replacement {
     /// Replacement text (the sanitized token, already in the form it should
     /// take in the source — e.g. including surrounding quotes for a string).
     pub value: String,
+}
+
+impl Replacement {
+    /// Create a replacement of the byte range `start..end` with `value`. The
+    /// struct is `#[non_exhaustive]`, so this is how custom processors build
+    /// edits outside the crate.
+    #[must_use]
+    pub fn new(start: usize, end: usize, value: impl Into<String>) -> Self {
+        Self {
+            start,
+            end,
+            value: value.into(),
+        }
+    }
 }
 
 /// Apply non-overlapping byte-range `edits` to `content`, returning the edited

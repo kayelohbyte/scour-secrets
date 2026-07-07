@@ -21,16 +21,11 @@ use std::sync::Arc;
 // ---------------------------------------------------------------------------
 
 fn test_metadata() -> ReportMetadata {
-    ReportMetadata {
-        version: env!("CARGO_PKG_VERSION").into(),
-        timestamp: "2026-03-01T00:00:00Z".into(),
-        deterministic: true,
-        dry_run: false,
-        strict: false,
-        chunk_size: 1_048_576,
-        threads: Some(4),
-        secrets_file: Some("secrets.enc".into()),
-    }
+    ReportMetadata::new(env!("CARGO_PKG_VERSION"), "2026-03-01T00:00:00Z")
+        .with_deterministic(true)
+        .with_chunk_size(1_048_576)
+        .with_threads(Some(4))
+        .with_secrets_file(Some("secrets.enc".into()))
 }
 
 fn make_scanner(patterns: Vec<ScanPattern>) -> (Arc<StreamScanner>, Arc<MappingStore>) {
@@ -246,17 +241,13 @@ fn report_large_file_streaming() {
 #[test]
 fn report_json_structure_complete() {
     let builder = ReportBuilder::new(test_metadata());
-    builder.record_file(FileReport {
-        path: "app.yaml".into(),
-        matches: 5,
-        replacements: 5,
-        bytes_processed: 2048,
-        bytes_output: 2200,
-        pattern_counts: HashMap::from([("email".into(), 3u64), ("hostname".into(), 2)]),
-        method: "structured:yaml".into(),
-        log_context: None,
-        match_locations: None,
-    });
+    let mut fr = FileReport::new("app.yaml", "structured:yaml");
+    fr.matches = 5;
+    fr.replacements = 5;
+    fr.bytes_processed = 2048;
+    fr.bytes_output = 2200;
+    fr.pattern_counts = HashMap::from([("email".into(), 3u64), ("hostname".into(), 2)]);
+    builder.record_file(fr);
     let report = builder.finish();
     let json = report.to_json_pretty().unwrap();
     let v: serde_json::Value = serde_json::from_str(&json).unwrap();

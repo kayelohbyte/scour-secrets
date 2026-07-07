@@ -49,14 +49,19 @@ fn load_secrets_data(
     };
 
     let secrets_format = SecretsFormat::from_extension(secrets_path.to_string_lossy().as_ref());
-    let (((patterns, warnings), allow_patterns), was_encrypted) =
-        scour_secrets::secrets::load_secrets_auto(
-            &raw_bytes,
-            password,
-            secrets_format,
-            !cli.encrypted_secrets,
-        )
-        .map_err(|e| (format!("failed to load secrets: {e}"), 1))?;
+    let loaded = scour_secrets::secrets::load_secrets_auto(
+        &raw_bytes,
+        password,
+        secrets_format,
+        !cli.encrypted_secrets,
+    )
+    .map_err(|e| (format!("failed to load secrets: {e}"), 1))?;
+    let (patterns, warnings, allow_patterns, was_encrypted) = (
+        loaded.patterns,
+        loaded.warnings,
+        loaded.allow_patterns,
+        loaded.was_encrypted,
+    );
 
     if was_encrypted {
         info!(secrets_file = %secrets_path.display(), "loaded encrypted secrets");
@@ -212,17 +217,7 @@ pub(super) fn load_run_resources(
                 } else {
                     ("literal", p.as_str())
                 };
-                SecretEntry {
-                    pattern: pattern.to_string(),
-                    kind: kind.to_string(),
-                    category: "auth_token".to_string(),
-                    label: Some(format!("quick:{p}")),
-                    values: vec![],
-                    min_length: None,
-                    max_length: None,
-                    threshold: None,
-                    charset: None,
-                }
+                SecretEntry::new(pattern, kind, "auth_token").with_label(format!("quick:{p}"))
             })
             .collect();
         let (patterns, errors) = entries_to_patterns(&quick_entries);

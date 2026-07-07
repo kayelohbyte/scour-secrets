@@ -113,6 +113,7 @@ const MAX_SECRETS_PLAINTEXT_BYTES: usize = 10 * 1024 * 1024; // 10 MiB
 /// Implements [`Drop`] via [`Zeroize`] to scrub sensitive pattern data
 /// from memory when no longer needed (S-1 fix).
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SecretEntry {
     /// The pattern string (regex or literal text).
     ///
@@ -180,6 +181,68 @@ pub struct SecretEntry {
     pub charset: Option<String>,
 }
 
+impl SecretEntry {
+    /// Create an entry with the given pattern, kind, and category; all other
+    /// fields take their serde defaults. The struct is `#[non_exhaustive]`, so
+    /// this (or deserialization) is how entries are built outside the crate.
+    #[must_use]
+    pub fn new(
+        pattern: impl Into<String>,
+        kind: impl Into<String>,
+        category: impl Into<String>,
+    ) -> Self {
+        Self {
+            pattern: pattern.into(),
+            kind: kind.into(),
+            category: category.into(),
+            label: None,
+            values: Vec::new(),
+            min_length: None,
+            max_length: None,
+            threshold: None,
+            charset: None,
+        }
+    }
+
+    /// Set the reporting label (builder style).
+    #[must_use]
+    pub fn with_label(mut self, label: impl Into<String>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    /// Set the multi-value allowlist patterns (builder style).
+    #[must_use]
+    pub fn with_values(mut self, values: Vec<String>) -> Self {
+        self.values = values;
+        self
+    }
+
+    /// Set the match-length bounds (builder style). Pass `None` to leave a
+    /// bound at its default.
+    #[must_use]
+    pub fn with_length_bounds(mut self, min: Option<usize>, max: Option<usize>) -> Self {
+        self.min_length = min;
+        self.max_length = max;
+        self
+    }
+
+    /// Set the entropy threshold (builder style; `kind: entropy` /
+    /// `kind: field-name` entries).
+    #[must_use]
+    pub fn with_threshold(mut self, threshold: f64) -> Self {
+        self.threshold = Some(threshold);
+        self
+    }
+
+    /// Set the entropy charset (builder style; `kind: entropy` entries).
+    #[must_use]
+    pub fn with_charset(mut self, charset: impl Into<String>) -> Self {
+        self.charset = Some(charset.into());
+        self
+    }
+}
+
 impl Drop for SecretEntry {
     fn drop(&mut self) {
         self.pattern.zeroize();
@@ -207,6 +270,7 @@ fn default_category() -> String {
 
 /// Supported plaintext file formats for secrets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SecretsFormat {
     Json,
     Yaml,
@@ -526,7 +590,20 @@ pub fn parse_category(s: &str) -> Category {
         "aws_arn" => Category::AwsArn,
         "azure_resource_id" => Category::AzureResourceId,
         other => {
-            let tag = other.strip_prefix("custom:").unwrap_or(other);
+            let tag = if let Some(tag) = other.strip_prefix("custom:") {
+                tag
+            } else {
+                // A bare unknown string is more often a typo of a built-in
+                // ("emial") than an intentional custom tag; the contract
+                // stays "never errors", but surface it.
+                tracing::warn!(
+                    category = other,
+                    "unknown category — treated as custom:{}; use the \
+                     `custom:` prefix to silence this warning",
+                    other
+                );
+                other
+            };
             Category::Custom(tag.into())
         }
     }
@@ -799,34 +876,53 @@ pub fn looks_encrypted(data: &[u8]) -> bool {
 /// - `format` — optional format override.
 /// - `force_plaintext` — if `true`, always treat as plaintext.
 ///
-/// # Returns
-///
-/// `(patterns, warnings, was_encrypted)` — the compiled patterns,
-/// any compile warnings, and a flag indicating which path was taken.
-///
 /// # Errors
 ///
 /// Returns a secrets-related [`SanitizeError`] if decryption or parsing
 /// fails, or if a password is required but not provided.
-/// Returns `((patterns, warnings, allow_patterns), was_encrypted)`.
-///
-/// `allow_patterns` are the raw strings from `kind: allow` entries in the
-/// secrets file — the caller should combine these with any `--allow` CLI
-/// values and pass the merged list to [`AllowlistMatcher::new`](crate::allowlist::AllowlistMatcher::new).
 pub fn load_secrets_auto(
     data: &[u8],
     password: Option<&str>,
     format: Option<SecretsFormat>,
     force_plaintext: bool,
-) -> Result<((PatternCompileResult, Vec<String>), bool)> {
-    if force_plaintext || !looks_encrypted(data) {
+) -> Result<AutoLoadedSecrets> {
+    let (result, allow_patterns, was_encrypted) = if force_plaintext || !looks_encrypted(data) {
         let (result, allow) = load_plaintext_secrets(data, format)?;
-        Ok(((result, allow), false))
+        (result, allow, false)
     } else {
         let pw = password.ok_or(SanitizeError::SecretsPasswordRequired)?;
         let (result, allow) = load_encrypted_secrets(data, pw, format)?;
-        Ok(((result, allow), true))
-    }
+        (result, allow, true)
+    };
+    let (patterns, warnings) = result;
+    Ok(AutoLoadedSecrets {
+        patterns,
+        warnings,
+        allow_patterns,
+        was_encrypted,
+    })
+}
+
+/// Result of [`load_secrets_auto`]: compiled patterns plus everything the
+/// caller needs to finish wiring a scanner.
+///
+/// `allow_patterns` are the raw strings from `kind: allow` entries in the
+/// secrets file — combine these with any CLI-provided allow values and pass
+/// the merged list to
+/// [`AllowlistMatcher::new`](crate::allowlist::AllowlistMatcher::new).
+/// A non-empty `warnings` list means some entries failed to compile and the
+/// scanner covers less than the full file.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct AutoLoadedSecrets {
+    /// Successfully compiled scan patterns.
+    pub patterns: Vec<ScanPattern>,
+    /// Entries that failed pattern compilation: `(index_in_file, error)`.
+    pub warnings: Vec<(usize, SanitizeError)>,
+    /// Raw `kind: allow` pattern strings.
+    pub allow_patterns: Vec<String>,
+    /// Whether the input bytes were AES-256-GCM encrypted.
+    pub was_encrypted: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -1230,30 +1326,28 @@ label = "openai_key"
     #[test]
     fn auto_load_plaintext_json() {
         let data = sample_json().as_bytes();
-        let (((pats, errs), _allow), was_enc) =
-            load_secrets_auto(data, None, Some(SecretsFormat::Json), false).unwrap();
-        assert!(!was_enc);
-        assert_eq!(pats.len(), 2);
-        assert!(errs.is_empty());
+        let loaded = load_secrets_auto(data, None, Some(SecretsFormat::Json), false).unwrap();
+        assert!(!loaded.was_encrypted);
+        assert_eq!(loaded.patterns.len(), 2);
+        assert!(loaded.warnings.is_empty());
     }
 
     #[test]
     fn auto_load_encrypted_json() {
         let encrypted = encrypt_secrets(sample_json().as_bytes(), "pw").unwrap();
-        let (((pats, errs), _allow), was_enc) =
+        let loaded =
             load_secrets_auto(&encrypted, Some("pw"), Some(SecretsFormat::Json), false).unwrap();
-        assert!(was_enc);
-        assert_eq!(pats.len(), 2);
-        assert!(errs.is_empty());
+        assert!(loaded.was_encrypted);
+        assert_eq!(loaded.patterns.len(), 2);
+        assert!(loaded.warnings.is_empty());
     }
 
     #[test]
     fn auto_load_force_plaintext() {
         let data = sample_json().as_bytes();
-        let (((pats, _), _allow), was_enc) =
-            load_secrets_auto(data, None, Some(SecretsFormat::Json), true).unwrap();
-        assert!(!was_enc);
-        assert_eq!(pats.len(), 2);
+        let loaded = load_secrets_auto(data, None, Some(SecretsFormat::Json), true).unwrap();
+        assert!(!loaded.was_encrypted);
+        assert_eq!(loaded.patterns.len(), 2);
     }
 
     #[test]

@@ -9,8 +9,8 @@ All public types are re-exported from the crate root (`scour_secrets::*`) for co
 | `StreamScanner` | Streaming regex scanner. Processes input in chunks with overlap to catch boundary-straddling matches. |
 | `StreamScanner::new(patterns, store, config)` | Create a scanner from a `Vec<ScanPattern>`, a `MappingStore`, and a `ScanConfig`. |
 | `StreamScanner::new_with_max_patterns(patterns, store, config, max_patterns)` | Same as `new()` but with a custom pattern count limit (default: 10 000). |
-| `StreamScanner::from_encrypted_secrets(bytes, password, format, store, config, extra)` | Convenience constructor that decrypts a secrets file and builds patterns. Returns `(scanner, warnings, allow_patterns)`. Pass `allow_patterns` to `AllowlistMatcher::new` to honour `kind: allow` entries. |
-| `StreamScanner::from_plaintext_secrets(plaintext, format, store, config, extra)` | Convenience constructor that parses a plaintext secrets file and builds patterns. Returns `(scanner, warnings, allow_patterns)`. Pass `allow_patterns` to `AllowlistMatcher::new` to honour `kind: allow` entries. |
+| `StreamScanner::from_encrypted_secrets(bytes, password, format, store, config, extra)` | Convenience constructor that decrypts a secrets file and builds patterns. Returns a `SecretsLoadResult { scanner, warnings, allow_patterns }`. Pass `allow_patterns` to `AllowlistMatcher::new` to honour `kind: allow` entries. |
+| `StreamScanner::from_plaintext_secrets(plaintext, format, store, config, extra)` | Convenience constructor that parses a plaintext secrets file and builds patterns. Returns a `SecretsLoadResult { scanner, warnings, allow_patterns }`. Pass `allow_patterns` to `AllowlistMatcher::new` to honour `kind: allow` entries. |
 | `StreamScanner::scan_reader(reader, writer)` | Scan a `Read` stream, writing sanitized output to a `Write` stream. Returns `ScanStats`. |
 | `StreamScanner::scan_bytes(input)` | Scan an in-memory byte slice. Returns `(Vec<u8>, ScanStats)`. |
 | `StreamScanner::pattern_count()` | Number of compiled patterns. |
@@ -82,7 +82,7 @@ All public types are re-exported from the crate root (`scour_secrets::*`) for co
 | `ArchiveProcessor::with_max_depth(depth)` | Builder method: set the maximum nesting depth for recursive archive processing (clamped to `MAX_ALLOWED_ARCHIVE_DEPTH`). |
 | `ArchiveProcessor::with_parallel_threshold(threshold)` | Builder method: set the minimum file-entry count required to enable parallel entry sanitization. Default: `4`. Set to `usize::MAX` to disable entry-level parallelism (e.g. when outer file-level parallelism already saturates the thread budget). |
 | `ArchiveFormat` | Enum: `Tar`, `TarGz`, `Zip`. |
-| `ArchiveStats` | Processing results: `files_processed`, `entries_skipped`, `structured_hits`, `scanner_fallback`, `nested_archives`, `total_input_bytes`, `total_output_bytes`, `file_methods`, `file_scan_stats`. |
+| `ArchiveStats` | Processing results: `files_processed`, `entries_skipped`, `entries_filtered`, `structured_hits`, `scanner_fallback`, `nested_archives`, `total_input_bytes`, `total_output_bytes`, `file_methods`, `file_scan_stats`. |
 | `DEFAULT_ARCHIVE_DEPTH` | Default maximum nesting depth for recursive archive processing (`5`). |
 
 ## Report Module (`report`)
@@ -194,14 +194,15 @@ When `--extract-context` is used, each file entry in the report's `files` array 
 | `AtomicFileWriter::new(dest)` | Create and open a temp file in the same directory as `dest`. |
 | `AtomicFileWriter::finish()` | Flush, sync, and atomically rename to destination. |
 | `atomic_write(dest, data)` | Convenience: write `&[u8]` atomically to a path in one call. |
+| `atomic_write_private(dest, data)` / `AtomicFileWriter::new_private(dest)` | Same, but the file is created owner-only (0600 on Unix) — for content containing secrets. |
 
 ## Secrets Module (`secrets`)
 
 | Type / Function | Description |
 |-----------------|-------------|
-| `SecretEntry` | A single secret: `pattern`, `kind` (`"regex"`, `"literal"`, or `"allow"`), `category`, `label`, `values` (optional `Vec<String>` for compact multi-value `kind: allow` entries), `min_length` / `max_length` (optional — `regex`/`literal` matches outside these byte bounds are discarded; `max_length` also caps greedy patterns). Zeroized on drop. |
+| `SecretEntry` | A single secret: `pattern`, `kind` (`"regex"`, `"literal"`, `"allow"`, `"entropy"`, or `"field-name"`), `category`, `label`, `values` (optional `Vec<String>` for compact multi-value `kind: allow` entries), `min_length` / `max_length` (optional — `regex`/`literal` matches outside these byte bounds are discarded; `max_length` also caps greedy patterns), plus `threshold` and `charset` for `entropy` / `field-name` entries. Construct with `SecretEntry::new(pattern, kind, category)` + `with_*` builders. Zeroized on drop. |
 | `SecretsFormat` | Enum: `Json`, `Yaml`, `Toml`. |
-| `load_secrets_auto(data, password, format, force_plaintext)` | Detect encrypted vs plaintext and load secret patterns accordingly. Returns `(PatternCompileResult, was_encrypted)`. |
+| `load_secrets_auto(data, password, format, force_plaintext)` | Detect encrypted vs plaintext and load secret patterns accordingly. Returns `AutoLoadedSecrets { patterns, warnings, allow_patterns, was_encrypted }`. |
 | `looks_encrypted(data)` | Heuristic: returns `true` if the data does not look like plaintext JSON/YAML/TOML (i.e. it's likely encrypted). |
 | `encrypt_secrets(plaintext, password)` | Encrypt a byte slice with AES-256-GCM (PBKDF2 key derivation). |
 | `decrypt_secrets(encrypted, password)` | Decrypt and return `Zeroizing<Vec<u8>>`. |
@@ -238,12 +239,13 @@ The allowlist suppresses specific values from sanitization. Values that match an
 ```rust
 use scour_secrets::allowlist::AllowlistMatcher;
 
-let (matcher, warnings) = AllowlistMatcher::new(vec![
+let result = AllowlistMatcher::new(vec![
     "localhost".into(),
     "*.internal".into(),
     "192.168.1.*".into(),
 ]);
-assert!(warnings.is_empty());
+assert!(result.warnings.is_empty());
+let matcher = result.matcher;
 
 assert!(matcher.is_allowed("localhost"));
 assert!(matcher.is_allowed("LOCALHOST"));           // case-insensitive default
@@ -252,10 +254,34 @@ assert!(matcher.is_allowed("192.168.1.42"));
 assert!(!matcher.is_allowed("8.8.8.8"));
 
 // Case-sensitive for exact-token matching:
-let (cs, _) = AllowlistMatcher::new_case_sensitive(vec!["MyToken".into()]);
+let cs = AllowlistMatcher::new_case_sensitive(vec!["MyToken".into()]).matcher;
 assert!(cs.is_allowed("MyToken"));
 assert!(!cs.is_allowed("mytoken"));
 ```
+
+## LLM Module (`llm`)
+
+| Type / Function | Description |
+|-----------------|-------------|
+| `format_llm_prompt(template, entries, report)` | Render sanitized content inline into a structured prompt (`troubleshoot`, `review-config`, `review-security`). |
+| `format_llm_prompt_reference(template, path_entries, report)` | Reference-mode prompt: lists sanitized file paths instead of embedding content. |
+| `resolve_llm_template(name)` | Map a template name to its prompt text. |
+| `LlmEntry` / `LlmPathEntry` | (label, sanitized content) / (label, absolute path) pairs consumed by the formatters. |
+| `PROMPT_PREAMBLE`, `TEMPLATE_TROUBLESHOOT`, `TEMPLATE_REVIEW_CONFIG`, `TEMPLATE_REVIEW_SECURITY` | The raw template constants. |
+
+## Strip-Values Module (`strip_values`)
+
+| Type / Function | Description |
+|-----------------|-------------|
+| `strip_values_from_text(text)` | Replace every value in key/value-shaped text with a placeholder, keeping keys and structure (the `--strip-values` mode). |
+
+## Report Renderers
+
+| Function | Description |
+|----------|-------------|
+| `SanitizeReport::to_json()` / `to_json_pretty()` | JSON serialization. |
+| `SanitizeReport::to_sarif()` | SARIF 2.1.0 output for code-scanning ingestion. |
+| `SanitizeReport::to_html()` | Self-contained HTML report. |
 
 ## Error Module (`error`)
 

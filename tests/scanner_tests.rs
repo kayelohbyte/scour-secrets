@@ -484,7 +484,7 @@ fn scanner_with_strategy_generator() {
     let strat = Box::new(RandomString::new());
     let gen = Arc::new(StrategyGenerator::new(
         strat,
-        EntropyMode::Deterministic { key: [99u8; 32] },
+        EntropyMode::deterministic([99u8; 32]),
     ));
     let store = Arc::new(MappingStore::new(gen, None));
 
@@ -511,7 +511,7 @@ fn scanner_with_category_aware_strategy() {
 
     let gen = Arc::new(StrategyGenerator::new(
         Box::new(CategoryAwareStrategy::new()),
-        EntropyMode::Deterministic { key: [42u8; 32] },
+        EntropyMode::deterministic([42u8; 32]),
     ));
     let store = Arc::new(MappingStore::new(gen, None));
 

@@ -24,30 +24,21 @@
 //! use scour_secrets::report::{FileReport, ReportBuilder, ReportMetadata};
 //! use std::collections::HashMap;
 //!
-//! let meta = ReportMetadata {
-//!     version: "0.4.0".into(),
-//!     timestamp: "2026-03-01T00:00:00Z".into(),
-//!     deterministic: true,
-//!     dry_run: false,
-//!     strict: false,
-//!     chunk_size: 1_048_576,
-//!     threads: Some(4),
-//!     secrets_file: Some("secrets.enc".into()),
-//! };
+//! let meta = ReportMetadata::new("0.4.0", "2026-03-01T00:00:00Z")
+//!     .with_deterministic(true)
+//!     .with_chunk_size(1_048_576)
+//!     .with_threads(Some(4))
+//!     .with_secrets_file(Some("secrets.enc".into()));
 //!
 //! let builder = ReportBuilder::new(meta);
 //!
-//! builder.record_file(FileReport {
-//!     path: "data.log".into(),
-//!     matches: 42,
-//!     replacements: 42,
-//!     bytes_processed: 10_000,
-//!     bytes_output: 10_200,
-//!     pattern_counts: HashMap::from([("email".into(), 30), ("ipv4".into(), 12)]),
-//!     method: "scanner".into(),
-//!     log_context: None,
-//!     match_locations: None,
-//! });
+//! let mut file_report = FileReport::new("data.log", "scanner");
+//! file_report.matches = 42;
+//! file_report.replacements = 42;
+//! file_report.bytes_processed = 10_000;
+//! file_report.bytes_output = 10_200;
+//! file_report.pattern_counts = HashMap::from([("email".into(), 30), ("ipv4".into(), 12)]);
+//! builder.record_file(file_report);
 //!
 //! // Optionally attach per-file log context (populated by --extract-context).
 //! let sanitized_output = "INFO ok\nERROR disk full\nINFO retrying";
@@ -78,6 +69,7 @@ use crate::scanner::{MatchLocation, ScanStats};
 /// Serialized to JSON via [`Self::to_json`] / [`Self::to_json_pretty`].
 /// Never contains original secret values.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct SanitizeReport {
     /// Tool metadata and flags.
     pub metadata: ReportMetadata,
@@ -552,6 +544,7 @@ fn html_escape(s: &str) -> String {
 
 /// Tool metadata embedded in every report.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct ReportMetadata {
     /// Crate / binary version (from `Cargo.toml`).
     pub version: String,
@@ -571,8 +564,70 @@ pub struct ReportMetadata {
     pub secrets_file: Option<String>,
 }
 
+impl ReportMetadata {
+    /// Create metadata with the given version and timestamp; boolean flags
+    /// default to `false`, sizes to `0`, optional fields to `None`. The struct
+    /// is `#[non_exhaustive]`, so this is how it is built outside the crate.
+    #[must_use]
+    pub fn new(version: impl Into<String>, timestamp: impl Into<String>) -> Self {
+        Self {
+            version: version.into(),
+            timestamp: timestamp.into(),
+            deterministic: false,
+            dry_run: false,
+            strict: false,
+            chunk_size: 0,
+            threads: None,
+            secrets_file: None,
+        }
+    }
+
+    /// Set the `--deterministic` flag (builder style).
+    #[must_use]
+    pub fn with_deterministic(mut self, v: bool) -> Self {
+        self.deterministic = v;
+        self
+    }
+
+    /// Set the `--dry-run` flag (builder style).
+    #[must_use]
+    pub fn with_dry_run(mut self, v: bool) -> Self {
+        self.dry_run = v;
+        self
+    }
+
+    /// Set the `--strict` flag (builder style).
+    #[must_use]
+    pub fn with_strict(mut self, v: bool) -> Self {
+        self.strict = v;
+        self
+    }
+
+    /// Set the chunk size in bytes (builder style).
+    #[must_use]
+    pub fn with_chunk_size(mut self, v: usize) -> Self {
+        self.chunk_size = v;
+        self
+    }
+
+    /// Set the thread count (builder style).
+    #[must_use]
+    pub fn with_threads(mut self, v: Option<usize>) -> Self {
+        self.threads = v;
+        self
+    }
+
+    /// Set the secrets file path (builder style).
+    #[must_use]
+    pub fn with_secrets_file(mut self, v: Option<String>) -> Self {
+        self.secrets_file = v;
+        self
+    }
+}
+
 /// Aggregated summary across all processed files.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct ReportSummary {
     /// Number of files processed.
     pub total_files: u64,
@@ -593,6 +648,7 @@ pub struct ReportSummary {
 /// Per-match line-number results for a file, populated when
 /// `--max-match-locations` is non-zero and the scanner path is used.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct MatchLocationsResult {
     /// Individual match locations in document order.
     pub locations: Vec<MatchLocation>,
@@ -606,6 +662,7 @@ pub struct MatchLocationsResult {
 /// Does **not** contain any original secret values — only counts,
 /// byte sizes, pattern labels, and the processing method used.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct FileReport {
     /// File path (relative or archive entry name).
     pub path: String,
@@ -633,6 +690,26 @@ pub struct FileReport {
 }
 
 impl FileReport {
+    /// Create an empty report (all counters zero) for `path` with the given
+    /// processing `method`. Use when a file was routed but produced no scan
+    /// stats. The struct is `#[non_exhaustive]`, so this or
+    /// [`from_scan_stats`](Self::from_scan_stats) is how it is built outside
+    /// the crate.
+    #[must_use]
+    pub fn new(path: impl Into<String>, method: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            matches: 0,
+            replacements: 0,
+            bytes_processed: 0,
+            bytes_output: 0,
+            pattern_counts: HashMap::new(),
+            method: method.into(),
+            log_context: None,
+            match_locations: None,
+        }
+    }
+
     /// Build a `FileReport` from scanner [`ScanStats`].
     #[must_use]
     pub fn from_scan_stats(

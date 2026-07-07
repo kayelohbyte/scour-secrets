@@ -49,6 +49,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// (the pattern is **skipped** — values that should be suppressed will
 /// instead be sanitized) and metacharacter hints.
 #[must_use = "check .warnings for invalid or suspicious patterns"]
+#[non_exhaustive]
 pub struct AllowlistResult {
     /// The compiled matcher, ready for use.
     pub matcher: AllowlistMatcher,

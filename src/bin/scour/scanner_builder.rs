@@ -171,7 +171,8 @@ pub(crate) fn build_store(
                 return Err(
                     "--deterministic requires --password (or SCOUR_SECRETS_PASSWORD). \
                      A deterministic seed cannot be derived without a key."
-                    .into());
+                        .into(),
+                );
             }
         }
     } else {
@@ -239,17 +240,7 @@ pub(crate) fn write_default_secrets(path: &Path) -> std::result::Result<(), Stri
             .map_err(|e| format!("cannot create config dir {}: {e}", parent.display()))?;
     }
     let mut entries = balanced_secret_entries();
-    entries.push(SecretEntry {
-        kind: "allow".into(),
-        pattern: String::new(),
-        category: String::new(),
-        label: None,
-        values: common_allow_patterns(),
-        min_length: None,
-        max_length: None,
-        threshold: None,
-        charset: None,
-    });
+    entries.push(SecretEntry::new("", "allow", "").with_values(common_allow_patterns()));
     let yaml = serde_yaml_ng::to_string(&entries)
         .map_err(|e| format!("cannot serialize default secrets: {e}"))?;
     let header = "# Global sanitize secrets — balanced detection patterns + allowlist.\n# Auto-loaded on every plain run. Edit freely; deleted values take effect immediately.\n\n";
@@ -267,17 +258,7 @@ pub(crate) fn write_default_secrets(path: &Path) -> std::result::Result<(), Stri
 /// `~/.config/scour/secrets.yaml` on first run.
 pub(crate) fn balanced_secret_entries() -> Vec<SecretEntry> {
     fn e(pattern: &str, category: &str, label: &str) -> SecretEntry {
-        SecretEntry {
-            pattern: pattern.to_string(),
-            kind: "regex".to_string(),
-            category: category.to_string(),
-            label: Some(label.to_string()),
-            values: vec![],
-            min_length: None,
-            max_length: None,
-            threshold: None,
-            charset: None,
-        }
+        SecretEntry::new(pattern, "regex", category).with_label(label)
     }
     vec![
         e(

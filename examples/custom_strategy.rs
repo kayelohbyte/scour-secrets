@@ -28,7 +28,7 @@ impl Strategy for Redact {
 fn main() {
     // Wrap the custom strategy in a StrategyGenerator.
     let strategy = Redact;
-    let mode = EntropyMode::Deterministic { key: [42u8; 32] };
+    let mode = EntropyMode::deterministic([42u8; 32]);
     let generator = Arc::new(StrategyGenerator::new(Box::new(strategy), mode));
 
     // Use it with MappingStore as usual.

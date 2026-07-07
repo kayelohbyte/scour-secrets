@@ -154,17 +154,21 @@ pub use processor::archive::{
 };
 pub use processor::limits::DEFAULT_ARCHIVE_DEPTH;
 pub use processor::{
-    FieldNameSignal, FieldRule, FileTypeProfile, Processor, ProcessorRegistry,
+    FieldNameSignal, FieldRule, FileTypeProfile, Processor, ProcessorRegistry, Replacement,
     DEFAULT_FIELD_SIGNAL_THRESHOLD,
 };
-pub use report::{FileReport, ReportBuilder, ReportMetadata, SanitizeReport};
+pub use report::{
+    FileReport, MatchLocationsResult, ReportBuilder, ReportMetadata, ReportSummary, SanitizeReport,
+};
 pub use scanner::{
     MatchLocation, ScanConfig, ScanPattern, ScanProgress, ScanStats, SecretsLoadResult,
     StreamScanner,
 };
 pub use secrets::{
-    decrypt_secrets, encrypt_secrets, load_secrets_auto, looks_encrypted, SecretEntry,
-    SecretsFormat,
+    decrypt_secrets, encrypt_secrets, entries_to_patterns, extract_allow_patterns,
+    load_encrypted_secrets, load_plaintext_secrets, load_secrets_auto, looks_encrypted,
+    parse_category, parse_secrets, serialize_secrets, AutoLoadedSecrets, PatternCompileResult,
+    SecretEntry, SecretsFormat,
 };
 pub use store::{MappingStore, StoreSnapshot};
 pub use strategy::{

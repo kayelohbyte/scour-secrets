@@ -179,16 +179,15 @@ pub(crate) fn run_sanitize(
             })
             .unwrap_or_else(|_| "unknown".into());
 
-        Some(ReportBuilder::new(ReportMetadata {
-            version: env!("CARGO_PKG_VERSION").into(),
-            timestamp,
-            deterministic: cli.deterministic,
-            dry_run: cli.dry_run,
-            strict: cli.strict,
-            chunk_size: cli.chunk_size,
-            threads: cli.threads,
-            secrets_file: cli.secrets_file.as_ref().map(|p| p.display().to_string()),
-        }))
+        Some(ReportBuilder::new(
+            ReportMetadata::new(env!("CARGO_PKG_VERSION"), timestamp)
+                .with_deterministic(cli.deterministic)
+                .with_dry_run(cli.dry_run)
+                .with_strict(cli.strict)
+                .with_chunk_size(cli.chunk_size)
+                .with_threads(cli.threads)
+                .with_secrets_file(cli.secrets_file.as_ref().map(|p| p.display().to_string())),
+        ))
     } else {
         None
     };
@@ -364,6 +363,9 @@ pub(crate) fn run_sanitize(
                 ArchiveFormat::Tar => discovery.discover_profiles_tar(file),
                 ArchiveFormat::TarGz => discovery.discover_profiles_tar_gz(file),
                 ArchiveFormat::Zip => discovery.discover_profiles_zip(file),
+                other => {
+                    return Err((format!("unsupported archive format: {other:?}"), 1));
+                }
             }
             .map_err(|e| {
                 (

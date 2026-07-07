@@ -56,11 +56,7 @@ use zeroize::Zeroize;
 /// [`MappingStore::iter_since`]. Using a dedicated type prevents accidentally
 /// passing an unrelated `usize` (a count, an index, a capacity) to
 /// `iter_since`, which would silently yield the wrong subset of entries.
-///
-/// **Breaking change in 0.13.0:** `MappingStore::snapshot` previously returned
-/// `usize`; it now returns `StoreSnapshot`. Call sites should change
-/// `store.snapshot()` → the new type and `iter_since(n)` → `iter_since(snap)`.
-/// To iterate all entries use [`StoreSnapshot::start`] instead of the literal `0`.
+/// To iterate all entries use [`StoreSnapshot::start`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StoreSnapshot(usize);
 
@@ -384,9 +380,6 @@ impl MappingStore {
     /// `DashMap::clear` acquires shard locks one at a time, so a concurrent
     /// `get_or_insert` racing with `clear` will observe a partially-cleared
     /// store.
-    ///
-    /// **Breaking change in 0.13.0:** the signature changed from
-    /// `clear(&mut self)` to `clear(&self)`.
     pub fn clear(&self) {
         // DashMap::clear() acquires each shard lock in turn and drops all
         // entries, triggering ZeroizingString::drop for every key. Cloned
@@ -407,9 +400,6 @@ impl MappingStore {
     /// building a full `HashSet` of all existing keys.
     ///
     /// O(1), no allocation.
-    ///
-    /// **Breaking change in 0.13.0:** previously returned `usize`;
-    /// now returns [`StoreSnapshot`].
     #[must_use]
     pub fn snapshot(&self) -> StoreSnapshot {
         StoreSnapshot(self.len.load(Ordering::Acquire))
@@ -422,9 +412,6 @@ impl MappingStore {
     /// are skipped. Still O(n) in total store size, but avoids allocating a
     /// `HashSet` of all prior keys. Use [`StoreSnapshot::start`] to iterate
     /// all entries.
-    ///
-    /// **Breaking change in 0.13.0:** the parameter type changed from `usize`
-    /// to [`StoreSnapshot`].
     ///
     /// Implementation note: the inner `.collect::<Vec<_>>()` inside the
     /// `flat_map` is required to release the DashMap shard lock before

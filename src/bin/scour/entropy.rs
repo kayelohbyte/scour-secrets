@@ -345,17 +345,17 @@ mod tests {
         threshold: Option<f64>,
         charset: Option<&str>,
     ) -> SecretEntry {
-        SecretEntry {
-            pattern: String::new(),
-            kind: "entropy".into(),
-            category: "auth_token".into(),
-            label: label.map(|s| s.into()),
-            values: vec![],
-            min_length: min,
-            max_length: max,
-            threshold,
-            charset: charset.map(|s| s.into()),
+        let mut e = SecretEntry::new("", "entropy", "auth_token").with_length_bounds(min, max);
+        if let Some(l) = label {
+            e = e.with_label(l);
         }
+        if let Some(t) = threshold {
+            e = e.with_threshold(t);
+        }
+        if let Some(c) = charset {
+            e = e.with_charset(c);
+        }
+        e
     }
 
     // ── EntropyCharset::from_str ─────────────────────────────────────────────
@@ -520,17 +520,7 @@ mod tests {
 
     #[test]
     fn configs_from_entries_ignores_non_entropy_kinds() {
-        let entries = vec![SecretEntry {
-            pattern: "foo".into(),
-            kind: "regex".into(),
-            category: "auth_token".into(),
-            label: None,
-            values: vec![],
-            min_length: None,
-            max_length: None,
-            threshold: None,
-            charset: None,
-        }];
+        let entries = vec![SecretEntry::new("foo", "regex", "auth_token")];
         assert!(entropy_configs_from_entries(&entries).is_empty());
     }
 

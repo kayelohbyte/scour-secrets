@@ -5,7 +5,52 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [Unreleased] — 0.16.0
+
+### Security
+
+- **Parse errors never echo secrets-file content.** A malformed TOML secrets
+  file previously rendered the offending source line (with literal secret
+  values) into the error on stderr; serde JSON/YAML data errors embedded
+  mistyped values the same way. All three parsers now report format +
+  line/column only.
+- **Encrypted secrets files now receive the structured-handoff write-back**:
+  decrypt → merge discovered literals → re-encrypt (fresh salt + nonce) with
+  the same password. The file on disk is never downgraded to plaintext, and
+  the write-back fails closed (file untouched) on a wrong or missing password.
+
+### Changed — BREAKING
+
+- **Project renamed to `scour`** (crate, lib, and binary; previously
+  `rust-sanitize` / `sanitize`). Env vars are now `SCOUR_*` (previously
+  `SANITIZE_*`), the config directory is `~/.config/scour/`, the project
+  config file is `.scour.yaml`, and the MCP binary is `scour-mcp` (server
+  name `scour`). MCP *tool* names (`sanitize`, `scan`, …) and `-sanitized`
+  output suffixes are unchanged.
+- **API freeze ahead of 1.0.** Public structs and the `LengthPolicy`,
+  `SecretsFormat`, `ArchiveFormat`, and `EntropyMode` enums are now
+  `#[non_exhaustive]`: struct literals and exhaustive matches outside the
+  crate no longer compile. Use the new constructors — `SecretEntry::new` +
+  `with_*`, `ReportMetadata::new` + `with_*`, `FileReport::new`,
+  `Replacement::new`, `EntropyMode::deterministic` — or serde. Result structs
+  (`SecretsLoadResult`, `AllowlistResult`, `AutoLoadedSecrets`) must be read
+  by field access instead of destructured exhaustively.
+- **`load_secrets_auto` returns `AutoLoadedSecrets`** (named struct) instead
+  of the nested tuple `((PatternCompileResult, Vec<String>), bool)`.
+- The structured-handoff write-back now preserves the secrets file's own
+  plaintext format — a `.json` secrets file previously came back rewritten as
+  YAML, and `.toml` write-back failed outright.
+
+### Added
+
+- `tracing` warning when an unknown bare category string (e.g. a typo like
+  `emial`) silently maps to a custom category; use the `custom:` prefix to
+  silence it. Category parsing is now consolidated in one place
+  (`parse_category`) for both secrets files and profiles.
+- Stability contract on `Processor` / `Strategy` / `ReplacementGenerator`:
+  new trait methods will always ship with default implementations.
+- Root re-exports for `ReportSummary`, `MatchLocationsResult`, `Replacement`,
+  and the `secrets::` free functions.
 
 ## [0.15.0] - 2026-06-26
 

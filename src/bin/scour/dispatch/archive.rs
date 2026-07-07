@@ -103,6 +103,9 @@ impl FileProcessor<'_> {
                             .process_zip(&mut reader, &mut null_out)
                             .map_err(|e| format!("archive error: {e}"))?
                     }
+                    other => {
+                        return Err(format!("unsupported archive format: {other:?}"));
+                    }
                 };
 
                 if let Some(rb) = fp.report_builder {
@@ -171,6 +174,9 @@ impl FileProcessor<'_> {
                         .finish()
                         .map_err(|e| format!("failed to finalize output: {e}"))?;
                     stats
+                }
+                other => {
+                    return Err(format!("unsupported archive format: {other:?}"));
                 }
             };
 

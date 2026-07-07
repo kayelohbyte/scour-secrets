@@ -174,33 +174,31 @@ fn looks_encrypted_binary_garbage_returns_true() {
 #[test]
 fn load_auto_plaintext_with_flag() {
     let data = sample_json().as_bytes();
-    let (((patterns, errors), _allow), was_encrypted) =
-        load_secrets_auto(data, None, Some(SecretsFormat::Json), true).unwrap();
-    assert!(!was_encrypted);
-    assert_eq!(patterns.len(), 2);
-    assert!(errors.is_empty());
+    let loaded = load_secrets_auto(data, None, Some(SecretsFormat::Json), true).unwrap();
+    assert!(!loaded.was_encrypted);
+    assert_eq!(loaded.patterns.len(), 2);
+    assert!(loaded.warnings.is_empty());
 }
 
 #[test]
 fn load_auto_plaintext_auto_detect() {
     // No force_plaintext, but data is clearly plaintext JSON.
     let data = sample_json().as_bytes();
-    let (((patterns, errors), _allow), was_encrypted) =
-        load_secrets_auto(data, None, Some(SecretsFormat::Json), false).unwrap();
-    assert!(!was_encrypted);
-    assert_eq!(patterns.len(), 2);
-    assert!(errors.is_empty());
+    let loaded = load_secrets_auto(data, None, Some(SecretsFormat::Json), false).unwrap();
+    assert!(!loaded.was_encrypted);
+    assert_eq!(loaded.patterns.len(), 2);
+    assert!(loaded.warnings.is_empty());
 }
 
 #[test]
 fn load_auto_encrypted_with_password() {
     let plaintext = sample_json().as_bytes();
     let encrypted = encrypt_secrets(plaintext, "pw123").unwrap();
-    let (((patterns, errors), _allow), was_encrypted) =
+    let loaded =
         load_secrets_auto(&encrypted, Some("pw123"), Some(SecretsFormat::Json), false).unwrap();
-    assert!(was_encrypted);
-    assert_eq!(patterns.len(), 2);
-    assert!(errors.is_empty());
+    assert!(loaded.was_encrypted);
+    assert_eq!(loaded.patterns.len(), 2);
+    assert!(loaded.warnings.is_empty());
 }
 
 #[test]
@@ -443,10 +441,11 @@ fn plaintext_and_encrypted_produce_same_patterns() {
 
     let ((pt_patterns, pt_errors), _) =
         load_plaintext_secrets(plaintext, Some(SecretsFormat::Json)).unwrap();
-    let (((enc_patterns, enc_errors), _allow), was_enc) =
+    let loaded =
         load_secrets_auto(&encrypted, Some(password), Some(SecretsFormat::Json), false).unwrap();
+    let (enc_patterns, enc_errors) = (loaded.patterns, loaded.warnings);
 
-    assert!(was_enc);
+    assert!(loaded.was_encrypted);
     assert_eq!(pt_patterns.len(), enc_patterns.len());
     assert_eq!(pt_errors.len(), enc_errors.len());
 
@@ -517,15 +516,15 @@ fn plaintext_load_does_not_panic_on_drop() {
 
 #[test]
 fn plaintext_auto_load_does_not_panic_on_drop() {
-    let (((patterns, _), _allow), _) = load_secrets_auto(
+    let loaded = load_secrets_auto(
         sample_json().as_bytes(),
         None,
         Some(SecretsFormat::Json),
         true,
     )
     .unwrap();
-    assert_eq!(patterns.len(), 2);
-    drop(patterns);
+    assert_eq!(loaded.patterns.len(), 2);
+    drop(loaded);
 }
 
 // ===========================================================================
@@ -647,21 +646,19 @@ fn file_backed_plaintext_secrets() {
 #[test]
 fn load_auto_yaml_plaintext() {
     let data = sample_yaml().as_bytes();
-    let (((patterns, errors), _allow), was_encrypted) =
-        load_secrets_auto(data, None, Some(SecretsFormat::Yaml), false).unwrap();
-    assert!(!was_encrypted);
-    assert_eq!(patterns.len(), 2);
-    assert!(errors.is_empty());
+    let loaded = load_secrets_auto(data, None, Some(SecretsFormat::Yaml), false).unwrap();
+    assert!(!loaded.was_encrypted);
+    assert_eq!(loaded.patterns.len(), 2);
+    assert!(loaded.warnings.is_empty());
 }
 
 #[test]
 fn load_auto_toml_plaintext() {
     let data = sample_toml().as_bytes();
-    let (((patterns, errors), _allow), was_encrypted) =
-        load_secrets_auto(data, None, Some(SecretsFormat::Toml), false).unwrap();
-    assert!(!was_encrypted);
-    assert_eq!(patterns.len(), 2);
-    assert!(errors.is_empty());
+    let loaded = load_secrets_auto(data, None, Some(SecretsFormat::Toml), false).unwrap();
+    assert!(!loaded.was_encrypted);
+    assert_eq!(loaded.patterns.len(), 2);
+    assert!(loaded.warnings.is_empty());
 }
 
 // ===========================================================================

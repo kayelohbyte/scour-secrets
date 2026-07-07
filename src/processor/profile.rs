@@ -171,6 +171,7 @@ impl FieldNameSignal {
 ///       category: custom:dn
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FieldRule {
     /// Key pattern to match (see Pattern Syntax above).
     pub pattern: String,
@@ -289,6 +290,7 @@ impl FieldRule {
 ///       category: "custom:password"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FileTypeProfile {
     /// Name of the processor to use (e.g. `"key_value"`, `"json"`).
     pub processor: String,
@@ -463,30 +465,9 @@ impl<'de> Deserialize<'de> for Category {
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        Ok(match s.as_str() {
-            "email" => Category::Email,
-            "name" => Category::Name,
-            "phone" => Category::Phone,
-            "ipv4" => Category::IpV4,
-            "ipv6" => Category::IpV6,
-            "credit_card" => Category::CreditCard,
-            "ssn" => Category::Ssn,
-            "hostname" => Category::Hostname,
-            "mac_address" => Category::MacAddress,
-            "container_id" => Category::ContainerId,
-            "uuid" => Category::Uuid,
-            "jwt" => Category::Jwt,
-            "auth_token" => Category::AuthToken,
-            "file_path" => Category::FilePath,
-            "windows_sid" => Category::WindowsSid,
-            "url" => Category::Url,
-            "aws_arn" => Category::AwsArn,
-            "azure_resource_id" => Category::AzureResourceId,
-            other => {
-                let tag = other.strip_prefix("custom:").unwrap_or(other);
-                Category::Custom(tag.into())
-            }
-        })
+        // Single source of truth for category-string parsing; keeps profile
+        // deserialization and secrets-file parsing in lockstep.
+        Ok(crate::secrets::parse_category(&s))
     }
 }
 

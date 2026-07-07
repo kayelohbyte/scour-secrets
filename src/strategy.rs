@@ -86,6 +86,12 @@ use zeroize::Zeroize;
 ///
 /// Strategies are agnostic to how entropy is produced (HMAC-deterministic
 /// or CSPRNG-random). That concern is handled by [`StrategyGenerator`].
+///
+/// # Stability
+///
+/// This trait is open for third-party implementations. New methods, if any,
+/// will always ship with default implementations, so implementing it today
+/// remains forward-compatible.
 pub trait Strategy: Send + Sync {
     /// Human-readable, unique name for this strategy (e.g. `"random_string"`).
     fn name(&self) -> &'static str;
@@ -106,14 +112,25 @@ pub trait Strategy: Send + Sync {
 
 /// How entropy is produced for strategies.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum EntropyMode {
     /// Deterministic: `entropy = HMAC-SHA256(key, category || '\0' || original)`.
+    #[non_exhaustive]
     Deterministic {
         /// 32-byte HMAC key (seed).
         key: [u8; 32],
     },
     /// Random: entropy is drawn from OS CSPRNG on every call.
     Random,
+}
+
+impl EntropyMode {
+    /// Deterministic entropy seeded with a 32-byte HMAC key. The variant is
+    /// `#[non_exhaustive]`, so this is how it is constructed outside the crate.
+    #[must_use]
+    pub fn deterministic(key: [u8; 32]) -> Self {
+        Self::Deterministic { key }
+    }
 }
 
 impl Drop for EntropyMode {

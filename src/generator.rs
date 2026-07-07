@@ -29,6 +29,12 @@ use zeroize::Zeroize;
 /// `(category, original)` pair (and same internal state / seed), the output
 /// must be identical. This is what enables per-run consistency when backed
 /// by a `MappingStore` that calls `generate` only once per unique value.
+///
+/// # Stability
+///
+/// This trait is open for third-party implementations. New methods, if any,
+/// will always ship with default implementations, so implementing it today
+/// remains forward-compatible.
 pub trait ReplacementGenerator: Send + Sync {
     /// Produce a sanitized replacement for `original` classified as `category`.
     fn generate(&self, category: &Category, original: &str) -> String;
@@ -46,6 +52,7 @@ pub trait ReplacementGenerator: Send + Sync {
 /// verbatim (email domain, hostname suffix, file extension, ARN/Azure known
 /// segments) is unaffected by this policy.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum LengthPolicy {
     /// Output byte length exactly matches the original (default).
     #[default]

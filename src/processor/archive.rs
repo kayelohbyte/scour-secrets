@@ -252,6 +252,7 @@ impl ArchiveFilter {
 // Archive format enum
 // ---------------------------------------------------------------------------
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ArchiveFormat {
     /// `.zip` archive.
     Zip,
@@ -295,6 +296,7 @@ impl ArchiveFormat {
 
 /// Statistics collected while processing an archive.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub struct ArchiveStats {
     /// Number of file entries processed (excludes dirs/symlinks).
     pub files_processed: u64,
@@ -322,6 +324,7 @@ pub struct ArchiveStats {
 
 /// Progress snapshot emitted while processing archive entries.
 #[derive(Debug, Clone, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct ArchiveProgress {
     /// Entries seen so far, including skipped entries.
     pub entries_seen: u64,

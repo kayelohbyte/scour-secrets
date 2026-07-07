@@ -136,6 +136,7 @@ pub const KV_LABEL_SUFFIX: &str = "_kv";
 /// patterns (API keys, emails, SSNs) are well under 256 bytes, so the
 /// 4 KiB default provides ample margin.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ScanConfig {
     /// Size of each chunk read from the input (bytes).
     ///
@@ -484,6 +485,7 @@ impl ScanScratch {
 /// matched region within the file (0-based). Both fields refer to the
 /// *input* file, not the sanitized output.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct MatchLocation {
     /// 1-based line number of the match within the file.
     pub line: u64,
@@ -499,6 +501,7 @@ pub struct MatchLocation {
 /// [`StreamScanner::scan_bytes`] to provide visibility into what
 /// the scanner did.
 #[derive(Debug, Clone, Default, PartialEq)]
+#[non_exhaustive]
 pub struct ScanStats {
     /// Total bytes read from the input.
     pub bytes_processed: u64,
@@ -521,6 +524,7 @@ pub struct ScanStats {
 
 /// Progress snapshot emitted during streaming scans.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct ScanProgress {
     /// Total bytes read from the input so far.
     pub bytes_processed: u64,
@@ -622,6 +626,7 @@ pub struct StreamScanner {
 /// let store = MappingStore::new_with_allowlist(gen, None, Arc::new(allowlist));
 /// ```
 #[must_use = "use allow_patterns to build an AllowlistMatcher; check warnings for skipped patterns"]
+#[non_exhaustive]
 pub struct SecretsLoadResult {
     /// The compiled scanner, ready to use.
     pub scanner: StreamScanner,

@@ -324,17 +324,8 @@ fn s1_secret_entry_implements_drop_zeroize() {
 
     // Verify that creating and dropping a SecretEntry doesn't panic
     // (Drop impl calls zeroize on all fields).
-    let entry = SecretEntry {
-        pattern: "sensitive-pattern-value".into(),
-        kind: "literal".into(),
-        category: "email".into(),
-        label: Some("test_label".into()),
-        values: vec![],
-        min_length: None,
-        max_length: None,
-        threshold: None,
-        charset: None,
-    };
+    let entry =
+        SecretEntry::new("sensitive-pattern-value", "literal", "email").with_label("test_label");
     drop(entry);
     // If we get here, the Zeroize-on-Drop implementation works without panic.
 }

@@ -114,17 +114,11 @@ pub(crate) fn run_test_pattern(args: &TestPatternArgs) -> Result<(), (String, i3
     let mut entries: Vec<scour_secrets::secrets::SecretEntry> = Vec::new();
 
     for p in &args.patterns {
-        entries.push(scour_secrets::secrets::SecretEntry {
-            pattern: p.clone(),
-            kind: "regex".to_string(),
-            category: "auth_token".to_string(),
-            label: None,
-            values: vec![],
-            min_length: None,
-            max_length: None,
-            threshold: None,
-            charset: None,
-        });
+        entries.push(scour_secrets::secrets::SecretEntry::new(
+            p.clone(),
+            "regex",
+            "auth_token",
+        ));
     }
 
     if let Some(ref path) = args.secrets_file {

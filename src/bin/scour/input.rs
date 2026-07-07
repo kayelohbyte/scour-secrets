@@ -160,6 +160,9 @@ pub(crate) fn default_archive_output(input: &Path, fmt: ArchiveFormat) -> PathBu
         ArchiveFormat::Zip => "zip",
         ArchiveFormat::Tar => "tar",
         ArchiveFormat::TarGz => "tar.gz",
+        // ArchiveFormat is #[non_exhaustive]; new formats need a real mapping
+        // before they reach here, so a generic extension is a safe fallback.
+        _ => "archive",
     };
     let base = if matches!(fmt, ArchiveFormat::TarGz) {
         stem.strip_suffix(".tar").unwrap_or(stem)

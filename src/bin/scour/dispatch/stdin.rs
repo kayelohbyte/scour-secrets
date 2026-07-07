@@ -68,13 +68,12 @@ impl FileProcessor<'_> {
                             for (label, count) in &ent_lc {
                                 *pattern_counts.entry(label.clone()).or_insert(0) += count;
                             }
-                            let stats = ScanStats {
-                                matches_found: total_replacements,
-                                replacements_applied: total_replacements,
-                                bytes_processed: input_bytes.len() as u64,
-                                bytes_output: output_bytes.len() as u64,
-                                pattern_counts,
-                            };
+                            let mut stats = ScanStats::default();
+                            stats.matches_found = total_replacements;
+                            stats.replacements_applied = total_replacements;
+                            stats.bytes_processed = input_bytes.len() as u64;
+                            stats.bytes_output = output_bytes.len() as u64;
+                            stats.pattern_counts = pattern_counts;
                             rb.record_file(FileReport::from_scan_stats(
                                 "<stdin>".to_string(),
                                 &stats,
