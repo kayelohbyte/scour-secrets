@@ -309,10 +309,10 @@ fn run_no_leak(label: &str, sources: Vec<Src>, stdin: Option<(&str, Vec<u8>)>) {
         args.push(outdir.to_str().unwrap().into());
     }
 
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_sanitize"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_scour-secrets"));
     cmd.args(&args)
-        .env("SANITIZE_LOG", "debug") // verbose: maximize chance of a log leak surfacing
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "debug") // verbose: maximize chance of a log leak surfacing
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -521,7 +521,7 @@ fn stdin_origin_value_redacted_in_file_comment() {
     )
     .unwrap();
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             yaml_path.to_str().unwrap(),
             "-",
@@ -534,8 +534,8 @@ fn stdin_origin_value_redacted_in_file_comment() {
             "--output",
             outdir.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "debug")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "debug")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

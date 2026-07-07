@@ -1,5 +1,5 @@
 {
-  "name": "rust-sanitize",
+  "name": "scour-secrets",
   "image": "rust:1.75",
   "workspaceFolder": "/workspace",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",

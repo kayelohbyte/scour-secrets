@@ -1,11 +1,11 @@
-//! Integration tests for the `sanitize template` subcommand.
+//! Integration tests for the `scour-secrets template` subcommand.
 //!
 //! Covers:
 //! - Default preset (balanced) generates a YAML file with pattern entries
 //! - Named presets (balanced, aggressive, web, k8s, database, aws) generate preset-specific files
 //! - Refusing to overwrite an existing file without `--overwrite`
 //! - `--overwrite` replaces an existing file
-//! - The generated template is accepted by a sanitize run
+//! - The generated template is accepted by a scour-secrets run
 
 use std::fs;
 use std::process::Command;
@@ -16,9 +16,9 @@ use tempfile::tempdir;
 // ---------------------------------------------------------------------------
 
 fn run_template(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(std::iter::once("template").chain(args.iter().copied()))
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -204,7 +204,7 @@ fn template_generated_file_is_valid_for_sanitize() {
 
     fs::write(&input_path, b"safe text with no secrets here\n").unwrap();
 
-    let run_out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let run_out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input_path.to_str().unwrap(),
             "-s",
@@ -212,7 +212,7 @@ fn template_generated_file_is_valid_for_sanitize() {
             "-o",
             out_path.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -221,7 +221,7 @@ fn template_generated_file_is_valid_for_sanitize() {
 
     assert!(
         run_out.status.success(),
-        "sanitize run with generated template as secrets file should exit 0; stderr: {}",
+        "scour-secrets run with generated template as secrets file should exit 0; stderr: {}",
         String::from_utf8_lossy(&run_out.stderr)
     );
 }

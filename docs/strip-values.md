@@ -37,7 +37,7 @@ pub fn strip_values_from_text(
 ## Example
 
 ```rust
-use rust_sanitize::strip_values_from_text;
+use scour_secrets::strip_values_from_text;
 
 let input = "\
 # Database settings

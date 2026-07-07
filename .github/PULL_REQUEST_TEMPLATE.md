@@ -4,7 +4,7 @@
 
 ## Design principle check
 
-<!-- rust-sanitize has non-negotiable constraints documented in DESIGN.md.
+<!-- scour-secrets has non-negotiable constraints documented in DESIGN.md.
      Answer each question that applies to your change. -->
 
 - [ ] This PR does not add a reverse/restore mode or mapping file output

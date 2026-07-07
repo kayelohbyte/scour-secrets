@@ -50,7 +50,7 @@ fn ignore_path_excludes_matched_file() {
     let out_dir = dir.path().join("outdir");
     fs::create_dir_all(&out_dir).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             dir.path().to_str().unwrap(),
             "-s",
@@ -60,7 +60,7 @@ fn ignore_path_excludes_matched_file() {
             "-o",
             out_dir.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -117,7 +117,7 @@ fn ignore_path_glob_excludes_subtree() {
     // to the project config root (CWD), which doesn't apply when the input is
     // an absolute temp directory. The `**` prefix/suffix form matches
     // regardless of where the input lives.
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             dir.path().to_str().unwrap(),
             "-s",
@@ -127,7 +127,7 @@ fn ignore_path_glob_excludes_subtree() {
             "-o",
             out_dir.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -168,7 +168,7 @@ fn hidden_flag_walks_dotfiles() {
     let out_no_hidden = dir.path().join("out_no_hidden");
     fs::create_dir_all(&out_no_hidden).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             dir.path().to_str().unwrap(),
             "-s",
@@ -176,7 +176,7 @@ fn hidden_flag_walks_dotfiles() {
             "-o",
             out_no_hidden.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -195,7 +195,7 @@ fn hidden_flag_walks_dotfiles() {
     let out_with_hidden = dir.path().join("out_with_hidden");
     fs::create_dir_all(&out_with_hidden).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             dir.path().to_str().unwrap(),
             "-s",
@@ -204,7 +204,7 @@ fn hidden_flag_walks_dotfiles() {
             "-o",
             out_with_hidden.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -240,7 +240,7 @@ fn hidden_skipped_by_default() {
     let out_dir = input_dir.path().join("outdir");
     fs::create_dir_all(&out_dir).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input_dir.path().to_str().unwrap(),
             "-s",
@@ -248,7 +248,7 @@ fn hidden_skipped_by_default() {
             "-o",
             out_dir.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -299,7 +299,7 @@ fn hidden_and_vcs_directories_are_pruned() {
     let out_dir = input_dir.path().join("outdir");
     fs::create_dir_all(&out_dir).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input_dir.path().to_str().unwrap(),
             "-s",
@@ -307,7 +307,7 @@ fn hidden_and_vcs_directories_are_pruned() {
             "-o",
             out_dir.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
     assert!(

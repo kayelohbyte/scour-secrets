@@ -4,7 +4,7 @@
 //! terminals and falls back to milestone log lines in CI / non-TTY environments.
 
 use clap::ValueEnum;
-use rust_sanitize::{ArchiveProgress, ScanProgress};
+use scour_secrets::{ArchiveProgress, ScanProgress};
 use std::env;
 use std::io::{self, IsTerminal, Write};
 use std::sync::{Arc, Mutex};
@@ -142,7 +142,7 @@ impl ProgressReporter {
             ));
         } else {
             // In non-TTY / milestone mode, per-chunk updates are too noisy.
-            // Route to debug so SANITIZE_LOG=debug still surfaces them.
+            // Route to debug so SCOUR_SECRETS_LOG=debug still surfaces them.
             tracing::debug!(task = label, progress = %format_scan_progress(progress), "scan progress");
         }
     }

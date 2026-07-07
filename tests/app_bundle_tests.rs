@@ -57,7 +57,7 @@ fn app_bundle_replaces_known_pattern() {
     fs::write(&input, format!("token = {token}\nother = value\n")).unwrap();
     let output = dir.path().join("config-sanitized.txt");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "--app",
@@ -65,7 +65,7 @@ fn app_bundle_replaces_known_pattern() {
             "-o",
             output.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -91,7 +91,7 @@ fn app_bundle_combined_with_secrets_file() {
     .unwrap();
     let output = dir.path().join("config-out.txt");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "--app",
@@ -101,7 +101,7 @@ fn app_bundle_combined_with_secrets_file() {
             "-o",
             output.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -121,7 +121,7 @@ fn app_bundle_unknown_name_fails() {
     fs::write(&input, "hello world\n").unwrap();
     let output = dir.path().join("dummy-out.txt");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "--app",
@@ -129,7 +129,7 @@ fn app_bundle_unknown_name_fails() {
             "-o",
             output.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -140,7 +140,7 @@ fn app_bundle_unknown_name_fails() {
 }
 
 /// 4. --no-structured-handoff suppresses writing of any discovered-secrets file.
-///    With no -s flag, the tool should not write a sanitize-discovered.yaml
+///    With no -s flag, the tool should not write a scour-secrets-discovered.yaml
 ///    (or any similar auto-save file) into the working directory.
 #[test]
 fn no_structured_handoff_does_not_write_discovered_file() {
@@ -149,7 +149,7 @@ fn no_structured_handoff_does_not_write_discovered_file() {
     let input = write_cfg_input(dir.path(), "input.cfg");
     let output = dir.path().join("output.cfg");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "--profile",
@@ -158,7 +158,7 @@ fn no_structured_handoff_does_not_write_discovered_file() {
             "-o",
             output.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         // Set CWD to the temp dir so any unexpected auto-written files land there.
         .current_dir(dir.path())
         .output()
@@ -170,11 +170,11 @@ fn no_structured_handoff_does_not_write_discovered_file() {
         String::from_utf8_lossy(&out.stderr)
     );
 
-    // No sanitize-discovered.yaml (or similar) should have been created in the
+    // No scour-secrets-discovered.yaml (or similar) should have been created in the
     // temp dir since no --secrets-file was supplied and --no-structured-handoff is set.
     assert!(
-        !dir.path().join("sanitize-discovered.yaml").exists(),
-        "sanitize-discovered.yaml should not be written when --no-structured-handoff is set"
+        !dir.path().join("scour-secrets-discovered.yaml").exists(),
+        "scour-secrets-discovered.yaml should not be written when --no-structured-handoff is set"
     );
 }
 
@@ -191,7 +191,7 @@ fn no_structured_handoff_with_secrets_file_does_not_mutate_secrets_file() {
 
     let original_content = fs::read(&secrets).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "--profile",
@@ -202,7 +202,7 @@ fn no_structured_handoff_with_secrets_file_does_not_mutate_secrets_file() {
             "-o",
             output.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -240,7 +240,7 @@ fn allow_flag_passes_value_through_unchanged() {
 
     // Pipe input via stdin so the output arrives on stdout — no output file to
     // read back, which sidesteps Windows CI file-permission flakiness.
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             "-", // read from stdin
             "-s",
@@ -250,8 +250,8 @@ fn allow_flag_passes_value_through_unchanged() {
         ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .current_dir(dir.path())
         .spawn()
         .unwrap();
@@ -326,7 +326,7 @@ fn two_pass_profile_seeds_plain_text_scan() {
     )
     .unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             config.to_str().unwrap(),
             log.to_str().unwrap(),
@@ -337,8 +337,8 @@ fn two_pass_profile_seeds_plain_text_scan() {
             "--output",
             outdir.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .output()
         .unwrap();
 
@@ -418,7 +418,7 @@ fn duplicate_value_across_structured_files_redacted_in_both() {
 
         let first = dir.path().join(order[0]);
         let second = dir.path().join(order[1]);
-        let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+        let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
             .args([
                 first.to_str().unwrap(),
                 second.to_str().unwrap(),
@@ -429,8 +429,8 @@ fn duplicate_value_across_structured_files_redacted_in_both() {
                 "--output",
                 outdir.to_str().unwrap(),
             ])
-            .env("SANITIZE_LOG", "error")
-            .env("SANITIZE_NO_SETTINGS", "1")
+            .env("SCOUR_SECRETS_LOG", "error")
+            .env("SCOUR_SECRETS_NO_SETTINGS", "1")
             .output()
             .unwrap();
 
@@ -497,7 +497,7 @@ fn escaped_value_in_unmatched_field_redacted_cross_file() {
     )
     .unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             disc.to_str().unwrap(),
             unj.to_str().unwrap(),
@@ -509,8 +509,8 @@ fn escaped_value_in_unmatched_field_redacted_cross_file() {
             "--output",
             outdir.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .output()
         .unwrap();
     assert!(
@@ -596,7 +596,7 @@ fn cross_archive_duplicate_value_redacted_in_both_archives() {
     )
     .unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             a1.to_str().unwrap(),
             a2.to_str().unwrap(),
@@ -607,8 +607,8 @@ fn cross_archive_duplicate_value_redacted_in_both_archives() {
             "--output",
             outdir.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .output()
         .unwrap();
     assert!(
@@ -656,7 +656,7 @@ fn profile_custom_log_extension_is_structured() {
     )
     .unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "-s",
@@ -666,8 +666,8 @@ fn profile_custom_log_extension_is_structured() {
             "-o",
             output.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .output()
         .unwrap();
     assert!(
@@ -704,7 +704,7 @@ fn structured_field_edits_are_counted_in_summary() {
     .unwrap();
     let output = dir.path().join("out.yaml");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "--app",
@@ -712,8 +712,8 @@ fn structured_field_edits_are_counted_in_summary() {
             "-o",
             output.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .output()
         .unwrap();
     assert!(out.status.success());

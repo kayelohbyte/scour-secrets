@@ -1,7 +1,7 @@
 /**
  * Minimal MCP stdio client.
  *
- * Spawns the sanitize-engine MCP server as a subprocess, performs the JSON-RPC
+ * Spawns the scour-secrets-engine MCP server as a subprocess, performs the JSON-RPC
  * handshake (initialize → notifications/initialized), and exposes send/notify.
  * Shared by the automated suite (test-direct.ts) and the manual probe CLI
  * (probe.ts) so there is a single source of truth for the protocol framing.
@@ -79,7 +79,7 @@ export class McpSession {
 export interface StdioOptions {
   /** Path to the MCP server entrypoint (src/index.ts) or a compiled binary. */
   serverPath: string;
-  /** Path to the `sanitize` binary the server shells out to. */
+  /** Path to the `scour-secrets` binary the server shells out to. */
   sanitizeBin: string;
   /** Extra environment variables for the server process. */
   env?: Record<string, string>;
@@ -106,8 +106,8 @@ export async function startStdioSession(opts: StdioOptions): Promise<McpSession>
     stderr: "null",
     env: {
       ...Deno.env.toObject(),
-      SANITIZE_BIN: opts.sanitizeBin,
-      SANITIZE_LOG: "error",
+      SCOUR_SECRETS_BIN: opts.sanitizeBin,
+      SCOUR_SECRETS_LOG: "error",
       ...(opts.env ?? {}),
     },
   }).spawn();

@@ -1,6 +1,6 @@
 # Architecture
 
-> **rust-sanitize** v0.14.0 — Deterministic, one-way data sanitization.
+> **scour-secrets** v0.14.0 — Deterministic, one-way data sanitization.
 
 This document describes the internal architecture of the sanitization
 engine.  It is aimed at contributors and operators who need to
@@ -12,7 +12,7 @@ understand data-flow, concurrency, and security boundaries.
 
 ```
 ┌─────────────┐                 ┌───────────────────────┐
-│  CLI args    │  ──────────▶   │    sanitize  (bin)     │
+│  CLI args    │  ──────────▶   │    scour-secrets  (bin)     │
 │  [INPUT]     │                │  ┌─────────────────┐   │
 │  -o/--output │                │  │ Signal handler   │   │
 │  -s/--secrets-│                │  │ Tracing init     │   │
@@ -89,21 +89,21 @@ The two-pass design ensures cross-file consistency: a password extracted from `c
 
 ### Encrypt / Decrypt subcommands
 
-The `sanitize encrypt` and `sanitize decrypt` subcommands handle
+The `scour-secrets encrypt` and `scour-secrets decrypt` subcommands handle
 secrets file management. These are simple linear flows that do not
 involve the scanning/replacement pipeline:
 
-- **`sanitize encrypt <IN> <OUT>`** — reads a plaintext secrets file,
+- **`scour-secrets encrypt <IN> <OUT>`** — reads a plaintext secrets file,
   optionally validates it, encrypts with AES-256-GCM (PBKDF2 key
   derivation), and writes the ciphertext atomically.
-- **`sanitize decrypt <IN> <OUT>`** — reads an encrypted secrets file,
+- **`scour-secrets decrypt <IN> <OUT>`** — reads an encrypted secrets file,
   decrypts, optionally validates the resulting plaintext, and writes
   atomically.
 
 Both subcommands resolve the password through a unified chain:
 `--password` flag (triggers interactive masked prompt; requires TTY) →
 `--password-file` (with Unix permission enforcement) →
-`SANITIZE_PASSWORD` env var → automatic interactive terminal prompt
+`SCOUR_SECRETS_PASSWORD` env var → automatic interactive terminal prompt
 (masked input via `rpassword`).
 
 ### MCP server
@@ -120,13 +120,13 @@ the CLI as a Model Context Protocol server:
 │  mcp/src/index.ts  (Deno / TypeScript)              │
 │  • Validates inputs with Zod schemas                │
 │  • Writes sensitive data to mode-0600 temp files    │
-│  • Spawns `sanitize` binary as a subprocess         │
+│  • Spawns `scour-secrets` binary as a subprocess         │
 │  • Reads sanitized output from temp files           │
 │  • Returns results via MCP protocol                 │
 └─────────────────────┬───────────────────────────────┘
                       │  subprocess (execve)
 ┌─────────────────────▼───────────────────────────────┐
-│  sanitize  (Rust CLI binary)                        │
+│  scour-secrets  (Rust CLI binary)                        │
 │  All sensitive data processing happens here         │
 └─────────────────────────────────────────────────────┘
 ```
@@ -141,7 +141,7 @@ decryption keys, and pattern-matched values.
 **HTTP daemon mode (`--http`):** The server can run as a persistent
 local HTTP service binding to `127.0.0.1` (port 6277 by default,
 configurable via `--http <port>`). All requests require a bearer token
-set via `SANITIZE_MCP_HTTP_TOKEN`. In this mode AI tools connect to the
+set via `SCOUR_SECRETS_MCP_HTTP_TOKEN`. In this mode AI tools connect to the
 already-running daemon rather than spawning it on demand, which decouples
 the daemon's user account and file permissions from those of the AI tool.
 The daemon enforces a single active MCP session at a time; when the client
@@ -149,7 +149,7 @@ disconnects the daemon exits so the service manager can restart it cleanly
 for the next connection. Token travel over loopback is acceptable for local
 use; for remote deployments a TLS-terminating reverse proxy is required.
 
-**Namespace support:** When `SANITIZE_SECRETS_DIR` is set, the MCP
+**Namespace support:** When `SCOUR_SECRETS_SECRETS_DIR` is set, the MCP
 server resolves a `namespace` parameter to a per-tenant directory
 containing `secrets.yaml` and an optional `profile.yaml`. Password
 files must be mode `0600` or `0400`. This enables safe multi-tenant
@@ -338,8 +338,8 @@ Logging uses the `tracing` / `tracing-subscriber` stack:
 
 - `--log-format human` (default): human-readable terminal output.
 - `--log-format json`: structured JSON lines (machine-parseable).
-- Level controlled via `SANITIZE_LOG` env var (e.g.
-  `SANITIZE_LOG=debug`).
+- Level controlled via `SCOUR_SECRETS_LOG` env var (e.g.
+  `SCOUR_SECRETS_LOG=debug`).
 - **No secret values are ever logged.** Only file names, counts, and
   timing data appear in log output.
 
@@ -360,10 +360,10 @@ Logging uses the `tracing` / `tracing-subscriber` stack:
 cargo test
 
 # Run with structured logging
-SANITIZE_LOG=debug cargo run -- foo.txt -s secrets.enc --password -o foo.sanitized.txt
+SCOUR_SECRETS_LOG=debug cargo run -- foo.txt -s secrets.enc --password -o foo.sanitized.txt
 
 # Pipe from stdin (no TTY — use env var instead of --password)
-echo "sensitive data" | SANITIZE_LOG=debug cargo run -- -s secrets.enc
+echo "sensitive data" | SCOUR_SECRETS_LOG=debug cargo run -- -s secrets.enc
 
 # Run benchmarks
 cargo bench

@@ -1,6 +1,6 @@
 # Demo recordings
 
-Scripted, reproducible terminal demos of `rust-sanitize`. Each flow is captured
+Scripted, reproducible terminal demos of `scour-secrets`. Each flow is captured
 in two formats:
 
 - **VHS GIFs** (`out/*.gif`) — embed inline in Markdown / GitHub READMEs.
@@ -16,7 +16,7 @@ re-render is identical. All sample inputs contain **only clearly-fake secrets**
 |------|---------------|
 | `01-quickstart`    | Zero-config scan of a log: before / after, all secret types redacted |
 | `02-dryrun-ci`     | `--dry-run`, NDJSON `--findings` piped to `jq`, and the `--fail-on-match` CI gate |
-| `03-app-bundles`   | `sanitize apps` + `--app nginx` zero-config field sanitization with layout preserved |
+| `03-app-bundles`   | `scour-secrets apps` + `--app nginx` zero-config field sanitization with layout preserved |
 | `04-pipe-structured` | stdin piping and `--profile` structured field rules |
 
 ## Regenerate
@@ -26,7 +26,7 @@ cargo build --release          # produce target/release/sanitize
 docs/demos/render.sh           # rewrites every out/*.gif and out/*.cast
 ```
 
-Override the binary under test with `SANITIZE_BIN=/path/to/sanitize docs/demos/render.sh`.
+Override the binary under test with `SCOUR_SECRETS_BIN=/path/to/sanitize docs/demos/render.sh`.
 
 Requires `vhs`, `asciinema`, `ffmpeg`, `ttyd`, and `jq` on `PATH`
 (`brew install vhs asciinema ffmpeg ttyd jq`).

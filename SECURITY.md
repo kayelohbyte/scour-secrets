@@ -1,6 +1,6 @@
 # Security Model
 
-> **rust-sanitize** v0.14.0
+> **scour-secrets** v0.14.0
 
 This document describes the security properties, threat mitigations,
 and operational constraints of the sanitization engine.
@@ -45,8 +45,8 @@ After decryption, plaintext secrets are wrapped in `zeroize::Zeroizing`
 and each `SecretEntry`'s fields (`pattern`, `kind`, `category`, `label`)
 implement `Zeroize` via `Drop`.
 
-Secrets files are managed via the `sanitize encrypt` and
-`sanitize decrypt` subcommands.
+Secrets files are managed via the `scour-secrets encrypt` and
+`scour-secrets decrypt` subcommands.
 
 ---
 
@@ -59,7 +59,7 @@ a priority chain designed to balance convenience with security:
 |----------|--------|----------------|
 | 1 | `--password` flag | Triggers a secure **interactive prompt** — masked terminal input via `rpassword`. No trace in process listings, shell history, or environment. Requires a TTY; fails fast with a clear error in non-interactive contexts. |
 | 2 | `--password-file <PATH>` | Reads from a file. The file **must** have Unix permissions `0600` or `0400` (owner read/write or owner read-only). Other permissions are rejected with an error. |
-| 3 | `SANITIZE_PASSWORD` env var | Avoids process listings but visible in `/proc/<pid>/environ` on Linux. |
+| 3 | `SCOUR_SECRETS_PASSWORD` env var | Avoids process listings but visible in `/proc/<pid>/environ` on Linux. |
 | 4 | Automatic interactive prompt | Falls through to a masked terminal prompt when no password source is explicitly specified and a password is required. |
 
 ---
@@ -74,7 +74,7 @@ replacement  = HMAC-SHA256(seed, category_tag || "\x00" || plaintext_value)
 ```
 
 - The **seed** is a 32-byte key derived from the `--password` (or
-  `SANITIZE_PASSWORD`) via PBKDF2. Same password + same salt + same value →
+  `SCOUR_SECRETS_PASSWORD`) via PBKDF2. Same password + same salt + same value →
   same replacement across runs.
 - The seed is zeroized on `HmacGenerator` drop.
 - Category `domain_tag_hmac()` provides domain separation so e.g. an email
@@ -95,15 +95,15 @@ password→seed table attack every install at once.
 Salt resolution order (deterministic mode):
 
 1. `--seed-salt-file <PATH>` — file contents, used verbatim as the PBKDF2 salt.
-2. `SANITIZE_SEED_SALT` env var — string bytes, used verbatim.
+2. `SCOUR_SECRETS_SEED_SALT` env var — string bytes, used verbatim.
 3. Persisted per-install salt at `<config_dir>/seed-salt`.
 4. Freshly generated and persisted (the default first-run path).
 
 **Cross-machine reproducibility** now requires sharing the salt: copy the
-`seed-salt` file, or set `SANITIZE_SEED_SALT` / `--seed-salt-file` to a common
+`seed-salt` file, or set `SCOUR_SECRETS_SEED_SALT` / `--seed-salt-file` to a common
 value across machines. **Migration:** output produced before per-install salts
-existed is reproducible by setting `SANITIZE_SEED_SALT` to the legacy constant
-`rust-sanitize:deterministic-seed:v1`.
+existed is reproducible by setting `SCOUR_SECRETS_SEED_SALT` to the legacy constant
+`scour-secrets:deterministic-seed:v1`.
 
 > **One password, two uses.** The same password seeds both secrets-file
 > decryption and the deterministic generator (with distinct salts). Guessing it
@@ -269,13 +269,13 @@ The following threats are outside the tool's design boundary:
 
 ## 9. HTTP Daemon Mode
 
-When `sanitize-mcp --http` is used, the server binds to `127.0.0.1` only and
+When `scour-secrets-mcp --http` is used, the server binds to `127.0.0.1` only and
 requires a bearer token on every request:
 
 | Property | Value |
 |----------|-------|
 | Bind address | `127.0.0.1` (loopback only — not reachable from the network) |
-| Auth | Bearer token via `SANITIZE_MCP_HTTP_TOKEN` (required; server refuses to start without it) |
+| Auth | Bearer token via `SCOUR_SECRETS_MCP_HTTP_TOKEN` (required; server refuses to start without it) |
 | Session model | One active MCP session at a time; daemon exits on clean disconnect so the service manager can restart it |
 | Token in transit | Plaintext over loopback — acceptable locally; use a TLS reverse proxy for remote deployments |
 | Token storage | Service config file must be mode `0600` (shown in `docs/mcp.md`) |

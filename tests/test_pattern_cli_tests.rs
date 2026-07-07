@@ -1,4 +1,4 @@
-//! Integration tests for the `sanitize test-pattern` subcommand.
+//! Integration tests for the `scour-secrets test-pattern` subcommand.
 
 use std::fs;
 use std::process::Command;
@@ -45,9 +45,9 @@ fn test_pattern_matched_value_exits_zero() {
     let dir = tempdir().unwrap();
     let secrets = write_literal_secrets(dir.path(), "secrets.json", "hunter2");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(["test-pattern", "-s", secrets.to_str().unwrap(), "hunter2"])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -65,14 +65,14 @@ fn test_pattern_unmatched_value_exits_one() {
     let dir = tempdir().unwrap();
     let secrets = write_literal_secrets(dir.path(), "secrets.json", "hunter2");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             "test-pattern",
             "-s",
             secrets.to_str().unwrap(),
             "nope_not_in_secrets",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -90,7 +90,7 @@ fn test_pattern_json_output_contains_matched() {
     let dir = tempdir().unwrap();
     let secrets = write_literal_secrets(dir.path(), "secrets.json", "hunter2");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             "test-pattern",
             "-s",
@@ -98,7 +98,7 @@ fn test_pattern_json_output_contains_matched() {
             "--json",
             "hunter2",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -132,7 +132,7 @@ fn test_pattern_json_output_contains_unmatched() {
     let dir = tempdir().unwrap();
     let secrets = write_literal_secrets(dir.path(), "secrets.json", "hunter2");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             "test-pattern",
             "-s",
@@ -140,7 +140,7 @@ fn test_pattern_json_output_contains_unmatched() {
             "--json",
             "completely_different_value",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -183,7 +183,7 @@ fn test_pattern_multiple_values_mixed_exit_one() {
     let dir = tempdir().unwrap();
     let secrets = write_literal_secrets(dir.path(), "secrets.json", "hunter2");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             "test-pattern",
             "-s",
@@ -191,7 +191,7 @@ fn test_pattern_multiple_values_mixed_exit_one() {
             "hunter2",
             "nope_not_in_secrets",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -218,7 +218,7 @@ fn test_pattern_multiple_values_all_matched_exit_zero() {
     )
     .unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             "test-pattern",
             "-s",
@@ -226,7 +226,7 @@ fn test_pattern_multiple_values_all_matched_exit_zero() {
             "hunter2",
             "s3cr3t",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -244,9 +244,9 @@ fn test_pattern_regex_kind_matches() {
     let dir = tempdir().unwrap();
     let secrets = write_regex_secrets(dir.path(), "secrets.json", "tok-[0-9]+");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(["test-pattern", "-s", secrets.to_str().unwrap(), "tok-12345"])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -264,7 +264,7 @@ fn test_pattern_json_shows_replacement_category() {
     let dir = tempdir().unwrap();
     let secrets = write_literal_secrets(dir.path(), "secrets.json", "hunter2");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             "test-pattern",
             "-s",
@@ -272,7 +272,7 @@ fn test_pattern_json_shows_replacement_category() {
             "--json",
             "hunter2",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -295,14 +295,14 @@ fn test_pattern_no_secrets_no_match() {
     let dir = tempdir().unwrap();
     let secrets = write_empty_secrets(dir.path(), "secrets.json");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             "test-pattern",
             "-s",
             secrets.to_str().unwrap(),
             "some_value",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -326,9 +326,9 @@ fn test_pattern_with_app_bundle_matches_known_pattern() {
     // built-in gitlab bundle: `\b(glpat-[a-zA-Z0-9\-=_]{20,22})\b`
     let token = "glpat-xxxxxxxxxxxxxxxxxxxx";
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(["test-pattern", "--app", "gitlab", token])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 

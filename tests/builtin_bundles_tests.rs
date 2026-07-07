@@ -32,14 +32,14 @@ fn bundle_names() -> Vec<String> {
 }
 
 /// Run `--app <name>` against trivial stdin, forcing the *built-in* bundle by
-/// pointing `SANITIZE_APPS_DIR` at an empty dir, and skipping the structured
+/// pointing `SCOUR_SECRETS_APPS_DIR` at an empty dir, and skipping the structured
 /// handoff so nothing is written to user config.
 fn run_app(name: &str, empty_apps_dir: &str) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(["--app", name, "--no-structured-handoff", "-"])
-        .env("SANITIZE_LOG", "warn")
-        .env("SANITIZE_APPS_DIR", empty_apps_dir)
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "warn")
+        .env("SCOUR_SECRETS_APPS_DIR", empty_apps_dir)
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -86,15 +86,15 @@ fn every_builtin_bundle_loads_and_compiles() {
 
 #[test]
 fn apps_dir_and_embedded_registry_match() {
-    // `sanitize apps` lists the bundles compiled into the binary (BUILTIN_APPS).
+    // `scour-secrets apps` lists the bundles compiled into the binary (BUILTIN_APPS).
     // Every directory under apps/ must be embedded, and vice versa — a bundle
     // added to apps/ but not registered in apps.rs (or removed from one side
     // only) would be invisible / dangling.
     let empty = tempfile::tempdir().unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(["apps"])
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_APPS_DIR", empty.path().to_str().unwrap())
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_APPS_DIR", empty.path().to_str().unwrap())
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -104,7 +104,7 @@ fn apps_dir_and_embedded_registry_match() {
     for name in bundle_names() {
         assert!(
             listing.contains(&name),
-            "bundle '{name}' exists under apps/ but is not listed by `sanitize apps` \
+            "bundle '{name}' exists under apps/ but is not listed by `scour-secrets apps` \
              (missing include_str! entry in apps.rs?):\n{listing}",
         );
     }

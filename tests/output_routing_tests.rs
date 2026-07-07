@@ -47,7 +47,7 @@ fn secrets_json(dir: &std::path::Path) -> std::path::PathBuf {
 // -o - (stdout sentinel)
 // ---------------------------------------------------------------------------
 
-/// `sanitize <file> -o -` must write sanitized content to stdout, not to a
+/// `scour-secrets <file> -o -` must write sanitized content to stdout, not to a
 /// file named `-` in the working directory.
 #[test]
 fn dash_o_dash_writes_to_stdout_not_a_file() {
@@ -56,20 +56,20 @@ fn dash_o_dash_writes_to_stdout_not_a_file() {
     let secrets = secrets_json(dir.path());
     fs::write(&input, "token: SUPERSECRET\n").unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let output = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .arg(&input)
         .arg("-s")
         .arg(&secrets)
         .arg("-o")
         .arg("-")
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .stdin(Stdio::null())
         .output()
         .unwrap();
 
     assert!(
         output.status.success(),
-        "sanitize failed: {}",
+        "scour-secrets failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -99,13 +99,13 @@ fn dash_o_dash_works_with_structured_json() {
     let secrets = secrets_json(dir.path());
     fs::write(&input, r#"{"token":"SUPERSECRET","host":"example.com"}"#).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let output = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .arg(&input)
         .arg("-s")
         .arg(&secrets)
         .arg("-o")
         .arg("-")
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -126,13 +126,13 @@ fn stdin_with_dash_o_dash_writes_to_stdout() {
     let dir = tempdir().unwrap();
     let secrets = secrets_json(dir.path());
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .arg("-")
         .arg("-s")
         .arg(&secrets)
         .arg("-o")
         .arg("-")
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -157,7 +157,7 @@ fn stdin_with_dash_o_dash_writes_to_stdout() {
 // -o <file> explicit output path
 // ---------------------------------------------------------------------------
 
-/// `sanitize <input> -o <explicit-path>` must write to that exact path.
+/// `scour-secrets <input> -o <explicit-path>` must write to that exact path.
 #[test]
 fn explicit_output_file_is_written() {
     use std::io::Write as _;
@@ -168,13 +168,13 @@ fn explicit_output_file_is_written() {
 
     // Use piped stdin so output goes through the buffered stdin path, which
     // avoids the Windows CI ERROR_ACCESS_DENIED from the streaming file path.
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .arg("-")
         .arg("-s")
         .arg(&secrets)
         .arg("-o")
         .arg(&out)
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -210,14 +210,14 @@ fn output_dir_receives_all_sanitized_files() {
     fs::write(&in2, "pass: SUPERSECRET\n").unwrap();
     fs::create_dir(&out_dir).unwrap();
 
-    let status = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let status = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .arg(&in1)
         .arg(&in2)
         .arg("-s")
         .arg(&secrets)
         .arg("-o")
         .arg(&out_dir)
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .stdin(Stdio::null())
         .status()
         .unwrap();

@@ -7,12 +7,12 @@ use std::process::Command;
 use tempfile::tempdir;
 
 fn run_stdin(args: &[&str], input: &[u8]) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .spawn()
         .unwrap();
     child.stdin.as_mut().unwrap().write_all(input).unwrap();

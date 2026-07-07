@@ -5,7 +5,7 @@
  * Covers every tool, every parameter path, and every documented error case.
  * Runs standalone — no separate test framework needed.
  *
- *   SANITIZE_BIN=./target/release/sanitize deno run \
+ *   SCOUR_SECRETS_BIN=./target/release/scour-secrets deno run \
  *     --allow-run --allow-env --allow-read --allow-write \
  *     mcp/test-direct.ts
  */
@@ -18,9 +18,9 @@ import { scrubEnv } from "./src/env.ts";
 const MCP_SCRIPT = join(import.meta.dirname!, "src/index.ts");
 // Resolve to absolute so the server can locate the binary even when it runs in
 // a different working directory (cwd override used by file-writing tool tests).
-const SANITIZE_BIN = resolve(
-  Deno.env.get("SANITIZE_BIN") ??
-    join(import.meta.dirname!, "../target/release/sanitize"),
+const SCOUR_SECRETS_BIN = resolve(
+  Deno.env.get("SCOUR_SECRETS_BIN") ??
+    join(import.meta.dirname!, "../target/release/scour-secrets"),
 );
 
 // ---------------------------------------------------------------------------
@@ -28,7 +28,7 @@ const SANITIZE_BIN = resolve(
 // ---------------------------------------------------------------------------
 
 function startSession(extraEnv: Record<string, string> = {}, cwd?: string): Promise<McpSession> {
-  return startStdioSession({ serverPath: MCP_SCRIPT, sanitizeBin: SANITIZE_BIN, env: extraEnv, cwd });
+  return startStdioSession({ serverPath: MCP_SCRIPT, sanitizeBin: SCOUR_SECRETS_BIN, env: extraEnv, cwd });
 }
 
 // ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ async function startHttpDaemon(port: number, token: string): Promise<Deno.ChildP
       MCP_SCRIPT, "--http", String(port),
     ],
     stdin: "null", stdout: "null", stderr: "null",
-    env: { ...Deno.env.toObject(), SANITIZE_BIN, SANITIZE_LOG: "error", SANITIZE_MCP_HTTP_TOKEN: token },
+    env: { ...Deno.env.toObject(), SCOUR_SECRETS_BIN, SCOUR_SECRETS_LOG: "error", SCOUR_SECRETS_MCP_HTTP_TOKEN: token },
   }).spawn();
 
   const deadline = Date.now() + 5_000;
@@ -283,10 +283,10 @@ function test(group: string, name: string, fn: Fn) {
     AWS_SECRET_ACCESS_KEY: "LEAKED",
     DATABASE_URL: "postgres://leak",
     GITHUB_TOKEN: "ghp_leak",
-    SANITIZE_SECRETS_DIR: "/var/sanitize",
-    SANITIZE_LOG: "debug",
+    SCOUR_SECRETS_SECRETS_DIR: "/var/sanitize",
+    SCOUR_SECRETS_LOG: "debug",
   };
-  const out = scrubEnv(parent, { SANITIZE_PASSWORD: "seed" });
+  const out = scrubEnv(parent, { SCOUR_SECRETS_PASSWORD: "seed" });
 
   // Secrets from the parent environment must be dropped.
   for (const leaked of ["AWS_SECRET_ACCESS_KEY", "DATABASE_URL", "GITHUB_TOKEN"]) {
@@ -295,12 +295,12 @@ function test(group: string, name: string, fn: Fn) {
   // Runtime essentials forwarded.
   if (out.PATH !== "/usr/bin") fail("PATH must be forwarded");
   if (out.HOME !== "/home/u") fail("HOME must be forwarded");
-  // SANITIZE_* forwarded so callers can configure via environment.
-  if (out.SANITIZE_SECRETS_DIR !== "/var/sanitize") fail("SANITIZE_* must be forwarded");
-  // SANITIZE_LOG forced to error regardless of a chatty parent value.
-  if (out.SANITIZE_LOG !== "error") fail("SANITIZE_LOG must be forced to error");
+  // SCOUR_SECRETS_* forwarded so callers can configure via environment.
+  if (out.SCOUR_SECRETS_SECRETS_DIR !== "/var/sanitize") fail("SCOUR_SECRETS_* must be forwarded");
+  // SCOUR_SECRETS_LOG forced to error regardless of a chatty parent value.
+  if (out.SCOUR_SECRETS_LOG !== "error") fail("SCOUR_SECRETS_LOG must be forced to error");
   // extraEnv applied.
-  if (out.SANITIZE_PASSWORD !== "seed") fail("extraEnv must be applied");
+  if (out.SCOUR_SECRETS_PASSWORD !== "seed") fail("extraEnv must be applied");
 }
 
 console.log("  \x1b[32m✓\x1b[0m predictOutputName / uniquifyName unit tests passed\n");
@@ -674,13 +674,13 @@ test("sanitize", "error: namespace with invalid characters rejected", async (s) 
   has(toolText(r), "Invalid namespace");
 });
 
-test("sanitize", "error: namespace without SANITIZE_SECRETS_DIR env rejected", async (s) => {
+test("sanitize", "error: namespace without SCOUR_SECRETS_SECRETS_DIR env rejected", async (s) => {
   const r = await s.send("tools/call", {
     name: "sanitize",
     arguments: { content: "x", namespace: "acme" },
   });
   ok(toolIsError(r), "must be isError:true");
-  has(toolText(r), "SANITIZE_SECRETS_DIR");
+  has(toolText(r), "SCOUR_SECRETS_SECRETS_DIR");
 });
 
 // ===========================================================================
@@ -1005,7 +1005,7 @@ test("list_templates", "each template has a non-empty description", async (s) =>
 });
 
 // ===========================================================================
-// namespace end-to-end (dedicated session with SANITIZE_SECRETS_DIR)
+// namespace end-to-end (dedicated session with SCOUR_SECRETS_SECRETS_DIR)
 // ===========================================================================
 
 test("namespace", "end-to-end with plaintext secrets.yaml", async (_s) => {
@@ -1019,7 +1019,7 @@ test("namespace", "end-to-end with plaintext secrets.yaml", async (_s) => {
   category: generic
   label: pw
 `);
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       const r = toolText(await ns.send("tools/call", {
         name: "sanitize",
@@ -1042,7 +1042,7 @@ test("namespace", "scan uses namespace secrets", async (_s) => {
   category: auth_token
   label: secret
 `);
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       const report = JSON.parse(toolText(await ns.send("tools/call", {
         name: "scan",
@@ -1058,7 +1058,7 @@ test("namespace", "missing secrets file returns clear error", async (_s) => {
   const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-ns-" });
   try {
     await Deno.mkdir(join(secretsDir, "empty-ns")); // dir exists but no secrets file
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       const r = await ns.send("tools/call", {
         name: "sanitize",
@@ -1073,7 +1073,7 @@ test("namespace", "missing secrets file returns clear error", async (_s) => {
 test("namespace", "namespace not found returns clear error", async (_s) => {
   const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-ns-" });
   try {
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       const r = await ns.send("tools/call", {
         name: "sanitize",
@@ -1103,7 +1103,7 @@ test("namespace", "two namespaces with different secrets are isolated", async (_
   category: auth_token
   label: globex_key
 `);
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       const input = "db=acme-db-password-xyz api=globex-api-key-abc";
 
@@ -1143,7 +1143,7 @@ test("namespace", "namespace profile.yaml applies per-customer structured field 
     - pattern: "api.key"
       category: "auth_token"
 `);
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       const r = toolText(await ns.send("tools/call", {
         name: "sanitize",
@@ -1178,12 +1178,12 @@ test("namespace", "encrypted secrets.yaml.enc with .password file", async (_s) =
     const encPath = join(nsDir, "secrets.yaml.enc");
     const testPassword = "namespace-enc-test-pass-789";
 
-    const encResult = await new Deno.Command(SANITIZE_BIN, {
+    const encResult = await new Deno.Command(SCOUR_SECRETS_BIN, {
       args: ["encrypt", plainPath, encPath],
-      env: { ...Deno.env.toObject(), SANITIZE_PASSWORD: testPassword, SANITIZE_LOG: "error" },
+      env: { ...Deno.env.toObject(), SCOUR_SECRETS_PASSWORD: testPassword, SCOUR_SECRETS_LOG: "error" },
       stdout: "null", stderr: "null",
     }).output();
-    ok(encResult.code === 0, `sanitize encrypt failed with code ${encResult.code}`);
+    ok(encResult.code === 0, `scour-secrets encrypt failed with code ${encResult.code}`);
     await Deno.remove(plainPath);
 
     // Write .password with restrictive permissions (required by the server).
@@ -1191,7 +1191,7 @@ test("namespace", "encrypted secrets.yaml.enc with .password file", async (_s) =
     await Deno.writeTextFile(pwPath, testPassword);
     await Deno.chmod(pwPath, 0o600);
 
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       const r = toolText(await ns.send("tools/call", {
         name: "sanitize",
@@ -1227,7 +1227,7 @@ test("namespace", "explicit profile param overrides namespace profile.yaml", asy
     - pattern: "api.key"
       category: "auth_token"
 `);
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       // Use a zero-entropy value for the namespace-profile field so field-signal
       // detection cannot fire independently of the profile choice.
@@ -1259,7 +1259,7 @@ test("namespace", "settings.yaml behavior flags apply as defaults", async (_s) =
     await Deno.writeTextFile(join(nsDir, "settings.yaml"),
       "fail_on_match: true\nmax_archive_depth: 2\n"
     );
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       // With fail_on_match enabled by namespace settings and use_default patterns, any
       // match should cause exit code 2. Use content without secrets so it exits 0 to
@@ -1284,7 +1284,7 @@ test("namespace", "settings.yaml allow list merges with per-call allow", async (
     await Deno.writeTextFile(join(nsDir, "settings.yaml"),
       "allow:\n  - \"*.internal\"\n"
     );
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       const r = toolText(await ns.send("tools/call", {
         name: "sanitize",
@@ -1306,7 +1306,7 @@ test("namespace", "settings.yaml with invalid YAML is silently ignored", async (
     await Deno.mkdir(nsDir);
     await Deno.writeTextFile(join(nsDir, "secrets.yaml"), "[]");
     await Deno.writeTextFile(join(nsDir, "settings.yaml"), "this: is: not: valid: ][[[");
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       // Should succeed — bad settings.yaml is silently skipped.
       const r = toolText(await ns.send("tools/call", {
@@ -1340,53 +1340,53 @@ test("files path guard", ".password rejected in strip_config_values files", asyn
   has(toolText(r), ".password");
 });
 
-test("files path guard", "SANITIZE_SECRETS_DIR blocks path inside it in sanitize", async (_s) => {
+test("files path guard", "SCOUR_SECRETS_SECRETS_DIR blocks path inside it in sanitize", async (_s) => {
   const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-guard-" });
   try {
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       const r = await ns.send("tools/call", {
         name: "sanitize",
         arguments: { files: [join(secretsDir, "acme", "secrets.yaml")] },
       });
       ok(toolIsError(r), "must be isError:true");
-      has(toolText(r), "SANITIZE_SECRETS_DIR");
+      has(toolText(r), "SCOUR_SECRETS_SECRETS_DIR");
     } finally { await ns.close(); }
   } finally { await Deno.remove(secretsDir, { recursive: true }); }
 });
 
-test("files path guard", "SANITIZE_SECRETS_DIR blocks path inside it in scan", async (_s) => {
+test("files path guard", "SCOUR_SECRETS_SECRETS_DIR blocks path inside it in scan", async (_s) => {
   const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-guard-" });
   try {
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       const r = await ns.send("tools/call", {
         name: "scan",
         arguments: { files: [join(secretsDir, "acme", "secrets.yaml")] },
       });
       ok(toolIsError(r), "must be isError:true");
-      has(toolText(r), "SANITIZE_SECRETS_DIR");
+      has(toolText(r), "SCOUR_SECRETS_SECRETS_DIR");
     } finally { await ns.close(); }
   } finally { await Deno.remove(secretsDir, { recursive: true }); }
 });
 
-test("files path guard", "SANITIZE_SECRETS_DIR blocks path inside it in strip_config_values", async (_s) => {
+test("files path guard", "SCOUR_SECRETS_SECRETS_DIR blocks path inside it in strip_config_values", async (_s) => {
   const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-guard-" });
   try {
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       const r = await ns.send("tools/call", {
         name: "strip_config_values",
         arguments: { files: [join(secretsDir, "acme", "secrets.yaml")] },
       });
       ok(toolIsError(r), "must be isError:true");
-      has(toolText(r), "SANITIZE_SECRETS_DIR");
+      has(toolText(r), "SCOUR_SECRETS_SECRETS_DIR");
     } finally { await ns.close(); }
   } finally { await Deno.remove(secretsDir, { recursive: true }); }
 });
 
-test("files path guard", "SANITIZE_MCP_FILES_DENYLIST blocks basename glob in sanitize", async (_s) => {
-  const ns = await startSession({ SANITIZE_MCP_FILES_DENYLIST: "*.key" });
+test("files path guard", "SCOUR_SECRETS_MCP_FILES_DENYLIST blocks basename glob in sanitize", async (_s) => {
+  const ns = await startSession({ SCOUR_SECRETS_MCP_FILES_DENYLIST: "*.key" });
   try {
     const r = await ns.send("tools/call", {
       name: "sanitize",
@@ -1397,8 +1397,8 @@ test("files path guard", "SANITIZE_MCP_FILES_DENYLIST blocks basename glob in sa
   } finally { await ns.close(); }
 });
 
-test("files path guard", "SANITIZE_MCP_FILES_DENYLIST blocks globstar path in scan", async (_s) => {
-  const ns = await startSession({ SANITIZE_MCP_FILES_DENYLIST: "secrets/**" });
+test("files path guard", "SCOUR_SECRETS_MCP_FILES_DENYLIST blocks globstar path in scan", async (_s) => {
+  const ns = await startSession({ SCOUR_SECRETS_MCP_FILES_DENYLIST: "secrets/**" });
   try {
     const r = await ns.send("tools/call", {
       name: "scan",
@@ -1409,8 +1409,8 @@ test("files path guard", "SANITIZE_MCP_FILES_DENYLIST blocks globstar path in sc
   } finally { await ns.close(); }
 });
 
-test("files path guard", "SANITIZE_MCP_FILES_DENYLIST blocks in strip_config_values, comma-separated patterns parsed", async (_s) => {
-  const ns = await startSession({ SANITIZE_MCP_FILES_DENYLIST: "*.log,secrets/**,*.pem" });
+test("files path guard", "SCOUR_SECRETS_MCP_FILES_DENYLIST blocks in strip_config_values, comma-separated patterns parsed", async (_s) => {
+  const ns = await startSession({ SCOUR_SECRETS_MCP_FILES_DENYLIST: "*.log,secrets/**,*.pem" });
   try {
     const r = await ns.send("tools/call", {
       name: "strip_config_values",
@@ -1421,8 +1421,8 @@ test("files path guard", "SANITIZE_MCP_FILES_DENYLIST blocks in strip_config_val
   } finally { await ns.close(); }
 });
 
-test("files path guard", "SANITIZE_MCP_FILES_DENYLIST basename-only pattern matches full path", async (_s) => {
-  const ns = await startSession({ SANITIZE_MCP_FILES_DENYLIST: "*.pem" });
+test("files path guard", "SCOUR_SECRETS_MCP_FILES_DENYLIST basename-only pattern matches full path", async (_s) => {
+  const ns = await startSession({ SCOUR_SECRETS_MCP_FILES_DENYLIST: "*.pem" });
   try {
     const r = await ns.send("tools/call", {
       name: "sanitize",
@@ -1433,8 +1433,8 @@ test("files path guard", "SANITIZE_MCP_FILES_DENYLIST basename-only pattern matc
   } finally { await ns.close(); }
 });
 
-test("files path guard", "SANITIZE_MCP_FILES_DENYLIST does not block non-matching path", async (_s) => {
-  const ns = await startSession({ SANITIZE_MCP_FILES_DENYLIST: "*.key" });
+test("files path guard", "SCOUR_SECRETS_MCP_FILES_DENYLIST does not block non-matching path", async (_s) => {
+  const ns = await startSession({ SCOUR_SECRETS_MCP_FILES_DENYLIST: "*.key" });
   try {
     const tmpFile = await Deno.makeTempFile({ suffix: ".txt" });
     try {
@@ -1451,7 +1451,7 @@ test("files path guard", "SANITIZE_MCP_FILES_DENYLIST does not block non-matchin
 test("files path guard", "segment denylist blocks absolute path (start-anchored regex bypass)", async (_s) => {
   // Regression: 'secrets/**' compiles to a start-anchored regex, so an absolute
   // path like '/x/y/secrets/api.yaml' previously slipped past the denylist.
-  const ns = await startSession({ SANITIZE_MCP_FILES_DENYLIST: "secrets/**" });
+  const ns = await startSession({ SCOUR_SECRETS_MCP_FILES_DENYLIST: "secrets/**" });
   try {
     const r = await ns.send("tools/call", {
       name: "sanitize",
@@ -1462,7 +1462,7 @@ test("files path guard", "segment denylist blocks absolute path (start-anchored 
   } finally { await ns.close(); }
 });
 
-test("files path guard", "symlink into SANITIZE_SECRETS_DIR is rejected", async (_s) => {
+test("files path guard", "symlink into SCOUR_SECRETS_SECRETS_DIR is rejected", async (_s) => {
   // Regression: a symlink in an allowed dir pointing into the secrets store must
   // be resolved before the guard runs, or it bypasses the secrets-dir check.
   const secretsDir = await Deno.makeTempDir({ prefix: "sanitize-secrets-" });
@@ -1474,14 +1474,14 @@ test("files path guard", "symlink into SANITIZE_SECRETS_DIR is rejected", async 
     const link = join(allowedDir, "innocent.yaml");
     await Deno.symlink(target, link);
 
-    const ns = await startSession({ SANITIZE_SECRETS_DIR: secretsDir });
+    const ns = await startSession({ SCOUR_SECRETS_SECRETS_DIR: secretsDir });
     try {
       const r = await ns.send("tools/call", {
         name: "sanitize",
         arguments: { files: [link] },
       });
       ok(toolIsError(r), "must be isError:true");
-      has(toolText(r), "SANITIZE_SECRETS_DIR");
+      has(toolText(r), "SCOUR_SECRETS_SECRETS_DIR");
     } finally { await ns.close(); }
   } finally {
     await Deno.remove(secretsDir, { recursive: true });
@@ -1738,7 +1738,7 @@ await session.close();
       args: ["run", "--allow-run", "--allow-env", "--allow-read", "--allow-write", "--allow-net",
         MCP_SCRIPT, "--http"],
       stdin: "null", stdout: "null", stderr: "piped",
-      env: { ...Deno.env.toObject(), SANITIZE_BIN, SANITIZE_LOG: "error", SANITIZE_MCP_HTTP_TOKEN: token },
+      env: { ...Deno.env.toObject(), SCOUR_SECRETS_BIN, SCOUR_SECRETS_LOG: "error", SCOUR_SECRETS_MCP_HTTP_TOKEN: token },
     }).spawn();
     const stderr = await readStreamFor(proc.stderr, 4_000, "ready");
     try { proc.kill("SIGTERM"); } catch { /* may already have failed to bind */ }
@@ -1753,7 +1753,7 @@ await session.close();
         args: ["run", "--allow-run", "--allow-env", "--allow-read", "--allow-write", "--allow-net",
           MCP_SCRIPT, "--http", badPort],
         stdin: "null", stdout: "null", stderr: "null",
-        env: { ...Deno.env.toObject(), SANITIZE_BIN, SANITIZE_LOG: "error", SANITIZE_MCP_HTTP_TOKEN: token },
+        env: { ...Deno.env.toObject(), SCOUR_SECRETS_BIN, SCOUR_SECRETS_LOG: "error", SCOUR_SECRETS_MCP_HTTP_TOKEN: token },
       }).output();
       ok(result.code !== 0, `expected non-zero exit for port "${badPort}", got ${result.code}`);
     }
@@ -1768,7 +1768,7 @@ await session.close();
         MCP_SCRIPT, "--http", String(listenPort),
       ],
       stdin: "null", stdout: "piped", stderr: "piped",
-      env: { ...Deno.env.toObject(), SANITIZE_BIN, SANITIZE_LOG: "error", SANITIZE_MCP_HTTP_TOKEN: token },
+      env: { ...Deno.env.toObject(), SCOUR_SECRETS_BIN, SCOUR_SECRETS_LOG: "error", SCOUR_SECRETS_MCP_HTTP_TOKEN: token },
     }).spawn();
 
     const stderr = await readStreamFor(proc.stderr, 4_000, "ready");
@@ -1784,12 +1784,12 @@ await session.close();
   });
 
   // --- startup without token exits non-zero ---
-  await httpTest("refuses to start without SANITIZE_MCP_HTTP_TOKEN", async () => {
+  await httpTest("refuses to start without SCOUR_SECRETS_MCP_HTTP_TOKEN", async () => {
     const result = await new Deno.Command(Deno.execPath(), {
       args: ["run", "--allow-run", "--allow-env", "--allow-read", "--allow-write", "--allow-net",
         MCP_SCRIPT, "--http", String(port)],
       stdin: "null", stdout: "null", stderr: "null",
-      env: { ...Deno.env.toObject(), SANITIZE_BIN, SANITIZE_LOG: "error" }, // no token
+      env: { ...Deno.env.toObject(), SCOUR_SECRETS_BIN, SCOUR_SECRETS_LOG: "error" }, // no token
     }).output();
     ok(result.code !== 0, `expected non-zero exit code, got ${result.code}`);
   });

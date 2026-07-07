@@ -16,10 +16,10 @@ use std::process::Command;
 use tempfile::tempdir;
 
 fn run_stdin(args: &[&str], input: &[u8]) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(args)
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -254,7 +254,7 @@ fn quick_empty_pattern_is_rejected() {
     let input = dir.path().join("in.txt");
     fs::write(&input, b"hello").unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "-s",
@@ -262,8 +262,8 @@ fn quick_empty_pattern_is_rejected() {
             "--quick",
             "",
         ])
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .output()
         .unwrap();
 
@@ -282,7 +282,7 @@ fn quick_empty_regex_prefix_is_rejected() {
     let input = dir.path().join("in.txt");
     fs::write(&input, b"hello").unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "-s",
@@ -290,8 +290,8 @@ fn quick_empty_regex_prefix_is_rejected() {
             "--quick",
             "regex:",
         ])
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .output()
         .unwrap();
 
@@ -314,7 +314,7 @@ fn quick_multiple_invalid_patterns_all_reported() {
     let input = dir.path().join("in.txt");
     fs::write(&input, b"hello").unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "-s",
@@ -324,8 +324,8 @@ fn quick_multiple_invalid_patterns_all_reported() {
             "--quick",
             "regex:(unclosed-second",
         ])
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .output()
         .unwrap();
 
@@ -383,7 +383,7 @@ fn quick_deterministic_produces_stable_replacement() {
 
     // Run twice with the same seed — the replacement for "mysecret" must be identical.
     let run = |n: u8| {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+        let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
             .args([
                 "-",
                 "-s",
@@ -392,9 +392,9 @@ fn quick_deterministic_produces_stable_replacement() {
                 "mysecret",
                 "--deterministic",
             ])
-            .env("SANITIZE_LOG", "error")
-            .env("SANITIZE_NO_SETTINGS", "1")
-            .env("SANITIZE_PASSWORD", format!("testpass{n}"))
+            .env("SCOUR_SECRETS_LOG", "error")
+            .env("SCOUR_SECRETS_NO_SETTINGS", "1")
+            .env("SCOUR_SECRETS_PASSWORD", format!("testpass{n}"))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

@@ -1097,7 +1097,7 @@ label = "openai_key"
         // Regression: the auto-provisioned global secrets file opens with '#'
         // comment lines. Before the fix, detect() saw '#' first, fell through
         // to the TOML fallback, and failed to parse valid YAML.
-        let content = "# Global sanitize allowlist — add patterns here.\n# Auto-loaded on every plain run.\n\n- pattern: foo\n  kind: allow\n";
+        let content = "# Global scour-secrets allowlist — add patterns here.\n# Auto-loaded on every plain run.\n\n- pattern: foo\n  kind: allow\n";
         assert_eq!(
             SecretsFormat::detect(content.as_bytes()),
             SecretsFormat::Yaml
@@ -1107,7 +1107,7 @@ label = "openai_key"
     #[test]
     fn detect_yaml_comment_header_parses_correctly() {
         // Round-trip: same shape as the auto-provisioned file must load without error.
-        let content = "# Global sanitize allowlist — add patterns or kind:regex entries here.\n# Auto-loaded on every plain run. Edit freely; deleted values take effect immediately.\n\n- pattern: ''\n  kind: allow\n  category: ''\n  values:\n  - localhost\n  - 127.0.0.1\n";
+        let content = "# Global scour-secrets allowlist — add patterns or kind:regex entries here.\n# Auto-loaded on every plain run. Edit freely; deleted values take effect immediately.\n\n- pattern: ''\n  kind: allow\n  category: ''\n  values:\n  - localhost\n  - 127.0.0.1\n";
         let entries = parse_secrets(content.as_bytes(), None)
             .expect("auto-provisioned secrets file with comment header must parse");
         assert_eq!(entries.len(), 1);

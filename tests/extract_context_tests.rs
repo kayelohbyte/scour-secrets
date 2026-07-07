@@ -51,7 +51,7 @@ fn extract_context_appears_in_report_json() {
     fs::write(&input, "INFO start\nERROR disk full\nINFO retrying\n").unwrap();
     let report_path = dir.path().join("report.json");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "-s",
@@ -60,7 +60,7 @@ fn extract_context_appears_in_report_json() {
             report_path.to_str().unwrap(),
             "--extract-context",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -90,7 +90,7 @@ fn extract_context_respects_context_lines_zero() {
     fs::write(&input, "INFO before\nERROR exploded\nINFO after\n").unwrap();
     let report_path = dir.path().join("report.json");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "-s",
@@ -101,7 +101,7 @@ fn extract_context_respects_context_lines_zero() {
             "--context-lines",
             "0",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -128,7 +128,7 @@ fn extract_context_respects_context_lines_nonzero() {
     .unwrap();
     let report_path = dir.path().join("report.json");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "-s",
@@ -139,7 +139,7 @@ fn extract_context_respects_context_lines_nonzero() {
             "--context-lines",
             "2",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -172,7 +172,7 @@ fn extract_context_custom_keywords_are_matched() {
     .unwrap();
     let report_path = dir.path().join("report.json");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "-s",
@@ -185,7 +185,7 @@ fn extract_context_custom_keywords_are_matched() {
             "--context-lines",
             "0",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -206,7 +206,7 @@ fn extract_context_keywords_only_replaces_defaults() {
     fs::write(&input, "ERROR default match\nINFO oomkilled custom match\n").unwrap();
     let report_path = dir.path().join("report.json");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "-s",
@@ -220,7 +220,7 @@ fn extract_context_keywords_only_replaces_defaults() {
             "--context-lines",
             "0",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -257,12 +257,12 @@ fn strip_values_removes_values_from_file() {
     let dir = tempdir().unwrap();
     let output_path = dir.path().join("out.cfg");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(["-", "--strip-values", "-o", output_path.to_str().unwrap()])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .spawn()
         .unwrap();
     child
@@ -292,12 +292,12 @@ fn strip_values_preserves_comments_and_blank_lines_in_file() {
     let dir = tempdir().unwrap();
     let output_path = dir.path().join("out.cfg");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(["-", "--strip-values", "-o", output_path.to_str().unwrap()])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .spawn()
         .unwrap();
     child
@@ -331,12 +331,12 @@ fn strip_values_stdin_to_output_file() {
     let dir = tempdir().unwrap();
     let output_path = dir.path().join("stripped.cfg");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(["-", "--strip-values", "-o", output_path.to_str().unwrap()])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .spawn()
         .unwrap();
     child
@@ -364,12 +364,12 @@ fn strip_values_section_headers_preserved_stdin() {
     let dir = tempdir().unwrap();
     let output_path = dir.path().join("stripped.cfg");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(["-", "--strip-values", "-o", output_path.to_str().unwrap()])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .spawn()
         .unwrap();
     child

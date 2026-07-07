@@ -27,7 +27,7 @@
 //! # Example
 //!
 //! ```rust
-//! use rust_sanitize::llm::{format_llm_prompt, LlmEntry};
+//! use scour_secrets::llm::{format_llm_prompt, LlmEntry};
 //!
 //! let entries: Vec<LlmEntry> = vec![
 //!     ("app.log".to_string(), b"INFO start\nERROR disk full\n".to_vec()),

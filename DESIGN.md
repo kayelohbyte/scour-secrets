@@ -1,7 +1,7 @@
 # Design Principles
 
 This document captures the non-negotiable constraints and deliberate tradeoffs
-that shape rust-sanitize. Read it before opening a PR that touches core
+that shape scour-secrets. Read it before opening a PR that touches core
 behavior — it explains why things are the way they are and what proposals are
 likely to be declined.
 
@@ -136,7 +136,7 @@ will be asked to add them before merge.
 - A reversible pseudonymization tool.
 - A tool for operating on data in transit (it reads files or stdin; it does
   not run as a network proxy or man-in-the-middle interceptor). The optional
-  HTTP daemon mode (`sanitize-mcp --http`) is a local-only control interface
+  HTTP daemon mode (`scour-secrets-mcp --http`) is a local-only control interface
   for AI tooling and does not process data in transit.
 - An encryption tool (secrets files use AES-256-GCM for the pattern store,
   but the sanitized output itself is not encrypted).

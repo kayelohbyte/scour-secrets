@@ -1,10 +1,10 @@
-//! Basic usage of rust-sanitize as a library.
+//! Basic usage of scour-secrets as a library.
 //!
 //! Run with: `cargo run --example basic`
 
-use rust_sanitize::category::Category;
-use rust_sanitize::generator::HmacGenerator;
-use rust_sanitize::store::MappingStore;
+use scour_secrets::category::Category;
+use scour_secrets::generator::HmacGenerator;
+use scour_secrets::store::MappingStore;
 use std::sync::Arc;
 
 fn main() {

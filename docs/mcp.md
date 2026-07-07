@@ -1,17 +1,17 @@
 # MCP Reference
 
-The `sanitize-mcp` binary wraps the `sanitize` CLI as a Model Context Protocol server. All sensitive data processing happens inside the audited Rust CLI — the MCP layer handles only protocol framing. This means files are sanitized **before** their contents enter the LLM context window.
+The `scour-secrets-mcp` binary wraps the `scour-secrets` CLI as a Model Context Protocol server. All sensitive data processing happens inside the audited Rust CLI — the MCP layer handles only protocol framing. This means files are sanitized **before** their contents enter the LLM context window.
 
 ---
 
 ## Installation
 
-Download the `sanitize-mcp` binary for your platform from the [Releases](https://github.com/kayelohbyte/rust-sanitize/releases) page (no Deno or Node required — the runtime is embedded).
+Download the `scour-secrets-mcp` binary for your platform from the [Releases](https://github.com/kayelohbyte/scour-secrets/releases) page (no Deno or Node required — the runtime is embedded).
 
 Alternatively, run from source with [Deno](https://deno.land) 2.x (no compile step):
 
 ```bash
-SANITIZE_BIN=/usr/local/bin/sanitize \
+SCOUR_SECRETS_BIN=/usr/local/bin/sanitize \
   deno run --allow-run --allow-env --allow-read --allow-write \
   mcp/src/index.ts
 ```
@@ -20,10 +20,10 @@ SANITIZE_BIN=/usr/local/bin/sanitize \
 
 ## Keeping Secrets Out of the Context Window
 
-This is the core purpose of the MCP integration. The `files` parameter takes a **file path**, not file contents. `sanitize-mcp` opens and processes the file as a subprocess — raw bytes never enter the MCP transport or the LLM context window. The agent passes a path string and receives sanitized text back. It never sees the original.
+This is the core purpose of the MCP integration. The `files` parameter takes a **file path**, not file contents. `scour-secrets-mcp` opens and processes the file as a subprocess — raw bytes never enter the MCP transport or the LLM context window. The agent passes a path string and receives sanitized text back. It never sees the original.
 
 ```
-Agent                    MCP server          Sanitize binary
+Agent                    MCP server          scour-secrets binary
   │                          │                     │
   │── files: ["/path"]  ────▶│                     │
   │   secrets_file: "/s.yaml"│── spawns process ──▶│ opens /path
@@ -36,7 +36,7 @@ This applies to **all path-type parameters**: `files`, `secrets_file`, and `prof
 
 ### Blocking Direct File Reads by AI Tool
 
-The MCP path prevents the agent from reading raw content *through the sanitize tool*. A separate concern is whether the agent can read the same file directly through its own file-browsing tools. The answer depends on which tool you're using.
+The MCP path prevents the agent from reading raw content *through the scour-secrets tool*. A separate concern is whether the agent can read the same file directly through its own file-browsing tools. The answer depends on which tool you're using.
 
 | Tool | Direct file reads | Built-in path deny | MCP subprocess affected by deny |
 |------|------------------|-------------------|--------------------------------|
@@ -47,9 +47,9 @@ The MCP path prevents the agent from reading raw content *through the sanitize t
 | VS Code (Copilot) | Yes | ✗ (`.copilotignore` is indexing-only, not a security boundary) | No — daemon + [mcp-remote](https://github.com/modelcontextprotocol/mcp-remote) shim enables service-user isolation |
 | ChatGPT / Gemini | No direct filesystem access | ✗ | N/A — files must be explicitly uploaded |
 
-For **Claude Code, OpenCode, and Cursor**: deny rules block the agent's direct file reads but leave MCP subprocess calls unaffected — sanitize-mcp can be spawned on-demand and will still access the files.
+For **Claude Code, OpenCode, and Cursor**: deny rules block the agent's direct file reads but leave MCP subprocess calls unaffected — scour-secrets-mcp can be spawned on-demand and will still access the files.
 
-For **OpenAI Codex**: deny rules are enforced by the OS sandbox (Seatbelt on macOS, bubblewrap on Linux). All child processes inherit the sandbox, including an on-demand `sanitize-mcp`. To allow sanitize-mcp to access denied files, run it as a **persistent daemon outside the Codex sandbox** — connect Codex to the already-running MCP server rather than having Codex spawn it.
+For **OpenAI Codex**: deny rules are enforced by the OS sandbox (Seatbelt on macOS, bubblewrap on Linux). All child processes inherit the sandbox, including an on-demand `scour-secrets-mcp`. To allow scour-secrets-mcp to access denied files, run it as a **persistent daemon outside the Codex sandbox** — connect Codex to the already-running MCP server rather than having Codex spawn it.
 
 For **VS Code**: there is no built-in path deny mechanism. `.copilotignore` prevents Copilot from indexing files but does not block the agent from reading them explicitly. OS-level file permissions (service-user model) are the effective control; pair them with the [persistent daemon](#running-as-a-persistent-daemon) and the [mcp-remote](https://github.com/modelcontextprotocol/mcp-remote) shim to enforce the service-user boundary. See [VS Code: Limit Exposure with `.copilotignore` and `mcp-remote`](#vs-code-copilot-limit-exposure-with-copilotignore-and-mcp-remote).
 
@@ -62,13 +62,13 @@ OS-level permissions are the only control that works against every agent regardl
 ```
        ┌──────────────────────────────────────────┐
        │  Sensitive files                         │
-       │  owner: sanitize-svc                     │
+       │  owner: scour-secrets-svc                     │
        └─────────────┬────────────────────────────┘
                      │ read access (OS-enforced)
                      ▼
    ┌─────────────────────────────────────┐
-   │  sanitize-mcp daemon                │
-   │  runs as: sanitize-svc              │
+   │  scour-secrets-mcp daemon                │
+   │  runs as: scour-secrets-svc              │
    │  binds:   127.0.0.1 + bearer token  │
    └────────────────┬────────────────────┘
                     │ sanitized output only
@@ -80,12 +80,12 @@ OS-level permissions are the only control that works against every agent regardl
    └─────────────────────────────────────┘
 ```
 
-The agent can only reach the data through the daemon, and the daemon only returns sanitized bytes. For this to hold, `sanitize-mcp` must run as `sanitize-svc` — which requires the [persistent daemon](#running-as-a-persistent-daemon) setup below. When AI tools spawn `sanitize-mcp` on demand it inherits the login user's permissions, so on-demand mode cannot access files owned exclusively by the service user.
+The agent can only reach the data through the daemon, and the daemon only returns sanitized bytes. For this to hold, `scour-secrets-mcp` must run as `scour-secrets-svc` — which requires the [persistent daemon](#running-as-a-persistent-daemon) setup below. When AI tools spawn `scour-secrets-mcp` on demand it inherits the login user's permissions, so on-demand mode cannot access files owned exclusively by the service user.
 
 **Create the service user once:**
 
 ```bash
-sudo useradd -r -s /sbin/nologin sanitize-svc
+sudo useradd -r -s /sbin/nologin scour-secrets-svc
 ```
 
 Then pick one of two file-ownership models. Both put the daemon in the same position; they differ only in how you, the human, edit the files.
@@ -95,29 +95,29 @@ Then pick one of two file-ownership models. Both put the daemon in the same posi
 Only the service user can read or write. Your login user — and therefore every agent — gets `Permission denied` at the OS level. Edits require an explicit `sudo` step, which is the point: there is no path by which a compromised agent shell can reach the file.
 
 ```bash
-sudo chown sanitize-svc:sanitize-svc /var/sanitize/secrets/secrets.yaml
+sudo chown scour-secrets-svc:scour-secrets-svc /var/sanitize/secrets/secrets.yaml
 sudo chmod 0600 /var/sanitize/secrets/secrets.yaml
 ```
 
 Edit with `sudoedit` (preserves your `$EDITOR`, writes via a safe temp file):
 
 ```bash
-sudo -u sanitize-svc -e /var/sanitize/secrets/secrets.yaml
+sudo -u scour-secrets-svc -e /var/sanitize/secrets/secrets.yaml
 # or, for a one-off read:
-sudo -u sanitize-svc cat /var/sanitize/secrets/secrets.yaml
+sudo -u scour-secrets-svc cat /var/sanitize/secrets/secrets.yaml
 ```
 
 Pick this when the secrets are stable, edited rarely, and the consequences of agent exfiltration are severe (production tokens, customer-namespace secrets, audit-scoped credentials).
 
 #### Convenient (recommended for actively-edited config)
 
-Your login user joins a shared group and can edit the files with their normal editor. The daemon still runs as `sanitize-svc`; agents inherit your group membership and *can* read the files at the OS level, so this model relies on per-agent deny rules ([Blocking Direct File Reads by AI Tool](#blocking-direct-file-reads-by-ai-tool)) to enforce the boundary inside the agent.
+Your login user joins a shared group and can edit the files with their normal editor. The daemon still runs as `scour-secrets-svc`; agents inherit your group membership and *can* read the files at the OS level, so this model relies on per-agent deny rules ([Blocking Direct File Reads by AI Tool](#blocking-direct-file-reads-by-ai-tool)) to enforce the boundary inside the agent.
 
 ```bash
 sudo groupadd sanitize-readers
-sudo usermod -aG sanitize-readers sanitize-svc
+sudo usermod -aG sanitize-readers scour-secrets-svc
 sudo usermod -aG sanitize-readers $USER         # log out and back in for this to take effect
-sudo chown sanitize-svc:sanitize-readers /var/sanitize/secrets/secrets.yaml
+sudo chown scour-secrets-svc:sanitize-readers /var/sanitize/secrets/secrets.yaml
 sudo chmod 0640 /var/sanitize/secrets/secrets.yaml
 ```
 
@@ -125,7 +125,7 @@ Pick this when you iterate on patterns/profiles frequently, are confident in you
 
 ### Running as a Persistent Daemon
 
-Run `sanitize-mcp` as a system service with `--http`. The server binds to `127.0.0.1` only on port **6277** by default and requires a bearer token on every request — set via `SANITIZE_MCP_HTTP_TOKEN`. AI tools connect to the already-running server rather than spawning it, so the daemon's user and file permissions are independent of the AI tool. Pass `--http <n>` to bind to a different port; update the port in your client config to match.
+Run `scour-secrets-mcp` as a system service with `--http`. The server binds to `127.0.0.1` only on port **6277** by default and requires a bearer token on every request — set via `SCOUR_SECRETS_MCP_HTTP_TOKEN`. AI tools connect to the already-running server rather than spawning it, so the daemon's user and file permissions are independent of the AI tool. Pass `--http <n>` to bind to a different port; update the port in your client config to match.
 
 **Generate a token:**
 
@@ -143,21 +143,21 @@ openssl rand -hex 32
 <plist version="1.0">
 <dict>
   <key>Label</key>             <string>com.sanitize.mcp</string>
-  <key>UserName</key>          <string>sanitize-svc</string>
+  <key>UserName</key>          <string>scour-secrets-svc</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/bin/sanitize-mcp</string>
+    <string>/usr/local/bin/scour-secrets-mcp</string>
     <string>--http</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>SANITIZE_BIN</key>             <string>/usr/local/bin/sanitize</string>
-    <key>SANITIZE_SECRETS_DIR</key>     <string>/var/sanitize/secrets</string>
-    <key>SANITIZE_MCP_HTTP_TOKEN</key>  <string>YOUR_TOKEN_HERE</string>
+    <key>SCOUR_SECRETS_BIN</key>             <string>/usr/local/bin/sanitize</string>
+    <key>SCOUR_SECRETS_SECRETS_DIR</key>     <string>/var/sanitize/secrets</string>
+    <key>SCOUR_SECRETS_MCP_HTTP_TOKEN</key>  <string>YOUR_TOKEN_HERE</string>
   </dict>
   <key>RunAtLoad</key>         <true/>
   <key>KeepAlive</key>         <true/>
-  <key>StandardErrorPath</key> <string>/var/log/sanitize-mcp.log</string>
+  <key>StandardErrorPath</key> <string>/var/log/scour-secrets-mcp.log</string>
 </dict>
 </plist>
 ```
@@ -168,29 +168,29 @@ sudo chmod 0600 /Library/LaunchDaemons/com.sanitize.mcp.plist
 sudo launchctl load /Library/LaunchDaemons/com.sanitize.mcp.plist
 ```
 
-**Linux — systemd unit** (`/etc/systemd/system/sanitize-mcp.service`):
+**Linux — systemd unit** (`/etc/systemd/system/scour-secrets-mcp.service`):
 
 Store secrets in a separate environment file rather than inline in the unit — the unit file is world-readable via `systemctl show`, the env file is not:
 
 ```bash
-sudo mkdir -p /etc/sanitize-mcp
-sudo tee /etc/sanitize-mcp/env > /dev/null <<'EOF'
-SANITIZE_BIN=/usr/local/bin/sanitize
-SANITIZE_SECRETS_DIR=/var/sanitize/secrets
-SANITIZE_MCP_HTTP_TOKEN=YOUR_TOKEN_HERE
+sudo mkdir -p /etc/scour-secrets-mcp
+sudo tee /etc/scour-secrets-mcp/env > /dev/null <<'EOF'
+SCOUR_SECRETS_BIN=/usr/local/bin/sanitize
+SCOUR_SECRETS_SECRETS_DIR=/var/sanitize/secrets
+SCOUR_SECRETS_MCP_HTTP_TOKEN=YOUR_TOKEN_HERE
 EOF
-sudo chmod 0600 /etc/sanitize-mcp/env
+sudo chmod 0600 /etc/scour-secrets-mcp/env
 ```
 
 ```ini
 [Unit]
-Description=sanitize-mcp daemon
+Description=scour-secrets-mcp daemon
 After=network.target
 
 [Service]
-User=sanitize-svc
-ExecStart=/usr/local/bin/sanitize-mcp --http
-EnvironmentFile=/etc/sanitize-mcp/env
+User=scour-secrets-svc
+ExecStart=/usr/local/bin/scour-secrets-mcp --http
+EnvironmentFile=/etc/scour-secrets-mcp/env
 Restart=always
 RestartSec=1
 
@@ -217,7 +217,7 @@ WantedBy=multi-user.target
 > **Confinement vs. generality.** `ProtectSystem=strict` + `ProtectHome=yes` make most of the filesystem unreadable to the daemon, so list every directory it must reach via `ReadOnlyPaths`/`ReadWritePaths`. This is ideal when the daemon only ever sanitizes a known set of trees (logs, configs, the secrets store). If you instead need it to sanitize arbitrary agent-supplied paths anywhere on disk, you cannot meaningfully confine its reads — in that case the **service-user ownership model above is the boundary**, and the OS hardening only limits write surface and privilege escalation. macOS launchd has no direct equivalent to these directives; rely on the service-user ownership model there.
 
 ```bash
-sudo systemctl enable --now sanitize-mcp
+sudo systemctl enable --now scour-secrets-mcp
 ```
 
 **Windows — NSSM** ([nssm.cc](https://nssm.cc) or `scoop install nssm`):
@@ -225,18 +225,18 @@ sudo systemctl enable --now sanitize-mcp
 NSSM wraps any executable as a Windows service and handles env vars, stdout/stderr, and auto-restart.
 
 ```powershell
-nssm install sanitize-mcp "C:\Program Files\sanitize\sanitize-mcp.exe"
-nssm set sanitize-mcp AppParameters "--http"
-nssm set sanitize-mcp AppEnvironmentExtra `
-  "SANITIZE_BIN=C:\Program Files\sanitize\sanitize.exe" `
-  "SANITIZE_SECRETS_DIR=C:\ProgramData\sanitize\secrets" `
-  "SANITIZE_MCP_HTTP_TOKEN=YOUR_TOKEN_HERE"
-nssm set sanitize-mcp AppStderr "C:\ProgramData\sanitize\logs\sanitize-mcp.log"
-nssm set sanitize-mcp Start SERVICE_AUTO_START
-nssm start sanitize-mcp
+nssm install scour-secrets-mcp "C:\Program Files\sanitize\scour-secrets-mcp.exe"
+nssm set scour-secrets-mcp AppParameters "--http"
+nssm set scour-secrets-mcp AppEnvironmentExtra `
+  "SCOUR_SECRETS_BIN=C:\Program Files\sanitize\sanitize.exe" `
+  "SCOUR_SECRETS_SECRETS_DIR=C:\ProgramData\sanitize\secrets" `
+  "SCOUR_SECRETS_MCP_HTTP_TOKEN=YOUR_TOKEN_HERE"
+nssm set scour-secrets-mcp AppStderr "C:\ProgramData\sanitize\logs\scour-secrets-mcp.log"
+nssm set scour-secrets-mcp Start SERVICE_AUTO_START
+nssm start scour-secrets-mcp
 ```
 
-NSSM stores env vars in `HKLM\SYSTEM\CurrentControlSet\Services\sanitize-mcp\Parameters\AppEnvironment`, which requires admin privileges to read.
+NSSM stores env vars in `HKLM\SYSTEM\CurrentControlSet\Services\scour-secrets-mcp\Parameters\AppEnvironment`, which requires admin privileges to read.
 
 **Connecting AI tools to the daemon** — use a `url` with an `Authorization` header instead of a `command`. Put this in **user-scope config only** — never in project-scope config that gets committed to version control.
 
@@ -245,7 +245,7 @@ Claude Code (`~/.claude/claude.json`, user scope):
 ```json
 {
   "mcpServers": {
-    "rust-sanitize": {
+    "scour-secrets": {
       "url": "http://127.0.0.1:6277/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_TOKEN_HERE"
@@ -260,7 +260,7 @@ OpenCode (`~/.config/opencode/opencode.json`, global scope):
 ```json
 {
   "mcp": {
-    "rust-sanitize": {
+    "scour-secrets": {
       "type": "remote",
       "url": "http://127.0.0.1:6277/mcp",
       "headers": {
@@ -271,11 +271,11 @@ OpenCode (`~/.config/opencode/opencode.json`, global scope):
 }
 ```
 
-For Codex, add a remote MCP entry to `~/.codex/config.yaml` pointing to the daemon. The daemon runs outside Codex's OS sandbox, so it can access any files `sanitize-svc` has permission to read:
+For Codex, add a remote MCP entry to `~/.codex/config.yaml` pointing to the daemon. The daemon runs outside Codex's OS sandbox, so it can access any files `scour-secrets-svc` has permission to read:
 
 ```yaml
 mcp_servers:
-  rust-sanitize:
+  scour-secrets:
     type: http
     url: "http://127.0.0.1:6277/mcp"
     headers:
@@ -292,7 +292,7 @@ Refer to the [Codex permissions documentation](https://developers.openai.com/cod
 > - The token travels in plaintext over loopback. This is acceptable for local use (sniffing loopback requires root). For remote deployment, put a TLS-terminating reverse proxy (e.g. Caddy) in front.
 > - Do not put the token in project-scope `.mcp.json` — it will end up in version control.
 > - Service configuration files containing the token must be mode `0600` (shown above for macOS and Linux).
-> - **What the daemon logs:** only a startup message (`sanitize-mcp daemon ready on 127.0.0.1:<port>`) and unhandled error class names. It never logs request bodies, file paths, file content, or the `Authorization` header. The sanitize subprocess is audited separately — its output is always the redacted result, never raw secrets.
+> - **What the daemon logs:** only a startup message (`scour-secrets-mcp daemon ready on 127.0.0.1:<port>`) and unhandled error class names. It never logs request bodies, file paths, file content, or the `Authorization` header. The sanitize subprocess is audited separately — its output is always the redacted result, never raw secrets.
 
 ### OpenCode: Block Direct Reads with `permission.read`
 
@@ -312,7 +312,7 @@ OpenCode has a built-in `permission.read` system that supports path-pattern deny
 
 Rules are evaluated by pattern match with **last match winning** — place the catch-all `"*": "allow"` first, then specific deny patterns after. Supports `*` (any characters) and `?` (single character) wildcards.
 
-MCP tool calls pass file paths to the sanitize subprocess and are not subject to `permission.read` rules — the agent cannot read the raw file, but the sanitize tool processes it normally.
+MCP tool calls pass file paths to the sanitize subprocess and are not subject to `permission.read` rules — the agent cannot read the raw file, but the scour-secrets tool processes it normally.
 
 ### Cursor: Block Direct Reads with Enforcement Hooks (Enterprise)
 
@@ -350,7 +350,7 @@ VS Code's `mcp.json` HTTP server type (`"type": "http"`) does not support custom
 ```json
 {
   "servers": {
-    "rust-sanitize": {
+    "scour-secrets": {
       "type": "stdio",
       "command": "npx",
       "args": [
@@ -364,7 +364,7 @@ VS Code's `mcp.json` HTTP server type (`"type": "http"`) does not support custom
 }
 ```
 
-Because VS Code spawns `mcp-remote` as your login user, it still cannot access files owned exclusively by `sanitize-svc` — the service-user boundary holds. The token in `.vscode/mcp.json` can end up in version control; prefer user-scope settings or add `.vscode/mcp.json` to `.gitignore`.
+Because VS Code spawns `mcp-remote` as your login user, it still cannot access files owned exclusively by `scour-secrets-svc` — the service-user boundary holds. The token in `.vscode/mcp.json` can end up in version control; prefer user-scope settings or add `.vscode/mcp.json` to `.gitignore`.
 
 ### OpenAI Codex: Block Reads with OS-Enforced TOML Deny Rules
 
@@ -382,7 +382,7 @@ Codex uses a TOML permission profile with `deny` rules enforced at the OS level 
 
 `deny` blocks both reads and writes. Narrower rules take precedence over broader ones at the same path level.
 
-**Important:** because enforcement is OS-level, all child processes inherit the sandbox — including `sanitize-mcp` if Codex spawns it on demand. To allow sanitize-mcp to access denied paths, run it as a **persistent daemon** and connect Codex to the already-running server via HTTP. See [Running as a Persistent Daemon](#running-as-a-persistent-daemon).
+**Important:** because enforcement is OS-level, all child processes inherit the sandbox — including `scour-secrets-mcp` if Codex spawns it on demand. To allow scour-secrets-mcp to access denied paths, run it as a **persistent daemon** and connect Codex to the already-running server via HTTP. See [Running as a Persistent Daemon](#running-as-a-persistent-daemon).
 
 Refer to the [Codex permissions documentation](https://developers.openai.com/codex/permissions#filesystem-permissions) for the full profile schema and platform-specific notes.
 
@@ -410,7 +410,7 @@ For Claude Code, a `PreToolUse` hook intercepts `Read` tool calls before they ex
 
 The hook receives the tool call as JSON on stdin, resolves the path (following symlinks via `os.path.realpath`), and exits with code `2` to block if it falls under a restricted prefix. The `reason` string is shown to the agent. Update the `blocked` list to match your deployment paths. Changes take effect on the next session start.
 
-This has been verified on macOS and Linux: `Read` calls to blocked paths are rejected with the reason message, while the sanitize CLI processes the same paths successfully through Bash or the MCP tool.
+This has been verified on macOS and Linux: `Read` calls to blocked paths are rejected with the reason message, while the scour-secrets CLI processes the same paths successfully through Bash or the MCP tool.
 
 On **Linux** you can additionally use `sandbox.filesystem.denyRead` (requires `sandbox.enabled: true`), which uses bubblewrap to enforce read restrictions at the OS level.
 
@@ -427,11 +427,11 @@ Avoid storing sensitive source files inside the project directory — editors an
 
 ### Namespace Secrets Directory Permissions
 
-The `SANITIZE_SECRETS_DIR` namespace layout enforces permission checks at load time: the `.password` file for each namespace must be `0600` or `0400` or the server will refuse to start. Apply the same ownership model to the parent directory so agents cannot enumerate namespaces:
+The `SCOUR_SECRETS_SECRETS_DIR` namespace layout enforces permission checks at load time: the `.password` file for each namespace must be `0600` or `0400` or the server will refuse to start. Apply the same ownership model to the parent directory so agents cannot enumerate namespaces:
 
 ```bash
-sudo chown -R sanitize-svc:sanitize-svc /var/sanitize/secrets/
-sudo chmod 0750 /var/sanitize/secrets/           # sanitize-svc can enter; agent user cannot
+sudo chown -R scour-secrets-svc:scour-secrets-svc /var/sanitize/secrets/
+sudo chmod 0750 /var/sanitize/secrets/           # scour-secrets-svc can enter; agent user cannot
 sudo chmod 0700 /var/sanitize/secrets/acme-corp/ # namespace dirs: service user only
 sudo chmod 0600 /var/sanitize/secrets/acme-corp/secrets.yaml
 sudo chmod 0600 /var/sanitize/secrets/acme-corp/.password
@@ -441,22 +441,22 @@ sudo chmod 0600 /var/sanitize/secrets/acme-corp/.password
 
 ## IDE & Editor Setup
 
-All configurations assume `sanitize-mcp` is at `/usr/local/bin/sanitize-mcp` and `sanitize` is at `/usr/local/bin/sanitize`. Adjust paths to match your installation.
+All configurations assume `scour-secrets-mcp` is at `/usr/local/bin/scour-secrets-mcp` and `scour-secrets` is at `/usr/local/bin/sanitize`. Adjust paths to match your installation.
 
 ### Claude Code
 
 Add at **project scope** (writes `.mcp.json` in the repo root, checked into version control):
 
 ```bash
-claude mcp add --scope project rust-sanitize /usr/local/bin/sanitize-mcp \
-  -e SANITIZE_BIN=/usr/local/bin/sanitize
+claude mcp add --scope project scour-secrets /usr/local/bin/scour-secrets-mcp \
+  -e SCOUR_SECRETS_BIN=/usr/local/bin/sanitize
 ```
 
 Add at **user scope** (available across all your projects):
 
 ```bash
-claude mcp add --scope user rust-sanitize /usr/local/bin/sanitize-mcp \
-  -e SANITIZE_BIN=/usr/local/bin/sanitize
+claude mcp add --scope user scour-secrets /usr/local/bin/scour-secrets-mcp \
+  -e SCOUR_SECRETS_BIN=/usr/local/bin/sanitize
 ```
 
 Or write `.mcp.json` at the repo root manually:
@@ -464,10 +464,10 @@ Or write `.mcp.json` at the repo root manually:
 ```json
 {
   "mcpServers": {
-    "rust-sanitize": {
-      "command": "/usr/local/bin/sanitize-mcp",
+    "scour-secrets": {
+      "command": "/usr/local/bin/scour-secrets-mcp",
       "env": {
-        "SANITIZE_BIN": "/usr/local/bin/sanitize"
+        "SCOUR_SECRETS_BIN": "/usr/local/bin/sanitize"
       }
     }
   }
@@ -481,11 +481,11 @@ Or write `.mcp.json` at the repo root manually:
 ```json
 {
   "mcpServers": {
-    "rust-sanitize": {
-      "command": "/usr/local/bin/sanitize-mcp",
+    "scour-secrets": {
+      "command": "/usr/local/bin/scour-secrets-mcp",
       "args": [],
       "env": {
-        "SANITIZE_BIN": "/usr/local/bin/sanitize"
+        "SCOUR_SECRETS_BIN": "/usr/local/bin/sanitize"
       }
     }
   }
@@ -505,11 +505,11 @@ Requires VS Code 1.99 or later with the GitHub Copilot extension.
 ```json
 {
   "servers": {
-    "rust-sanitize": {
+    "scour-secrets": {
       "type": "stdio",
-      "command": "/usr/local/bin/sanitize-mcp",
+      "command": "/usr/local/bin/scour-secrets-mcp",
       "env": {
-        "SANITIZE_BIN": "/usr/local/bin/sanitize"
+        "SCOUR_SECRETS_BIN": "/usr/local/bin/sanitize"
       }
     }
   }
@@ -521,7 +521,7 @@ Requires VS Code 1.99 or later with the GitHub Copilot extension.
 ```json
 {
   "servers": {
-    "rust-sanitize": {
+    "scour-secrets": {
       "type": "stdio",
       "command": "npx",
       "args": [
@@ -546,11 +546,11 @@ Restart VS Code after editing the file.
 ```json
 {
   "servers": {
-    "rust-sanitize": {
-      "command": "/usr/local/bin/sanitize-mcp",
+    "scour-secrets": {
+      "command": "/usr/local/bin/scour-secrets-mcp",
       "args": [],
       "env": {
-        "SANITIZE_BIN": "/usr/local/bin/sanitize"
+        "SCOUR_SECRETS_BIN": "/usr/local/bin/sanitize"
       }
     }
   }
@@ -593,11 +593,11 @@ require("avante").setup({
 ```json
 {
   "mcp": {
-    "rust-sanitize": {
+    "scour-secrets": {
       "type": "local",
-      "command": ["/usr/local/bin/sanitize-mcp"],
+      "command": ["/usr/local/bin/scour-secrets-mcp"],
       "environment": {
-        "SANITIZE_BIN": "/usr/local/bin/sanitize",
+        "SCOUR_SECRETS_BIN": "/usr/local/bin/sanitize",
         "PATH": "{env:PATH}"
       }
     }
@@ -613,13 +613,13 @@ require("avante").setup({
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SANITIZE_BIN` | `sanitize` | Path to the `sanitize` binary. |
-| `SANITIZE_MCP_HTTP_TOKEN` | _(unset)_ | Bearer token required when running in HTTP daemon mode (`--http`). Must be set; the server refuses to start without it when `--http` is used. |
-| `SANITIZE_MCP_MAX_CONTENT_BYTES` | `524288` (512 KB) | Per-call inline content size limit. |
-| `SANITIZE_MCP_TIMEOUT_MS` | `60000` (60 s) | Subprocess timeout — kills the CLI and returns an error if exceeded. |
-| `SANITIZE_MCP_THREADS` | _(unset = CLI default = logical CPUs)_ | Worker thread cap for every invocation — useful on shared hosts. |
-| `SANITIZE_MCP_MAX_ARCHIVE_DEPTH` | `5` | Default max archive nesting depth (matches CLI default). |
-| `SANITIZE_SECRETS_DIR` | _(unset)_ | Root directory for per-namespace secrets. Each subdirectory is a namespace and may contain `secrets.yaml[.enc]`, `profile.yaml`, `settings.yaml` (behavior defaults), and an optional `.password` file (`0600`/`0400` permissions enforced). |
+| `SCOUR_SECRETS_BIN` | `scour-secrets` | Path to the `scour-secrets` binary. |
+| `SCOUR_SECRETS_MCP_HTTP_TOKEN` | _(unset)_ | Bearer token required when running in HTTP daemon mode (`--http`). Must be set; the server refuses to start without it when `--http` is used. |
+| `SCOUR_SECRETS_MCP_MAX_CONTENT_BYTES` | `524288` (512 KB) | Per-call inline content size limit. |
+| `SCOUR_SECRETS_MCP_TIMEOUT_MS` | `60000` (60 s) | Subprocess timeout — kills the CLI and returns an error if exceeded. |
+| `SCOUR_SECRETS_MCP_THREADS` | _(unset = CLI default = logical CPUs)_ | Worker thread cap for every invocation — useful on shared hosts. |
+| `SCOUR_SECRETS_MCP_MAX_ARCHIVE_DEPTH` | `5` | Default max archive nesting depth (matches CLI default). |
+| `SCOUR_SECRETS_SECRETS_DIR` | _(unset)_ | Root directory for per-namespace secrets. Each subdirectory is a namespace and may contain `secrets.yaml[.enc]`, `profile.yaml`, `settings.yaml` (behavior defaults), and an optional `.password` file (`0600`/`0400` permissions enforced). |
 
 ---
 
@@ -627,13 +627,13 @@ require("avante").setup({
 
 | Tool | Description |
 |------|-------------|
-| `sanitize` | Sanitize inline text or files. Set `llm_template` to `'troubleshoot'`, `'review-config'`, or `'review-security'` for a fully-formatted LLM prompt. |
+| `scour-secrets` | Sanitize inline text or files. Set `llm_template` to `'troubleshoot'`, `'review-config'`, or `'review-security'` for a fully-formatted LLM prompt. |
 | `scan` | Scan for secrets and return a report without modifying content. |
 | `strip_config_values` | Strip values from key=value config files, preserving keys and structure. |
 | `test_allowlist` | Test which values match a set of allowlist patterns. |
 | `list_apps` | List all available app bundles (built-in + user-defined). |
-| `list_processors` | List all supported input format processors and the `format_flag` value to pass as the `format` parameter to `sanitize` or `scan`. Call when auto-detection fails (extensionless files, stdin, unfamiliar extensions). |
-| `list_templates` | List the built-in LLM prompt templates available via the `llm_template` parameter of the `sanitize` tool. |
+| `list_processors` | List all supported input format processors and the `format_flag` value to pass as the `format` parameter to `scour-secrets` or `scan`. Call when auto-detection fails (extensionless files, stdin, unfamiliar extensions). |
+| `list_templates` | List the built-in LLM prompt templates available via the `llm_template` parameter of the `scour-secrets` tool. |
 | `init` | Create a starter secrets file on disk from a preset template and return its contents. |
 | `build_secrets` | Build a tailored secrets file from specific patterns. Typical workflow: scan → identify gaps → build_secrets → sanitize. |
 | `test_pattern` | Test which values are matched by a secrets file, app bundle, or inline patterns. Returns per-value match results. |
@@ -921,7 +921,7 @@ By default, binary entries inside archives are skipped. Set `include_binary: tru
 
 ### Archive depth limit
 
-Override the server-wide archive depth default on a per-call basis. The default is `5`. Override the server default for all calls via `SANITIZE_MCP_MAX_ARCHIVE_DEPTH`.
+Override the server-wide archive depth default on a per-call basis. The default is `5`. Override the server default for all calls via `SCOUR_SECRETS_MCP_MAX_ARCHIVE_DEPTH`.
 
 ```json
 {
@@ -1025,7 +1025,7 @@ After scanning and spotting what the default patterns missed, use `build_secrets
 1. `scan` with no secrets file to see what the built-in patterns catch
 2. Identify patterns that weren't matched
 3. `build_secrets` to write a file covering those gaps
-4. `sanitize` with the new `secrets_file`
+4. `scour-secrets` with the new `secrets_file`
 
 ```json
 {
@@ -1049,17 +1049,17 @@ Omit `preset` to create a file with only the entries you specify. Returns the wr
 { "tool": "init", "output_path": "patterns.yaml", "preset": "web" }
 ```
 
-Available presets: `balanced` (default — mirrors the built-in runtime detection set), `aggressive` (balanced + entropy/bearer patterns), `generic`, `web`, `k8s`, `database`, `aws`. Pass `overwrite: true` to replace an existing file. Once created, pass the path via `secrets_file` on subsequent `sanitize` or `scan` calls.
+Available presets: `balanced` (default — mirrors the built-in runtime detection set), `aggressive` (balanced + entropy/bearer patterns), `generic`, `web`, `k8s`, `database`, `aws`. Pass `overwrite: true` to replace an existing file. Once created, pass the path via `secrets_file` on subsequent `scour-secrets` or `scan` calls.
 
 ### Discover input formats and LLM templates
 
-`list_processors` returns every supported format processor and the `format_flag` value to pass as the `format` parameter to `sanitize` or `scan`. Useful when auto-detection fails — extensionless files, stdin input, or an unfamiliar extension.
+`list_processors` returns every supported format processor and the `format_flag` value to pass as the `format` parameter to `scour-secrets` or `scan`. Useful when auto-detection fails — extensionless files, stdin input, or an unfamiliar extension.
 
 ```json
 { "tool": "list_processors" }
 ```
 
-`list_templates` returns the built-in LLM prompt templates available via the `llm_template` parameter of `sanitize`.
+`list_templates` returns the built-in LLM prompt templates available via the `llm_template` parameter of `scour-secrets`.
 
 ```json
 { "tool": "list_templates" }
@@ -1069,7 +1069,7 @@ Available presets: `balanced` (default — mirrors the built-in runtime detectio
 
 ## Namespace-Based Secrets (Multi-Tenant / MSP)
 
-Set `SANITIZE_SECRETS_DIR` to a directory and create one subdirectory per customer or software type:
+Set `SCOUR_SECRETS_SECRETS_DIR` to a directory and create one subdirectory per customer or software type:
 
 ```
 /var/sanitize/secrets/
@@ -1084,11 +1084,11 @@ Set `SANITIZE_SECRETS_DIR` to a directory and create one subdirectory per custom
     .password
 ```
 
-Pass `namespace` in `sanitize` or `scan` tool calls. The server loads only that namespace's secrets, profile, password, and behavior defaults — keeping pattern sets and configuration isolated across tenants.
+Pass `namespace` in `scour-secrets` or `scan` tool calls. The server loads only that namespace's secrets, profile, password, and behavior defaults — keeping pattern sets and configuration isolated across tenants.
 
 ### Per-Namespace `settings.yaml`
 
-A `settings.yaml` file in the namespace directory sets default behavior flags for every tool call that uses that namespace. All the same fields as the global `~/.config/sanitize/settings.yaml` are accepted. Per-call tool parameters always override namespace defaults.
+A `settings.yaml` file in the namespace directory sets default behavior flags for every tool call that uses that namespace. All the same fields as the global `~/.config/scour-secrets/settings.yaml` are accepted. Per-call tool parameters always override namespace defaults.
 
 ```yaml
 # /var/sanitize/secrets/acme-corp/settings.yaml

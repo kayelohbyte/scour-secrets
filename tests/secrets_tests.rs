@@ -9,11 +9,11 @@
 //! - Multiple secrets formats (JSON, YAML, TOML)
 //! - Error handling (wrong password, corrupt file, bad patterns)
 
-use rust_sanitize::category::Category;
-use rust_sanitize::generator::HmacGenerator;
-use rust_sanitize::scanner::{ScanConfig, ScanPattern, SecretsLoadResult, StreamScanner};
-use rust_sanitize::secrets::{decrypt_secrets, encrypt_secrets, SecretsFormat};
-use rust_sanitize::store::MappingStore;
+use scour_secrets::category::Category;
+use scour_secrets::generator::HmacGenerator;
+use scour_secrets::scanner::{ScanConfig, ScanPattern, SecretsLoadResult, StreamScanner};
+use scour_secrets::secrets::{decrypt_secrets, encrypt_secrets, SecretsFormat};
+use scour_secrets::store::MappingStore;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------

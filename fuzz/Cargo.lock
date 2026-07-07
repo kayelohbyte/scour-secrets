@@ -1176,7 +1176,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-sanitize"
+name = "scour-secrets"
 version = "0.14.0"
 dependencies = [
  "aes-gcm",
@@ -1217,11 +1217,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-sanitize-fuzz"
+name = "scour-secrets-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
- "rust-sanitize",
+ "scour-secrets",
 ]
 
 [[package]]

@@ -1,7 +1,7 @@
 use crate::progress::ProgressMode;
 use clap::{Parser, Subcommand, ValueEnum};
-use rust_sanitize::secrets::SecretsFormat;
-use rust_sanitize::{DEFAULT_ARCHIVE_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_MAX_MATCHES};
+use scour_secrets::secrets::SecretsFormat;
+use scour_secrets::{DEFAULT_ARCHIVE_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_MAX_MATCHES};
 use std::path::PathBuf;
 
 pub(crate) const DEFAULT_MAX_STRUCTURED_FILE_SIZE: u64 = 256 * 1024 * 1024; // 256 MiB
@@ -35,11 +35,11 @@ pub(crate) enum ReportFormat {
 /// Replacements are ONE-WAY — no mapping file is stored and there is no
 /// restore mode.
 ///
-/// Use `sanitize encrypt` / `sanitize decrypt` to manage encrypted secrets
+/// Use `scour-secrets encrypt` / `scour-secrets decrypt` to manage encrypted secrets
 /// files, or omit the subcommand to sanitize data.
 #[derive(Parser, Debug)]
 #[command(
-    name = "sanitize",
+    name = "scour-secrets",
     version,
     about = "One-way data sanitization tool",
     long_about = "Deterministic one-way data sanitization tool.\n\n\
@@ -47,25 +47,25 @@ pub(crate) enum ReportFormat {
         (plaintext by default) and replaces every match with a category-aware substitute.\n\
         Replacements are ONE-WAY — no mapping file is stored and there is no \
         restore mode.\n\n\
-        Use `sanitize encrypt` / `sanitize decrypt` to manage encrypted secrets files.",
+        Use `scour-secrets encrypt` / `scour-secrets decrypt` to manage encrypted secrets files.",
     after_help = "\
 EXAMPLES:\n  \
-  sanitize data.log -s secrets.yaml\n  \
-  sanitize data.log -s secrets.yaml -o clean.log\n  \
+  scour-secrets data.log -s secrets.yaml\n  \
+  scour-secrets data.log -s secrets.yaml -o clean.log\n  \
   grep \"error\" log.txt | sanitize -s secrets.yaml\n\n  \
   # Encrypted secrets:\n  \
-  sanitize data.log -s s.enc --encrypted-secrets -p\n  \
-  SANITIZE_PASSWORD=hunter2 sanitize data.log -s s.enc --encrypted-secrets\n\n  \
+  scour-secrets data.log -s s.enc --encrypted-secrets -p\n  \
+  SCOUR_SECRETS_PASSWORD=hunter2 scour-secrets data.log -s s.enc --encrypted-secrets\n\n  \
   # Extract notable log events into a report:\n  \
-  sanitize app.log -s secrets.yaml --extract-context\n  \
-  sanitize app.log -s secrets.yaml --extract-context --context-keywords timeout,oomkilled\n\n  \
+  scour-secrets app.log -s secrets.yaml --extract-context\n  \
+  scour-secrets app.log -s secrets.yaml --extract-context --context-keywords timeout,oomkilled\n\n  \
   # LLM prompt (file inputs write sanitized files to disk + list paths in prompt):\n  \
-  sanitize app.log -s secrets.yaml --llm | pbcopy\n  \
-  sanitize nginx.conf --app nginx --llm review-security\n  \
-  sanitize logs/ -s s.yaml --llm review-security --output /tmp/sanitized/\n\n  \
+  scour-secrets app.log -s secrets.yaml --llm | pbcopy\n  \
+  scour-secrets nginx.conf --app nginx --llm review-security\n  \
+  scour-secrets logs/ -s s.yaml --llm review-security --output /tmp/sanitized/\n\n  \
   # Strip values to generate a profile template:\n  \
-  sanitize gitlab.rb --strip-values -o gitlab.rb.template\n\nDOCS:\n  \
-  https://docs.rs/rust-sanitize"
+  scour-secrets gitlab.rb --strip-values -o gitlab.rb.template\n\nDOCS:\n  \
+  https://docs.rs/scour-secrets"
 )]
 pub(crate) struct Cli {
     /// Subcommand: encrypt, decrypt, or omit for default sanitize mode.
@@ -101,7 +101,7 @@ pub(crate) struct Cli {
     pub(crate) password_file: Option<PathBuf>,
 
     /// Treat the secrets file as AES-256-GCM encrypted. Requires a password via
-    /// `-p`, `--password-file`, or `SANITIZE_PASSWORD`.
+    /// `-p`, `--password-file`, or `SCOUR_SECRETS_PASSWORD`.
     #[arg(long)]
     pub(crate) encrypted_secrets: bool,
 
@@ -144,7 +144,7 @@ pub(crate) struct Cli {
     pub(crate) deterministic: bool,
 
     /// File holding the deterministic seed salt (used verbatim as the PBKDF2 salt).
-    /// Overrides the per-install salt and the SANITIZE_SEED_SALT env var. Share this
+    /// Overrides the per-install salt and the SCOUR_SECRETS_SEED_SALT env var. Share this
     /// file across machines to reproduce identical deterministic output for a team.
     #[arg(long, value_name = "PATH")]
     pub(crate) seed_salt_file: Option<PathBuf>,
@@ -182,7 +182,7 @@ pub(crate) struct Cli {
     #[arg(long, value_name = "THRESHOLD")]
     pub(crate) entropy_threshold: Option<f64>,
 
-    /// Exclude paths matching GLOB. Repeatable. Merged with `.sanitize.toml` excludes.
+    /// Exclude paths matching GLOB. Repeatable. Merged with `.scour-secrets.toml` excludes.
     #[arg(long, value_name = "GLOB", num_args = 1)]
     pub(crate) exclude_path: Vec<String>,
 
@@ -227,7 +227,7 @@ pub(crate) struct Cli {
     pub(crate) log_format: Option<String>,
 
     /// Log level: off, error, warn (default), info, debug, or trace.
-    /// Overrides SANITIZE_LOG when both are set.
+    /// Overrides SCOUR_SECRETS_LOG when both are set.
     #[arg(long, value_name = "LEVEL")]
     pub(crate) log_level: Option<String>,
 
@@ -309,32 +309,32 @@ pub(crate) struct Cli {
     pub(crate) llm: Option<String>,
 
     /// Send the --llm prompt to an OpenAI-compatible endpoint instead of printing to stdout.
-    /// Requires --llm. Env: SANITIZE_LLM_ENDPOINT.
+    /// Requires --llm. Env: SCOUR_SECRETS_LLM_ENDPOINT.
     /// Example: http://localhost:11434/v1  (Ollama)
     #[arg(
         long,
         value_name = "URL",
-        env = "SANITIZE_LLM_ENDPOINT",
+        env = "SCOUR_SECRETS_LLM_ENDPOINT",
         requires = "llm"
     )]
     pub(crate) llm_endpoint: Option<String>,
 
-    /// Model name for --llm-endpoint (e.g. phi4-mini, gpt-4o). Env: SANITIZE_LLM_MODEL.
+    /// Model name for --llm-endpoint (e.g. phi4-mini, gpt-4o). Env: SCOUR_SECRETS_LLM_MODEL.
     #[arg(
         long,
         value_name = "MODEL",
-        env = "SANITIZE_LLM_MODEL",
+        env = "SCOUR_SECRETS_LLM_MODEL",
         requires = "llm_endpoint"
     )]
     pub(crate) llm_model: Option<String>,
 
-    /// API key for --llm-endpoint. Prefer SANITIZE_LLM_KEY env var for real keys;
+    /// API key for --llm-endpoint. Prefer SCOUR_SECRETS_LLM_KEY env var for real keys;
     /// passing the value as a flag exposes it in process listings (ps, /proc).
     /// Local models (Ollama, LM Studio) accept any non-empty value.
-    #[arg(long, value_name = "KEY", env = "SANITIZE_LLM_KEY")]
+    #[arg(long, value_name = "KEY", env = "SCOUR_SECRETS_LLM_KEY")]
     pub(crate) llm_key: Option<String>,
 
-    /// Load built-in patterns/profiles for an app (comma-separated). Run `sanitize apps` for names.
+    /// Load built-in patterns/profiles for an app (comma-separated). Run `scour-secrets apps` for names.
     #[arg(long, value_delimiter = ',', value_name = "APPS")]
     pub(crate) app: Vec<String>,
 
@@ -448,7 +448,7 @@ pub(crate) enum SubCommand {
     #[command(after_help = "\
 EXAMPLES:\n  \
   sanitize encrypt secrets.json secrets.json.enc --password \"my-password\"\n  \
-  SANITIZE_PASSWORD=hunter2 sanitize encrypt secrets.yaml secrets.yaml.enc\n  \
+  SCOUR_SECRETS_PASSWORD=hunter2 scour-secrets encrypt secrets.yaml secrets.yaml.enc\n  \
   sanitize encrypt secrets.toml secrets.toml.enc  # interactive prompt")]
     Encrypt(EncryptArgs),
 
@@ -463,7 +463,7 @@ EXAMPLES:\n  \
 
     /// Manage app bundles: list, add, remove, or show the user apps directory.
     ///
-    /// Run `sanitize apps` with no subcommand to list all available bundles.
+    /// Run `scour-secrets apps` with no subcommand to list all available bundles.
     #[command(name = "apps")]
     Apps(AppsArgs),
 
@@ -512,7 +512,7 @@ EXAMPLES:\n  \
     /// The installed script is plain POSIX sh and can be inspected or edited
     /// directly. Remove it with --remove or by deleting the hook file.
     ///
-    /// Run `sanitize init-hook` first to create the global settings file and
+    /// Run `scour-secrets init-hook` first to create the global settings file and
     /// install a hook in the current repository.
     #[command(
         name = "install-hook",
@@ -543,7 +543,7 @@ EXAMPLES:\n  \
     /// The settings file is written to ~/.config/sanitize/settings.yaml
     /// (or $XDG_CONFIG_HOME/sanitize/settings.yaml) and lets you set persistent
     /// flag defaults. The global secrets file is created automatically on the
-    /// first plain `sanitize` run — no explicit setup needed.
+    /// first plain `scour-secrets` run — no explicit setup needed.
     #[command(
         name = "init-hook",
         after_help = "\
@@ -602,7 +602,7 @@ pub(crate) struct EncryptArgs {
 
     /// Prompt interactively for the encryption password. The password is
     /// never echoed. For non-interactive automation use --password-file or
-    /// the SANITIZE_PASSWORD environment variable instead.
+    /// the SCOUR_SECRETS_PASSWORD environment variable instead.
     #[arg(long)]
     pub(crate) password: bool,
 
@@ -637,7 +637,7 @@ pub(crate) struct DecryptArgs {
 
     /// Prompt interactively for the decryption password. The password is
     /// never echoed. For non-interactive automation use --password-file or
-    /// the SANITIZE_PASSWORD environment variable instead.
+    /// the SCOUR_SECRETS_PASSWORD environment variable instead.
     #[arg(long)]
     pub(crate) password: bool,
 
@@ -737,7 +737,7 @@ pub(crate) struct ScanArgs {
     pub(crate) hidden: bool,
 
     /// Exclude paths matching these glob patterns. A trailing `/` prunes the
-    /// whole subtree. Merged with `exclude` in `.sanitize.toml`.
+    /// whole subtree. Merged with `exclude` in `.scour-secrets.toml`.
     #[arg(long, value_name = "GLOB", num_args = 1)]
     pub(crate) exclude_path: Vec<String>,
 
@@ -823,9 +823,9 @@ pub(crate) enum AppsSubCommand {
     /// directory so the bundle is available via `--app <name>`.
     #[command(after_help = "\
 EXAMPLES:\n  \
-  sanitize apps add elastic --profile elastic.profile.yaml --secrets-file elastic.secrets.yaml\n  \
-  sanitize apps add myapp --profile myapp.profile.yaml\n  \
-  sanitize apps add myapp --secrets-file myapp.secrets.yaml --overwrite")]
+  scour-secrets apps add elastic --profile elastic.profile.yaml --secrets-file elastic.secrets.yaml\n  \
+  scour-secrets apps add myapp --profile myapp.profile.yaml\n  \
+  scour-secrets apps add myapp --secrets-file myapp.secrets.yaml --overwrite")]
     Add(AppsAddArgs),
 
     /// Remove a custom app bundle from the user apps directory.
@@ -833,8 +833,8 @@ EXAMPLES:\n  \
     /// Built-in bundles cannot be removed.
     #[command(after_help = "\
 EXAMPLES:\n  \
-  sanitize apps remove elastic --yes\n  \
-  sanitize apps remove myapp -y")]
+  scour-secrets apps remove elastic --yes\n  \
+  scour-secrets apps remove myapp -y")]
     Remove(AppsRemoveArgs),
 
     /// Copy a built-in app bundle to the user apps directory for editing.
@@ -844,18 +844,18 @@ EXAMPLES:\n  \
     /// copy takes precedence over the built-in automatically — no extra flags
     /// needed. For user-defined apps the existing directory path is printed.
     ///
-    /// To revert to the built-in, run `sanitize apps remove <name> --yes`.
+    /// To revert to the built-in, run `scour-secrets apps remove <name> --yes`.
     #[command(after_help = "\
 EXAMPLES:\n  \
-  sanitize apps edit rails\n  \
-  sanitize apps edit kubernetes\n  \
-  sanitize apps edit gitlab")]
+  scour-secrets apps edit rails\n  \
+  scour-secrets apps edit kubernetes\n  \
+  scour-secrets apps edit gitlab")]
     Edit(AppsEditArgs),
 
     /// Print the user apps directory path.
     ///
     /// Custom app bundles are stored here. You can also drop directories
-    /// manually instead of using `sanitize apps add`.
+    /// manually instead of using `scour-secrets apps add`.
     Dir,
 }
 
@@ -935,8 +935,8 @@ pub(crate) enum HookMode {
 #[derive(Parser, Debug)]
 #[command(after_help = "\
 NOTE\n  \
-  The hook calls `sanitize` from PATH at commit time — the binary must be\n  \
-  installed on every machine that will run the hook. If `sanitize` is not\n  \
+  The hook calls `scour-secrets` from PATH at commit time — the binary must be\n  \
+  installed on every machine that will run the hook. If `scour-secrets` is not\n  \
   found the hook silently passes rather than blocking the commit.")]
 pub(crate) struct InstallHookArgs {
     /// Git hook type to install.
@@ -959,7 +959,7 @@ pub(crate) struct InstallHookArgs {
     #[arg(long, short = 'f')]
     pub(crate) force: bool,
 
-    /// Remove the hook previously installed by `sanitize install-hook`.
+    /// Remove the hook previously installed by `scour-secrets install-hook`.
     /// Has no effect on hooks not created by this command.
     #[arg(long)]
     pub(crate) remove: bool,

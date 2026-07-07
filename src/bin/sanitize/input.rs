@@ -5,7 +5,7 @@ use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
-use rust_sanitize::ArchiveFormat;
+use scour_secrets::ArchiveFormat;
 
 use crate::apps::{builtin_app_names, user_apps_dir, BUILTIN_APPS};
 use crate::cli_args::Cli;
@@ -36,7 +36,7 @@ pub(crate) fn init_logging(log_format: &str, log_level: &str) {
     use tracing_subscriber::EnvFilter;
 
     let filter =
-        EnvFilter::try_from_env("SANITIZE_LOG").unwrap_or_else(|_| EnvFilter::new(log_level));
+        EnvFilter::try_from_env("SCOUR_SECRETS_LOG").unwrap_or_else(|_| EnvFilter::new(log_level));
 
     match log_format {
         "json" => {
@@ -777,10 +777,10 @@ pub(crate) fn validate_args(cli: &Cli) -> Result<(), String> {
 
     let has_password_source = cli.password
         || cli.password_file.is_some()
-        || std::env::var("SANITIZE_PASSWORD").is_ok_and(|v| !v.is_empty());
+        || std::env::var("SCOUR_SECRETS_PASSWORD").is_ok_and(|v| !v.is_empty());
     if has_password_source && !cli.encrypted_secrets && !cli.deterministic {
         return Err(
-            "password input (--password, --password-file, or SANITIZE_PASSWORD) \
+            "password input (--password, --password-file, or SCOUR_SECRETS_PASSWORD) \
              was provided but --encrypted-secrets is not set.\n\
              Add --encrypted-secrets to decrypt the secrets file, or remove \
              password inputs to use a plaintext file."
@@ -796,7 +796,7 @@ pub(crate) fn validate_args(cli: &Cli) -> Result<(), String> {
         if !is_builtin && !is_user {
             return Err(format!(
                 "unknown --app '{}'. Built-in apps: {}. \
-                 Add a custom app at $SANITIZE_APPS_DIR/{} (secrets.yaml / profile.yaml).",
+                 Add a custom app at $SCOUR_SECRETS_APPS_DIR/{} (secrets.yaml / profile.yaml).",
                 app,
                 builtin_app_names().join(", "),
                 app,
@@ -850,7 +850,7 @@ pub(crate) fn validate_args(cli: &Cli) -> Result<(), String> {
 
     if cli.llm_endpoint.is_some() && cli.llm_model.is_none() {
         return Err(
-            "--llm-endpoint requires --llm-model (or SANITIZE_LLM_MODEL).\n\
+            "--llm-endpoint requires --llm-model (or SCOUR_SECRETS_LLM_MODEL).\n\
              Example: --llm-model phi4-mini"
                 .into(),
         );

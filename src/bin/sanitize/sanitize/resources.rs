@@ -44,7 +44,7 @@ fn load_secrets_data(
 
     let secrets_format = SecretsFormat::from_extension(secrets_path.to_string_lossy().as_ref());
     let (((patterns, warnings), allow_patterns), was_encrypted) =
-        rust_sanitize::secrets::load_secrets_auto(
+        scour_secrets::secrets::load_secrets_auto(
             &raw_bytes,
             password,
             secrets_format,
@@ -138,7 +138,7 @@ pub(super) struct RunResources {
     pub(super) scanner: Arc<StreamScanner>,
     pub(super) store: Arc<MappingStore>,
     pub(super) registry: Arc<ProcessorRegistry>,
-    pub(super) profiles: Vec<rust_sanitize::FileTypeProfile>,
+    pub(super) profiles: Vec<scour_secrets::FileTypeProfile>,
     pub(super) entropy_configs: Arc<Vec<EntropyConfig>>,
     pub(super) entropy_histogram_acc: Option<Arc<Mutex<Vec<EntropyBuckets>>>>,
     pub(super) base_patterns: Vec<ScanPattern>,
@@ -256,11 +256,11 @@ pub(super) fn load_run_resources(
         all_allow_patterns.extend(common_allow_patterns());
     }
 
-    let allowlist: Option<Arc<rust_sanitize::allowlist::AllowlistMatcher>> =
+    let allowlist: Option<Arc<scour_secrets::allowlist::AllowlistMatcher>> =
         if all_allow_patterns.is_empty() {
             None
         } else {
-            let al_result = rust_sanitize::allowlist::AllowlistMatcher::new(all_allow_patterns);
+            let al_result = scour_secrets::allowlist::AllowlistMatcher::new(all_allow_patterns);
             for w in &al_result.warnings {
                 warn!(warning = %w, "allowlist pattern warning");
             }
@@ -269,9 +269,9 @@ pub(super) fn load_run_resources(
             Some(matcher)
         };
     let length_policy = if cli.randomize_length {
-        rust_sanitize::LengthPolicy::Randomized
+        scour_secrets::LengthPolicy::Randomized
     } else {
-        rust_sanitize::LengthPolicy::Preserve
+        scour_secrets::LengthPolicy::Preserve
     };
     let store = build_store(
         cli.deterministic,

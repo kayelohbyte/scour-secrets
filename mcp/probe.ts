@@ -1,6 +1,6 @@
 #!/usr/bin/env -S deno run --allow-run --allow-env --allow-read --allow-write
 /**
- * Manual MCP probe — fire a single tool call at the sanitize-engine server and
+ * Manual MCP probe — fire a single tool call at the scour-secrets-engine server and
  * print the result. A reusable stand-in for an AI agent, for poking the server
  * by hand (e.g. checking that path guards block a bypass, or that a legitimate
  * file still sanitizes) without writing a one-off driver each time.
@@ -10,9 +10,9 @@
  *
  * Options:
  *   --env KEY=VALUE     set a server env var (repeatable), e.g.
- *                       --env SANITIZE_MCP_FILES_DENYLIST=secrets/**
- *   --bin <path>        path to the `sanitize` binary
- *                       (default: $SANITIZE_BIN or ../target/release/sanitize)
+ *                       --env SCOUR_SECRETS_MCP_FILES_DENYLIST=secrets/**
+ *   --bin <path>        path to the `scour-secrets` binary
+ *                       (default: $SCOUR_SECRETS_BIN or ../target/release/scour-secrets)
  *   --server <path>     server entrypoint or compiled binary
  *                       (default: ./src/index.ts)
  *   --compiled          execute --server directly as a compiled binary
@@ -21,7 +21,7 @@
  * Examples:
  *   deno run -A mcp/probe.ts sanitize '{"content":"key=AKIA1234567890ABCD12"}'
  *   deno run -A mcp/probe.ts sanitize '{"files":["/etc/app/secrets.yaml"]}' \
- *     --env SANITIZE_MCP_FILES_DENYLIST=secrets/**
+ *     --env SCOUR_SECRETS_MCP_FILES_DENYLIST=secrets/**
  *   deno run -A mcp/probe.ts scan '{"files":["app.log"]}' --raw
  */
 
@@ -68,7 +68,7 @@ function printUsageAndExit(code: number): never {
     "",
     "Options:",
     "  --env KEY=VALUE   set a server env var (repeatable)",
-    "  --bin <path>      path to the sanitize binary",
+    "  --bin <path>      path to the scour-secrets binary",
     "  --server <path>   server entrypoint or compiled binary (default: src/index.ts)",
     "  --compiled        execute --server directly as a compiled binary",
     "  --raw             print raw JSON-RPC result instead of a summary",
@@ -96,8 +96,8 @@ async function main() {
   }
 
   const sanitizeBin = bin ??
-    Deno.env.get("SANITIZE_BIN") ??
-    join(import.meta.dirname!, "../target/release/sanitize");
+    Deno.env.get("SCOUR_SECRETS_BIN") ??
+    join(import.meta.dirname!, "../target/release/scour-secrets");
   const serverPath = server ?? join(import.meta.dirname!, "src/index.ts");
 
   const session = await startStdioSession({ serverPath, sanitizeBin, env, compiled });

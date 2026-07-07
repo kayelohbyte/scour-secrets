@@ -3,8 +3,8 @@ use std::sync::Arc;
 use tracing::{info, warn};
 use zeroize::Zeroizing;
 
-use rust_sanitize::secrets::{entries_to_patterns, parse_category, SecretEntry};
-use rust_sanitize::{
+use scour_secrets::secrets::{entries_to_patterns, parse_category, SecretEntry};
+use scour_secrets::{
     atomic_write, FieldNameSignal, HmacGenerator, LengthPolicy, MappingStore, RandomGenerator,
     ReplacementGenerator, ScanConfig, ScanPattern, StreamScanner, DEFAULT_FIELD_SIGNAL_THRESHOLD,
 };
@@ -13,14 +13,14 @@ use rust_sanitize::{
 ///
 /// To reproduce deterministic output created before per-install salts existed
 /// (pre-0.14.2), set this to the legacy constant
-/// `rust-sanitize:deterministic-seed:v1`.
-const SEED_SALT_ENV: &str = "SANITIZE_SEED_SALT";
+/// `scour-secrets:deterministic-seed:v1`.
+const SEED_SALT_ENV: &str = "SCOUR_SECRETS_SEED_SALT";
 
 /// Resolve the deterministic seed salt used as the PBKDF2 salt.
 ///
 /// Priority:
 /// 1. `--seed-salt-file <PATH>` — file contents used verbatim.
-/// 2. `SANITIZE_SEED_SALT` env var — string bytes used verbatim.
+/// 2. `SCOUR_SECRETS_SEED_SALT` env var — string bytes used verbatim.
 /// 3. Persisted per-install salt at `<config_dir>/seed-salt`.
 /// 4. Freshly generated 32 random bytes, persisted (mode 0600) for reuse.
 ///
@@ -153,7 +153,7 @@ pub(crate) fn build_store(
     password: Option<&str>,
     seed_salt_file: Option<&Path>,
     max_mappings: usize,
-    allowlist: Option<Arc<rust_sanitize::allowlist::AllowlistMatcher>>,
+    allowlist: Option<Arc<scour_secrets::allowlist::AllowlistMatcher>>,
     length_policy: LengthPolicy,
 ) -> std::result::Result<Arc<MappingStore>, String> {
     let generator: Arc<dyn ReplacementGenerator> = if deterministic {
@@ -169,7 +169,7 @@ pub(crate) fn build_store(
             }
             None => {
                 return Err(
-                    "--deterministic requires --password (or SANITIZE_PASSWORD). \
+                    "--deterministic requires --password (or SCOUR_SECRETS_PASSWORD). \
                      A deterministic seed cannot be derived without a key."
                         .into(),
                 );
@@ -537,10 +537,10 @@ mod tests {
     #[test]
     fn seed_salt_file_used_verbatim() {
         let mut f = tempfile::NamedTempFile::new().unwrap();
-        f.write_all(b"rust-sanitize:deterministic-seed:v1").unwrap();
+        f.write_all(b"scour-secrets:deterministic-seed:v1").unwrap();
         f.flush().unwrap();
         let salt = resolve_seed_salt(Some(f.path())).unwrap();
-        assert_eq!(&salt[..], b"rust-sanitize:deterministic-seed:v1");
+        assert_eq!(&salt[..], b"scour-secrets:deterministic-seed:v1");
     }
 
     #[test]
@@ -564,7 +564,7 @@ mod tests {
         // leave a half-written/empty file that a parallel run would load as zero
         // patterns (an unsanitized passthrough). Every writer must succeed and
         // the final file must always parse to the full balanced entry set.
-        use rust_sanitize::secrets::parse_secrets;
+        use scour_secrets::secrets::parse_secrets;
         use std::sync::{Arc, Barrier};
         use std::thread;
 
@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn length_policy_applies_to_both_generator_modes() {
-        use rust_sanitize::category::Category;
+        use scour_secrets::category::Category;
 
         // Use an explicit seed-salt file for the deterministic arm so the test
         // never touches the per-install config dir.

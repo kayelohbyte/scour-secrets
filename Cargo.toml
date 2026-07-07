@@ -1,12 +1,12 @@
 [package]
-name = "rust-sanitize"
+name = "scour-secrets"
 version = "0.15.0"
 edition = "2021"
 rust-version = "1.86"
 description = "Deterministic one-way data sanitization engine"
 license = "Apache-2.0"
-repository = "https://github.com/kayelohbyte/rust-sanitize"
-documentation = "https://docs.rs/rust-sanitize"
+repository = "https://github.com/kayelohbyte/scour-secrets"
+documentation = "https://docs.rs/scour-secrets"
 readme = "README.md"
 categories = ["command-line-utilities", "text-processing"]
 keywords = ["sanitization", "redaction", "privacy", "pii"]
@@ -14,14 +14,14 @@ exclude = ["tests/", "fuzz/", ".github/", "docs/", "target/"]
 autobins = false
 
 [lib]
-name = "rust_sanitize"
+name = "scour_secrets"
 path = "src/lib.rs"
 
 [features]
 # Full build (CLI binary + all processors). This is what `cargo install` and
 # the release artifacts produce.
 default = ["cli", "archive", "structured"]
-# CLI binary deps. Implies all processors so the installed `sanitize` tool is
+# CLI binary deps. Implies all processors so the installed `scour-secrets` tool is
 # fully featured. Library-only users can drop this via `default-features = false`.
 cli = ["dep:clap", "dep:ureq", "dep:walkdir", "dep:ctrlc", "dep:rpassword", "archive", "structured"]
 # Archive processing (zip / tar / tar.gz).
@@ -94,7 +94,7 @@ name = "streaming_bench"
 harness = false
 
 [[bin]]
-name = "sanitize"
+name = "scour-secrets"
 path = "src/bin/sanitize/main.rs"
 required-features = ["cli"]
 

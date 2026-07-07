@@ -38,9 +38,9 @@ MappingStore
 Use `CategoryAwareStrategy` when you want the same output quality as the CLI:
 
 ```rust
-use rust_sanitize::strategy::{CategoryAwareStrategy, StrategyGenerator, EntropyMode};
-use rust_sanitize::store::MappingStore;
-use rust_sanitize::category::Category;
+use scour_secrets::strategy::{CategoryAwareStrategy, StrategyGenerator, EntropyMode};
+use scour_secrets::store::MappingStore;
+use scour_secrets::category::Category;
 use std::sync::Arc;
 
 let mode = EntropyMode::Deterministic { key: [42u8; 32] };
@@ -58,9 +58,9 @@ assert!(replaced.contains('@'));
 Use a simpler strategy when structure doesn't matter:
 
 ```rust
-use rust_sanitize::strategy::{PreserveLength, StrategyGenerator, EntropyMode};
-use rust_sanitize::store::MappingStore;
-use rust_sanitize::category::Category;
+use scour_secrets::strategy::{PreserveLength, StrategyGenerator, EntropyMode};
+use scour_secrets::store::MappingStore;
+use scour_secrets::category::Category;
 use std::sync::Arc;
 
 let mode = EntropyMode::Deterministic { key: [42u8; 32] };
@@ -79,8 +79,8 @@ assert_eq!(replaced.len(), "alice@corp.com".len());
 Implement the `Strategy` trait and wrap it in `StrategyGenerator`:
 
 ```rust
-use rust_sanitize::category::Category;
-use rust_sanitize::strategy::Strategy;
+use scour_secrets::category::Category;
+use scour_secrets::strategy::Strategy;
 
 struct Redact;
 

@@ -1,12 +1,12 @@
-//! Integration tests for the `sanitize allow-test` subcommand.
+//! Integration tests for the `scour-secrets allow-test` subcommand.
 
 use std::io::Write;
 use std::process::Command;
 
 fn run(args: &[&str]) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(args)
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -15,9 +15,9 @@ fn run(args: &[&str]) -> std::process::Output {
 }
 
 fn run_stdin(args: &[&str], input: &[u8]) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(args)
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

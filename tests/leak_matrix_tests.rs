@@ -106,15 +106,15 @@ fn run(files: &[(&str, Vec<u8>)], profile: &str) -> BTreeMap<String, String> {
         outdir.to_str().unwrap().into(),
     ]);
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(&args)
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .output()
         .unwrap();
     assert!(
         out.status.success(),
-        "sanitize failed; stderr:\n{}",
+        "scour-secrets failed; stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
 

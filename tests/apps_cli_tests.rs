@@ -1,14 +1,14 @@
-//! Integration tests for `sanitize apps` subcommands: list, add, remove, dir.
+//! Integration tests for `scour-secrets apps` subcommands: list, add, remove, dir.
 
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
 
 fn run_with_apps_dir(args: &[&str], apps_dir: &str) -> std::process::Output {
-    Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(args)
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_APPS_DIR", apps_dir)
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_APPS_DIR", apps_dir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

@@ -155,7 +155,7 @@ mod tests {
     use std::path::Path;
 
     fn default_cli() -> Cli {
-        Cli::try_parse_from(["sanitize", "file.txt"]).unwrap()
+        Cli::try_parse_from(["scour-secrets", "file.txt"]).unwrap()
     }
 
     // ── apply_settings_layer ─────────────────────────────────────────────────
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn settings_layer_does_not_override_cli_flags() {
-        let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--fail-on-match"]).unwrap();
+        let mut cli = Cli::try_parse_from(["scour-secrets", "file.txt", "--fail-on-match"]).unwrap();
         assert!(cli.fail_on_match);
         apply_settings_layer(
             &mut cli,
@@ -191,7 +191,7 @@ mod tests {
 
     #[test]
     fn settings_layer_does_not_override_explicit_threads() {
-        let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--threads", "2"]).unwrap();
+        let mut cli = Cli::try_parse_from(["scour-secrets", "file.txt", "--threads", "2"]).unwrap();
         apply_settings_layer(
             &mut cli,
             SanitizeConfig {
@@ -217,7 +217,7 @@ mod tests {
 
     #[test]
     fn settings_layer_merges_app_additively_with_cli() {
-        let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--app", "kubernetes"]).unwrap();
+        let mut cli = Cli::try_parse_from(["scour-secrets", "file.txt", "--app", "kubernetes"]).unwrap();
         apply_settings_layer(
             &mut cli,
             SanitizeConfig {
@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn settings_layer_does_not_override_explicit_concrete_field() {
         let mut cli =
-            Cli::try_parse_from(["sanitize", "file.txt", "--max-archive-depth", "2"]).unwrap();
+            Cli::try_parse_from(["scour-secrets", "file.txt", "--max-archive-depth", "2"]).unwrap();
         apply_settings_layer(
             &mut cli,
             SanitizeConfig {
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn project_layer_adds_app_bundles_additively() {
-        let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--app", "kubernetes"]).unwrap();
+        let mut cli = Cli::try_parse_from(["scour-secrets", "file.txt", "--app", "kubernetes"]).unwrap();
         let pc = SanitizeConfig {
             app: vec!["gitlab".into()],
             ..Default::default()
@@ -295,7 +295,7 @@ mod tests {
 
     #[test]
     fn project_layer_deduplicates_app_bundles() {
-        let mut cli = Cli::try_parse_from(["sanitize", "file.txt", "--app", "gitlab"]).unwrap();
+        let mut cli = Cli::try_parse_from(["scour-secrets", "file.txt", "--app", "gitlab"]).unwrap();
         let pc = SanitizeConfig {
             app: vec!["gitlab".into()],
             ..Default::default()
@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn project_layer_does_not_override_cli_secrets_file() {
         let mut cli =
-            Cli::try_parse_from(["sanitize", "file.txt", "-s", "/explicit/secrets.yaml"]).unwrap();
+            Cli::try_parse_from(["scour-secrets", "file.txt", "-s", "/explicit/secrets.yaml"]).unwrap();
         let pc = SanitizeConfig {
             secrets_file: Some(PathBuf::from("project_secrets.yaml")),
             ..Default::default()
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn project_layer_adds_allow_additively() {
         let mut cli =
-            Cli::try_parse_from(["sanitize", "file.txt", "--allow", "localhost"]).unwrap();
+            Cli::try_parse_from(["scour-secrets", "file.txt", "--allow", "localhost"]).unwrap();
         let pc = SanitizeConfig {
             allow: vec!["*.internal".into()],
             ..Default::default()

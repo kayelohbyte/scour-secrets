@@ -1,28 +1,28 @@
 #!/usr/bin/env -S deno run --allow-run --allow-env --allow-read --allow-write
 /**
- * MCP server for sanitize-engine.
+ * MCP server for scour-secrets-engine.
  *
- * Wraps the `sanitize` CLI binary as a subprocess so all sensitive data
+ * Wraps the `scour-secrets` CLI binary as a subprocess so all sensitive data
  * processing stays inside the audited Rust implementation. TypeScript is
  * responsible only for MCP protocol framing.
  *
  * Flags:
  *   --http [port]                   listen on HTTP at http://127.0.0.1:<port>/mcp instead of stdio.
- *                                   Port defaults to 6277 when omitted. Requires SANITIZE_MCP_HTTP_TOKEN to be set.
+ *                                   Port defaults to 6277 when omitted. Requires SCOUR_SECRETS_MCP_HTTP_TOKEN to be set.
  *
  * Environment variables:
- *   SANITIZE_BIN                    path to the `sanitize` binary (default: "sanitize")
- *   SANITIZE_MCP_MAX_CONTENT_BYTES  per-call content size limit in bytes (default: 524288)
- *   SANITIZE_MCP_TIMEOUT_MS         subprocess timeout in milliseconds (default: 60000)
- *   SANITIZE_MCP_THREADS            worker thread cap for every sanitize invocation (default: unset = CLI default = logical CPUs)
- *   SANITIZE_MCP_MAX_ARCHIVE_DEPTH  default maximum archive nesting depth (default: 5; matches CLI default)
- *   SANITIZE_SECRETS_DIR            base directory for namespace resolution (required for `namespace` param)
- *   SANITIZE_MCP_HTTP_TOKEN         bearer token required for HTTP daemon mode (must be set when using --http)
- *   SANITIZE_MCP_FILES_DENYLIST     comma-separated glob patterns for file paths that the `files` param must never match
+ *   SCOUR_SECRETS_BIN                    path to the `scour-secrets` binary (default: "scour-secrets")
+ *   SCOUR_SECRETS_MCP_MAX_CONTENT_BYTES  per-call content size limit in bytes (default: 524288)
+ *   SCOUR_SECRETS_MCP_TIMEOUT_MS         subprocess timeout in milliseconds (default: 60000)
+ *   SCOUR_SECRETS_MCP_THREADS            worker thread cap for every sanitize invocation (default: unset = CLI default = logical CPUs)
+ *   SCOUR_SECRETS_MCP_MAX_ARCHIVE_DEPTH  default maximum archive nesting depth (default: 5; matches CLI default)
+ *   SCOUR_SECRETS_SECRETS_DIR            base directory for namespace resolution (required for `namespace` param)
+ *   SCOUR_SECRETS_MCP_HTTP_TOKEN         bearer token required for HTTP daemon mode (must be set when using --http)
+ *   SCOUR_SECRETS_MCP_FILES_DENYLIST     comma-separated glob patterns for file paths that the `files` param must never match
  *                                   (e.g. "secrets/**,*.key,*.pem"). Patterns without '/' also match the basename.
  *
  * Namespace directory layout:
- *   $SANITIZE_SECRETS_DIR/
+ *   $SCOUR_SECRETS_SECRETS_DIR/
  *     {namespace}/
  *       secrets.yaml        (or .json / .toml / .yaml.enc / .json.enc / .toml.enc)
  *       profile.yaml        (optional; loaded automatically)
@@ -43,7 +43,7 @@ import { scrubEnv } from "./env.ts";
 // Configuration
 // ---------------------------------------------------------------------------
 
-const SANITIZE_BIN = Deno.env.get("SANITIZE_BIN") ?? "sanitize";
+const SCOUR_SECRETS_BIN = Deno.env.get("SCOUR_SECRETS_BIN") ?? "scour-secrets";
 
 /** Parse a positive integer from an env var string; returns fallback on NaN, 0, or negative. */
 function parsePositiveInt(raw: string | undefined, fallback: number): number {
@@ -53,27 +53,27 @@ function parsePositiveInt(raw: string | undefined, fallback: number): number {
 }
 
 const MAX_CONTENT_BYTES = parsePositiveInt(
-  Deno.env.get("SANITIZE_MCP_MAX_CONTENT_BYTES"), 524288,
+  Deno.env.get("SCOUR_SECRETS_MCP_MAX_CONTENT_BYTES"), 524288,
 );
 const MAX_ARCHIVE_DEPTH = parsePositiveInt(
-  Deno.env.get("SANITIZE_MCP_MAX_ARCHIVE_DEPTH"), 5,
+  Deno.env.get("SCOUR_SECRETS_MCP_MAX_ARCHIVE_DEPTH"), 5,
 );
 // When set, appended to every processing invocation to cap CPU usage.
 // The value is validated and re-serialised as a decimal integer to prevent flag injection.
 const THREADS_ARGS: string[] = (() => {
-  const t = Deno.env.get("SANITIZE_MCP_THREADS");
+  const t = Deno.env.get("SCOUR_SECRETS_MCP_THREADS");
   if (!t) return [];
   const n = parseInt(t, 10);
   return Number.isFinite(n) && n > 0 ? ["--threads", String(n)] : [];
 })();
-const SANITIZE_SECRETS_DIR = Deno.env.get("SANITIZE_SECRETS_DIR");
-const SANITIZE_SECRETS_DIR_RESOLVED = SANITIZE_SECRETS_DIR
-  ? canonicalPath(SANITIZE_SECRETS_DIR)
+const SCOUR_SECRETS_SECRETS_DIR = Deno.env.get("SCOUR_SECRETS_SECRETS_DIR");
+const SCOUR_SECRETS_SECRETS_DIR_RESOLVED = SCOUR_SECRETS_SECRETS_DIR
+  ? canonicalPath(SCOUR_SECRETS_SECRETS_DIR)
   : undefined;
 
 // Operator-configured denylist: comma-separated glob patterns.
 const FILES_DENYLIST: RegExp[] = (() => {
-  const raw = Deno.env.get("SANITIZE_MCP_FILES_DENYLIST");
+  const raw = Deno.env.get("SCOUR_SECRETS_MCP_FILES_DENYLIST");
   if (!raw) return [];
   return raw
     .split(",")
@@ -87,7 +87,7 @@ const SERVER_VERSION = "0.13.1";
 const DEFAULT_HTTP_PORT = 6277;
 
 const NO_STRUCTURED_HANDOFF_ARG = "--no-structured-handoff";
-const TEMP_PREFIX = "sanitize-mcp-";
+const TEMP_PREFIX = "scour-secrets-mcp-";
 
 // ---------------------------------------------------------------------------
 // Subprocess helpers
@@ -103,18 +103,18 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 /**
- * Spawn the sanitize binary and collect stdout/stderr.
+ * Spawn the scour-secrets binary and collect stdout/stderr.
  * Pass `stdinData` to pipe content through stdin (the "-" input mode).
  * Pass `null` when the CLI is reading a file directly — stdin is left closed.
  * The subprocess never receives sensitive content via argv —
  * only via the stdin pipe or a mode-0600 temp file.
  */
 const SUBPROCESS_TIMEOUT_MS = parsePositiveInt(
-  Deno.env.get("SANITIZE_MCP_TIMEOUT_MS"), 60000,
+  Deno.env.get("SCOUR_SECRETS_MCP_TIMEOUT_MS"), 60000,
 );
 
 /**
- * Build a minimal environment for the sanitize subprocess. Scrubbing logic
+ * Build a minimal environment for the scour-secrets subprocess. Scrubbing logic
  * lives in ./env.ts (pure + unit-tested); here we just feed it the live
  * parent environment.
  */
@@ -136,7 +136,7 @@ async function runSanitize(
   stdinData: string | null,
   extraEnv: Record<string, string> = {},
 ): Promise<RunResult> {
-  const cmd = new Deno.Command(SANITIZE_BIN, {
+  const cmd = new Deno.Command(SCOUR_SECRETS_BIN, {
     args,
     stdin: stdinData !== null ? "piped" : "null",
     stdout: "piped",
@@ -164,7 +164,7 @@ async function runSanitize(
   try {
     const { stdout, stderr, code } = await child.output();
     if (timedOut) {
-      throw new Error(`sanitize subprocess timed out after ${SUBPROCESS_TIMEOUT_MS / 1000}s`);
+      throw new Error(`scour-secrets subprocess timed out after ${SUBPROCESS_TIMEOUT_MS / 1000}s`);
     }
     return {
       stdout: decoder.decode(stdout),
@@ -267,9 +267,9 @@ function pathMatchesDenylist(original: string, canonical: string): boolean {
 
 /**
  * Guard `files` entries against three threat classes:
- *   1. Paths inside $SANITIZE_SECRETS_DIR (operator secrets store)
+ *   1. Paths inside $SCOUR_SECRETS_SECRETS_DIR (operator secrets store)
  *   2. .password files (namespace encryption keys)
- *   3. Operator-configured denylist patterns (SANITIZE_MCP_FILES_DENYLIST)
+ *   3. Operator-configured denylist patterns (SCOUR_SECRETS_MCP_FILES_DENYLIST)
  *
  * All three checks run against the canonical, symlink-resolved path so a
  * symlink in an allowed directory cannot reach a protected target.
@@ -281,9 +281,9 @@ function validateFilesPath(p: string): void {
     throw new Error(`files path '${p}' is not permitted: .password files cannot be processed`);
   }
 
-  if (SANITIZE_SECRETS_DIR_RESOLVED) {
-    if (canonical === SANITIZE_SECRETS_DIR_RESOLVED || canonical.startsWith(SANITIZE_SECRETS_DIR_RESOLVED + "/")) {
-      throw new Error(`files path '${p}' is not permitted: path resolves inside SANITIZE_SECRETS_DIR`);
+  if (SCOUR_SECRETS_SECRETS_DIR_RESOLVED) {
+    if (canonical === SCOUR_SECRETS_SECRETS_DIR_RESOLVED || canonical.startsWith(SCOUR_SECRETS_SECRETS_DIR_RESOLVED + "/")) {
+      throw new Error(`files path '${p}' is not permitted: path resolves inside SCOUR_SECRETS_SECRETS_DIR`);
     }
   }
 
@@ -298,7 +298,7 @@ function checkContentSize(content: string, label = "content"): void {
   if (bytes > MAX_CONTENT_BYTES) {
     throw new Error(
       `${label} exceeds maximum allowed size (${bytes} > ${MAX_CONTENT_BYTES} bytes). ` +
-        `Increase SANITIZE_MCP_MAX_CONTENT_BYTES to allow larger inputs.`,
+        `Increase SCOUR_SECRETS_MCP_MAX_CONTENT_BYTES to allow larger inputs.`,
     );
   }
 }
@@ -394,14 +394,14 @@ async function resolveNamespace(namespace: string): Promise<ResolvedNamespace> {
     );
   }
 
-  if (!SANITIZE_SECRETS_DIR) {
+  if (!SCOUR_SECRETS_SECRETS_DIR) {
     throw new Error(
-      "SANITIZE_SECRETS_DIR is not set; cannot resolve namespace. " +
+      "SCOUR_SECRETS_SECRETS_DIR is not set; cannot resolve namespace. " +
         "Set this environment variable to the directory containing per-namespace secret files.",
     );
   }
 
-  const nsDir = join(SANITIZE_SECRETS_DIR_RESOLVED!, namespace);
+  const nsDir = join(SCOUR_SECRETS_SECRETS_DIR_RESOLVED!, namespace);
 
   // Resolve secrets file — encrypted variants take priority.
   const secretsCandidates = [
@@ -560,7 +560,7 @@ function appendNsSettingsArgs(args: string[], s: NsSettings): void {
   if (s.max_context_matches !== undefined) args.push("--max-context-matches", String(s.max_context_matches));
   // max_archive_depth is intentionally omitted here: it is threaded through the
   // effectiveMaxArchiveDepth variable in each tool handler so the MCP-level default
-  // (SANITIZE_MCP_MAX_ARCHIVE_DEPTH) does not silently override a namespace setting.
+  // (SCOUR_SECRETS_MCP_MAX_ARCHIVE_DEPTH) does not silently override a namespace setting.
 }
 
 // ---------------------------------------------------------------------------
@@ -681,7 +681,7 @@ async function toolSanitize(params: {
   const tmpDir = await Deno.makeTempDir({ prefix: TEMP_PREFIX });
   try {
     const env: Record<string, string> = {};
-    // --no-structured-handoff: suppress writing sanitize-discovered.yaml to cwd.
+    // --no-structured-handoff: suppress writing scour-secrets-discovered.yaml to cwd.
     const commonArgs: string[] = [NO_STRUCTURED_HANDOFF_ARG];
 
     if (params.format) commonArgs.push("--format", params.format);
@@ -693,7 +693,7 @@ async function toolSanitize(params: {
       commonArgs.push("-s", ns.secretsFile);
       if (ns.encrypted) {
         commonArgs.push("--encrypted-secrets");
-        env.SANITIZE_PASSWORD = ns.password!;
+        env.SCOUR_SECRETS_PASSWORD = ns.password!;
       }
       // Explicit profile param overrides namespace profile.
       const profileToUse = params.profile ?? ns.profileFile;
@@ -704,7 +704,7 @@ async function toolSanitize(params: {
     } else {
       // Seed/deterministic only applies outside namespace mode.
       if (params.seed) {
-        env.SANITIZE_PASSWORD = params.seed;
+        env.SCOUR_SECRETS_PASSWORD = params.seed;
         commonArgs.push("--deterministic");
       }
       if (params.profile) commonArgs.push("--profile", params.profile);
@@ -790,7 +790,7 @@ async function toolSanitize(params: {
         // --llm writes the formatted prompt to stdout instead of the output file.
         const result = await runSanitize(["-", ...commonArgs], params.content!, env);
         if (result.exitCode !== 0) {
-          throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+          throw new Error(`scour-secrets exited with code ${result.exitCode}: ${safeStderr(result)}`);
         }
         if (reportPath) {
           return { content: result.stdout, report: await readReport(reportPath, params.report_format) };
@@ -801,7 +801,7 @@ async function toolSanitize(params: {
         // Write directly to caller's path — content never returned to LLM.
         const result = await runSanitize(["-", "--output", params.output_file, ...commonArgs], params.content!, env);
         if (result.exitCode !== 0) {
-          throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+          throw new Error(`scour-secrets exited with code ${result.exitCode}: ${safeStderr(result)}`);
         }
         const stat = await Deno.stat(params.output_file);
         const base: SanitizeResult = { output: params.output_file, size: stat.size, written: true };
@@ -811,7 +811,7 @@ async function toolSanitize(params: {
       const outputPath = join(tmpDir, "output.txt");
       const result = await runSanitize(["-", "--output", outputPath, ...commonArgs], params.content!, env);
       if (result.exitCode !== 0) {
-        throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+        throw new Error(`scour-secrets exited with code ${result.exitCode}: ${safeStderr(result)}`);
       }
       const content = await Deno.readTextFile(outputPath);
       if (reportPath) {
@@ -849,7 +849,7 @@ async function toolSanitize(params: {
       }
       const result = await runSanitize([...inputArgs, "--output", diskOutputTarget, ...commonArgs], null, env);
       if (result.exitCode !== 0) {
-        throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+        throw new Error(`scour-secrets exited with code ${result.exitCode}: ${safeStderr(result)}`);
       }
       if (params.llm_template) {
         if (reportPath) return { content: result.stdout, report: await readReport(reportPath, params.report_format) };
@@ -872,7 +872,7 @@ async function toolSanitize(params: {
     const result = await runSanitize([...inputArgs, "--output", outputDir, ...commonArgs], null, env);
 
     if (result.exitCode !== 0) {
-      throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+      throw new Error(`scour-secrets exited with code ${result.exitCode}: ${safeStderr(result)}`);
     }
 
     // When --llm is active, the formatted prompt is on stdout — return it directly.
@@ -983,7 +983,7 @@ async function toolScan(params: {
       commonArgs.push("-s", ns.secretsFile);
       if (ns.encrypted) {
         commonArgs.push("--encrypted-secrets");
-        env.SANITIZE_PASSWORD = ns.password!;
+        env.SCOUR_SECRETS_PASSWORD = ns.password!;
       }
       // Explicit profile param overrides namespace profile.
       const profileToUse = params.profile ?? ns.profileFile;
@@ -1064,7 +1064,7 @@ async function toolScan(params: {
       return { secrets_detected: true, report: JSON.parse(await Deno.readTextFile(reportPath)) };
     }
     if (result.exitCode !== 0) {
-      throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+      throw new Error(`scour-secrets exited with code ${result.exitCode}: ${safeStderr(result)}`);
     }
 
     const report = JSON.parse(await Deno.readTextFile(reportPath));
@@ -1122,7 +1122,7 @@ async function toolStripConfigValues(params: {
       const outputPath = join(tmpDir, "output.txt");
       const result = await runSanitize(["-", "--output", outputPath, ...stripArgs], params.content!);
       if (result.exitCode !== 0) {
-        throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+        throw new Error(`scour-secrets exited with code ${result.exitCode}: ${safeStderr(result)}`);
       }
       return await Deno.readTextFile(outputPath);
     }
@@ -1131,7 +1131,7 @@ async function toolStripConfigValues(params: {
     await Deno.mkdir(outputDir);
     const result = await runSanitize([...params.files!, "--output", outputDir, ...stripArgs], null);
     if (result.exitCode !== 0) {
-      throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+      throw new Error(`scour-secrets exited with code ${result.exitCode}: ${safeStderr(result)}`);
     }
 
     const usedNames = new Set<string>();
@@ -1175,7 +1175,7 @@ async function toolTestAllowlist(params: {
   try {
     const result = await runSanitize(args, null);
     if (result.exitCode !== 0) {
-      throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+      throw new Error(`scour-secrets exited with code ${result.exitCode}: ${safeStderr(result)}`);
     }
     return JSON.parse(result.stdout);
   } finally {
@@ -1191,7 +1191,7 @@ async function toolListApps(): Promise<string> {
   try {
     const result = await runSanitize(["apps"], null);
     if (result.exitCode !== 0) {
-      throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+      throw new Error(`scour-secrets exited with code ${result.exitCode}: ${safeStderr(result)}`);
     }
     return result.stdout;
   } finally {
@@ -1233,14 +1233,14 @@ async function toolBuildSecrets(params: {
       if (params.overwrite) args.push("--overwrite");
       const result = await runSanitize(args, null);
       if (result.exitCode !== 0) {
-        throw new Error(`sanitize template failed: ${safeStderr(result)}`);
+        throw new Error(`scour-secrets template failed: ${safeStderr(result)}`);
       }
       content = await Deno.readTextFile(params.output_path);
     } else {
       content =
         "# sanitize secrets file\n" +
         "# Generated by build_secrets. Edit patterns as needed.\n" +
-        "# Run: sanitize <input> -s " +
+        "# Run: scour-secrets <input> -s " +
         params.output_path +
         " -o <output>\n";
     }
@@ -1297,7 +1297,7 @@ async function toolTestPattern(params: {
       args.push("-s", ns.secretsFile);
       if (ns.encrypted) {
         args.push("--encrypted-secrets");
-        env.SANITIZE_PASSWORD = ns.password!;
+        env.SCOUR_SECRETS_PASSWORD = ns.password!;
       }
     } else {
       if (params.secrets_file) {
@@ -1332,7 +1332,7 @@ async function toolTestPattern(params: {
           return JSON.parse(result.stdout);
         } catch { /* fall through */ }
       }
-      throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+      throw new Error(`scour-secrets exited with code ${result.exitCode}: ${safeStderr(result)}`);
     }
     return JSON.parse(result.stdout);
   } finally {
@@ -1371,7 +1371,7 @@ const NamespaceSchema = z
   .string()
   .optional()
   .describe(
-    "Customer or tenant namespace for operator/multi-tenant deployments where each customer or environment has its own pre-configured secrets file. Resolves secrets, profile, and password from $SANITIZE_SECRETS_DIR/{namespace}/. Takes priority over secrets_file and patterns. Must be alphanumeric with hyphens/underscores only. Requires SANITIZE_SECRETS_DIR to be set.",
+    "Customer or tenant namespace for operator/multi-tenant deployments where each customer or environment has its own pre-configured secrets file. Resolves secrets, profile, and password from $SCOUR_SECRETS_SECRETS_DIR/{namespace}/. Takes priority over secrets_file and patterns. Must be alphanumeric with hyphens/underscores only. Requires SCOUR_SECRETS_SECRETS_DIR to be set.",
   );
 
 const ArchiveFilterSchema = z.object({
@@ -1394,10 +1394,10 @@ const SanitizeSchema = {
     "PREFERRED: one or more file paths to sanitize (absolute or relative). Use this whenever a file path is available instead of reading the file and passing its content inline. Accepts plain files, archives (.zip, .tar.gz, etc.), or a mix. Archives are extracted and sanitized recursively. Use `archive_filters` to restrict which entries inside an archive are processed. Mutually exclusive with `content`. Raw file content never enters the LLM context — the sanitize engine processes files directly.",
   ),
   output_file: z.string().optional().describe(
-    "Write the sanitized output directly to this file path. The sanitized content is NOT returned in the response — only the output path and byte size are reported. Mirrors `sanitize <input> -o <file>`. Valid for a single `files` entry or `content` input. Mutually exclusive with `output_dir`.",
+    "Write the sanitized output directly to this file path. The sanitized content is NOT returned in the response — only the output path and byte size are reported. Mirrors `scour-secrets <input> -o <file>`. Valid for a single `files` entry or `content` input. Mutually exclusive with `output_dir`.",
   ),
   output_dir: z.string().optional().describe(
-    "Write sanitized outputs directly into this directory. The sanitized content is NOT returned in the response — only the output paths are reported. Mirrors `sanitize <inputs> -o <dir>`. Valid for any number of `files` inputs or `content` input. The directory is created if it does not exist. Mutually exclusive with `output_file`.",
+    "Write sanitized outputs directly into this directory. The sanitized content is NOT returned in the response — only the output paths are reported. Mirrors `scour-secrets <inputs> -o <dir>`. Valid for any number of `files` inputs or `content` input. The directory is created if it does not exist. Mutually exclusive with `output_file`.",
   ),
   archive_filters: z.array(ArchiveFilterSchema).optional().describe(
     "Per-archive entry filters. Each entry pairs an archive path (must match exactly what appears in `files`) with --only and/or --exclude glob patterns. Non-archive paths in `files` are unaffected.",
@@ -1664,7 +1664,7 @@ type StripParams = z.infer<z.ZodObject<typeof StripSchema>>;
 // ---------------------------------------------------------------------------
 
 const server = new McpServer({
-  name: "sanitize-engine",
+  name: "scour-secrets-engine",
   version: SERVER_VERSION,
 });
 
@@ -1770,7 +1770,7 @@ server.tool(
 
 server.tool(
   "init",
-  "One-step project setup: create a starter secrets file on disk from a built-in preset. Use this when a user wants to start using sanitize-engine — it generates a ready-to-use YAML secrets file they can run immediately. For more control (adding patterns discovered by scan), use build_secrets instead. Call init when the user asks how to create a secrets file or wants to get started quickly.",
+  "One-step project setup: create a starter secrets file on disk from a built-in preset. Use this when a user wants to start using scour-secrets-engine — it generates a ready-to-use YAML secrets file they can run immediately. For more control (adding patterns discovered by scan), use build_secrets instead. Call init when the user asks how to create a secrets file or wants to get started quickly.",
   {
     output_path: z
       .string()
@@ -1806,7 +1806,7 @@ server.tool(
         activeCalls--;
       }
       if (result.exitCode !== 0) {
-        throw new Error(`sanitize exited with code ${result.exitCode}: ${safeStderr(result)}`);
+        throw new Error(`scour-secrets exited with code ${result.exitCode}: ${safeStderr(result)}`);
       }
       const preset = params.preset ?? "generic";
       let fileContent = "";
@@ -1816,7 +1816,7 @@ server.tool(
         // Non-fatal: file read failure just omits the content preview.
       }
       const preview = fileContent ? `\n\n--- ${params.output_path} ---\n${fileContent}` : "";
-      const text = `Created secrets file: ${params.output_path}\nPreset: ${preset}\n\nNext steps:\n  1. Edit the file to add patterns specific to your environment\n  2. Run: sanitize <files> -s ${params.output_path}\n  3. Or encrypt it: sanitize encrypt ${params.output_path} ${params.output_path}.enc --password${preview}`;
+      const text = `Created secrets file: ${params.output_path}\nPreset: ${preset}\n\nNext steps:\n  1. Edit the file to add patterns specific to your environment\n  2. Run: scour-secrets <files> -s ${params.output_path}\n  3. Or encrypt it: scour-secrets encrypt ${params.output_path} ${params.output_path}.enc --password${preview}`;
       return { content: [{ type: "text" as const, text }] };
     } catch (err) {
       return {
@@ -2012,9 +2012,9 @@ if (!isNaN(httpPort)) {
     console.error(`error: --http port must be between 1 and 65535, got ${httpPort}`);
     Deno.exit(1);
   }
-  const token = Deno.env.get("SANITIZE_MCP_HTTP_TOKEN");
+  const token = Deno.env.get("SCOUR_SECRETS_MCP_HTTP_TOKEN");
   if (!token) {
-    console.error("error: SANITIZE_MCP_HTTP_TOKEN must be set when using --http");
+    console.error("error: SCOUR_SECRETS_MCP_HTTP_TOKEN must be set when using --http");
     Deno.exit(1);
   }
 
@@ -2039,7 +2039,7 @@ if (!isNaN(httpPort)) {
     onsessionclosed: () => {
       // Client sent DELETE — exit cleanly so the service manager restarts the
       // daemon and it can accept a new session on reconnect.
-      console.error("sanitize-mcp: session closed, restarting for reconnection");
+      console.error("scour-secrets-mcp: session closed, restarting for reconnection");
       Deno.exit(0);
     },
   });
@@ -2050,12 +2050,12 @@ if (!isNaN(httpPort)) {
     port: httpPort,
     onListen: ({ port }) => {
       // Explicit startup message to stderr; suppresses Deno's default stdout line.
-      console.error(`sanitize-mcp daemon ready on 127.0.0.1:${port}`);
+      console.error(`scour-secrets-mcp daemon ready on 127.0.0.1:${port}`);
     },
     onError: (err) => {
       // Log only the error class name — never the message or stack, which may
       // contain JSON-RPC payload data (file paths, etc.).
-      console.error(`sanitize-mcp: unhandled error: ${(err as Error).name}`);
+      console.error(`scour-secrets-mcp: unhandled error: ${(err as Error).name}`);
       return new Response("Internal Server Error", { status: 500 });
     },
   }, async (req) => {

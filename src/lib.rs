@@ -1,4 +1,4 @@
-//! # rust-sanitize
+//! # scour-secrets
 //!
 //! Deterministic, one-way data sanitization engine.
 //!
@@ -29,9 +29,9 @@
 //! ## Example: Store-Level Replacement
 //!
 //! ```rust
-//! use rust_sanitize::category::Category;
-//! use rust_sanitize::generator::HmacGenerator;
-//! use rust_sanitize::store::MappingStore;
+//! use scour_secrets::category::Category;
+//! use scour_secrets::generator::HmacGenerator;
+//! use scour_secrets::store::MappingStore;
 //! use std::sync::Arc;
 //!
 //! // Create a deterministic generator with a fixed seed.
@@ -53,10 +53,10 @@
 //! ## Example: Streaming Scanner
 //!
 //! ```rust
-//! use rust_sanitize::category::Category;
-//! use rust_sanitize::generator::HmacGenerator;
-//! use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
-//! use rust_sanitize::store::MappingStore;
+//! use scour_secrets::category::Category;
+//! use scour_secrets::generator::HmacGenerator;
+//! use scour_secrets::scanner::{ScanConfig, ScanPattern, StreamScanner};
+//! use scour_secrets::store::MappingStore;
 //! use std::sync::Arc;
 //!
 //! // Build patterns.
@@ -86,7 +86,7 @@
 //! surrounding lines for LLM-friendly triage:
 //!
 //! ```rust
-//! use rust_sanitize::log_context::{extract_context, LogContextConfig};
+//! use scour_secrets::log_context::{extract_context, LogContextConfig};
 //!
 //! let sanitized = "INFO  request received\n\
 //!                  ERROR disk full on /dev/sda1\n\
