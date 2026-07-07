@@ -99,7 +99,7 @@ pub(crate) struct SanitizeConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Global settings (~/.config/scour/settings.yaml)
+// Global settings (~/.config/scour-secrets/settings.yaml)
 // ---------------------------------------------------------------------------
 
 /// Load `~/.config/scour-secrets/settings.yaml`. Silently returns defaults when
@@ -196,7 +196,7 @@ fn load_yaml_config(path: &Path, label: &str) -> SanitizeConfig {
 
 /// Template written to `settings.yaml` by `scour-secrets init-hook`.
 pub(crate) const SETTINGS_TEMPLATE: &str = "\
-# sanitize settings  (~/.config/scour/settings.yaml)
+# scour-secrets settings  (~/.config/scour-secrets/settings.yaml)
 # Values here become defaults for every run. Explicit CLI flags always win.
 # All fields are optional — uncomment and edit to activate.
 
@@ -331,7 +331,7 @@ pub(crate) fn run_show_config() -> Result<(), (String, i32)> {
     if no_settings {
         println!(" (skipped — SCOUR_SECRETS_NO_SETTINGS=1)");
     } else if !settings_path.exists() {
-        println!(" (not found — run 'sanitize init-hook' to create it)");
+        println!(" (not found — run 'scour-secrets init-hook' to create it)");
     } else {
         println!();
         let s = load_settings();

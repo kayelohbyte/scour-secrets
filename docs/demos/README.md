@@ -44,7 +44,7 @@ docs/demos/
 
 `lib.sh` redirects `HOME` into a throwaway work dir, so recordings never show
 the operator's real home path or depend on a personal
-`~/.config/scour/secrets.yaml`.
+`~/.config/scour-secrets/secrets.yaml`.
 
 ## Embedding
 

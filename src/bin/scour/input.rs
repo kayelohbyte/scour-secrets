@@ -76,12 +76,12 @@ pub(crate) fn has_stdin_input(cli: &Cli) -> bool {
 /// and the output path to be created as a directory, breaking integration
 /// tests on Windows CI.
 ///
-/// The trade-off is that `echo data | sanitize file.log -o out` (a pipe
+/// The trade-off is that `echo data | scour-secrets file.log -o out` (a pipe
 /// combined with a positional file) no longer auto-detects stdin as a
 /// second input on Windows.  Users who want that behavior must add an
-/// explicit `-` token: `echo data | sanitize - file.log -o out`.  The
+/// explicit `-` token: `echo data | scour-secrets - file.log -o out`.  The
 /// common cases — solo stdin (`echo data | sanitize`) and solo file
-/// (`sanitize file.log`) — are unaffected.
+/// (`scour-secrets file.log`) — are unaffected.
 #[cfg(unix)]
 fn stdin_is_pipe() -> bool {
     use nix::sys::stat::fstat;
@@ -693,9 +693,9 @@ pub(crate) fn parse_archive_filters(
 pub(crate) fn validate_args(cli: &Cli) -> Result<(), String> {
     if has_stdin_input(cli) && io::stdin().is_terminal() {
         return Err("stdin was requested but stdin is a terminal.\n\
-             Provide file path(s) only, or pipe data into sanitize when using '-'.\n\n\
-             Usage: sanitize [OPTIONS] [INPUT]...\n       \
-             command | sanitize -s secrets.yaml"
+             Provide file path(s) only, or pipe data into scour-secrets when using '-'.\n\n\
+             Usage: scour-secrets [OPTIONS] [INPUT]...\n       \
+             command | scour-secrets -s secrets.yaml"
             .into());
     }
 

@@ -1,6 +1,6 @@
 # Architecture
 
-> **scour-secrets** v0.14.0 — Deterministic, one-way data sanitization.
+> **scour-secrets** v0.16.0 — Deterministic, one-way data sanitization.
 
 This document describes the internal architecture of the sanitization
 engine.  It is aimed at contributors and operators who need to

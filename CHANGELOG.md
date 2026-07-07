@@ -45,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   deterministic-generator seed, giving one modern KDF everywhere and dropping
   the `pbkdf2` dependency. Argon2id resists GPU/ASIC-accelerated offline
   brute-force far better than an iterated PBKDF2.
+- **Warns when `--llm-endpoint` uses plain `http://` to a non-loopback host** —
+  the API key and the (sanitized) prompt would travel in cleartext. A local
+  model over `http://localhost` does not warn; `https://` never warns.
 - **Encrypted secrets files carry a versioned header** (`SCOUR` magic +
   1-byte version, then salt/nonce/ciphertext). Encrypted-vs-plaintext detection
   is now exact instead of a content heuristic, so a plaintext file whose first
@@ -53,12 +56,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed — BREAKING
 
-- **Project renamed to `scour`** (crate, lib, and binary; previously
-  `rust-sanitize` / `sanitize`). Env vars are now `SCOUR_*` (previously
-  `SANITIZE_*`), the config directory is `~/.config/scour/`, the project
-  config file is `.scour.yaml`, and the MCP binary is `scour-mcp` (server
-  name `scour`). MCP *tool* names (`sanitize`, `scan`, …) and `-sanitized`
-  output suffixes are unchanged.
+- **Project renamed to `scour-secrets`** (crate, lib, and binary; previously
+  `rust-sanitize` / `sanitize`). Env vars are now `SCOUR_SECRETS_*` (previously
+  `SANITIZE_*`), the config directory is `~/.config/scour-secrets/`, the project
+  config file is `.scour-secrets.yaml`, and the MCP binary is `scour-secrets-mcp`
+  (server name `scour-secrets`). MCP *tool* names (`sanitize`, `scan`, …) and
+  `-sanitized` output suffixes are unchanged.
 - **API freeze ahead of 1.0.** Public structs and the `LengthPolicy`,
   `SecretsFormat`, `ArchiveFormat`, and `EntropyMode` enums are now
   `#[non_exhaustive]`: struct literals and exhaustive matches outside the

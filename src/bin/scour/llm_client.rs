@@ -9,13 +9,60 @@ const MAX_ERROR_BODY_BYTES: u64 = 4 * 1024; // 4 KB
 
 /// Validate that `endpoint` uses an http or https scheme.
 /// Called from `validate_args` before the HTTP request is made.
+///
+/// Also warns (without failing) when the endpoint is plain `http://` to a
+/// non-loopback host — such a request sends the bearer key and the sanitized
+/// prompt in cleartext. A local model (Ollama / LM Studio on `localhost`) over
+/// `http://` is fine and does not warn.
 pub(crate) fn validate_endpoint_scheme(endpoint: &str) -> Result<(), String> {
     if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
         return Err(format!(
             "--llm-endpoint must start with http:// or https://; got: {endpoint}"
         ));
     }
+    if is_cleartext_remote(endpoint) {
+        tracing::warn!(
+            "--llm-endpoint uses http:// to a non-loopback host: the API key and the \
+             sanitized prompt are transmitted in cleartext. Use https://, a loopback \
+             address, or a TLS-terminating reverse proxy."
+        );
+    }
     Ok(())
+}
+
+/// True when `endpoint` is plain `http://` (not `https`) to a host that is not a
+/// loopback address — the case where credentials and prompt travel unencrypted.
+fn is_cleartext_remote(endpoint: &str) -> bool {
+    let Some(rest) = endpoint.strip_prefix("http://") else {
+        return false; // https:// or other — not our concern here.
+    };
+    !is_loopback_host(endpoint_host(rest))
+}
+
+/// Extract the host from the part of a URL following the scheme
+/// (`host[:port][/path]`, optionally with `user@` userinfo and `[..]` IPv6
+/// brackets). Returns the bare host with brackets and port stripped.
+fn endpoint_host(rest: &str) -> &str {
+    // Authority ends at the first '/'.
+    let authority = rest.split('/').next().unwrap_or("");
+    // Drop any `userinfo@` prefix.
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    if let Some(after_bracket) = authority.strip_prefix('[') {
+        // IPv6 literal: host is between the brackets.
+        return after_bracket.split(']').next().unwrap_or(after_bracket);
+    }
+    // host:port → keep the host.
+    authority.split(':').next().unwrap_or(authority)
+}
+
+/// Whether `host` is a loopback address (`localhost`, `127.0.0.0/8`, or `::1`).
+fn is_loopback_host(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
 }
 
 /// Remove ESC bytes from `s` to prevent terminal control-sequence injection.
@@ -132,6 +179,34 @@ mod tests {
     fn sse_content_line(content: &str) -> String {
         let json = serde_json::json!({"choices":[{"delta":{"content": content}}]});
         format!("data: {json}\n")
+    }
+
+    // ---- is_cleartext_remote / endpoint host parsing ----
+
+    #[test]
+    fn cleartext_remote_flags_http_to_public_host() {
+        assert!(is_cleartext_remote("http://api.example.com/v1"));
+        assert!(is_cleartext_remote("http://10.0.0.5:8080/v1"));
+        assert!(is_cleartext_remote("http://key@api.example.com/v1"));
+    }
+
+    #[test]
+    fn cleartext_remote_ignores_https_and_loopback() {
+        // https is encrypted regardless of host.
+        assert!(!is_cleartext_remote("https://api.example.com/v1"));
+        // Loopback over http is fine (local models).
+        assert!(!is_cleartext_remote("http://localhost:11434/v1"));
+        assert!(!is_cleartext_remote("http://127.0.0.1:1234/v1"));
+        assert!(!is_cleartext_remote("http://127.5.6.7/v1"));
+        assert!(!is_cleartext_remote("http://[::1]:8080/v1"));
+    }
+
+    #[test]
+    fn endpoint_host_strips_port_userinfo_and_brackets() {
+        assert_eq!(endpoint_host("api.example.com/v1"), "api.example.com");
+        assert_eq!(endpoint_host("host:8080/v1"), "host");
+        assert_eq!(endpoint_host("user@host:8080"), "host");
+        assert_eq!(endpoint_host("[::1]:8080/v1"), "::1");
     }
 
     // ---- strip_terminal_escapes ----

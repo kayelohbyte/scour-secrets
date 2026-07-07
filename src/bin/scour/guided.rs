@@ -27,22 +27,22 @@ pub(crate) fn parse_template_preset(s: &str) -> Result<TemplatePreset, String> {
 
 pub(crate) const TEMPLATE_HEADER: &str = "\
 # =============================================================================
-# sanitize secrets template
+# scour-secrets secrets template
 # =============================================================================
 #
 # PURPOSE
-#   This file tells sanitize which patterns to detect and replace before
+#   This file tells scour-secrets which patterns to detect and replace before
 #   you send logs, configs, or other data to an LLM or external service.
 #
 # RELIABILITY FIRST
 #   Every replacement preserves the original byte length so structured
 #   formats (JSON, YAML, TOML, …) remain parseable after sanitization.
-#   Run `sanitize --force-text` to bypass structured processing entirely.
+#   Run `scour-secrets --force-text` to bypass structured processing entirely.
 #
 # HOW TO USE
 #   1. Edit this file to add your own patterns and literals.
-#   2. Encrypt: sanitize encrypt this-file.yaml this-file.yaml.enc
-#   3. Sanitize: sanitize input.log -s this-file.yaml.enc -o output.log
+#   2. Encrypt: scour-secrets encrypt this-file.yaml this-file.yaml.enc
+#   3. Sanitize: scour-secrets input.log -s this-file.yaml.enc -o output.log
 #
 # FIELD REFERENCE
 #   pattern   string  Required. Regex or literal to match.

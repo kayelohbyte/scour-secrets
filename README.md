@@ -348,10 +348,10 @@ The default build includes the CLI binary and every processor. Library-only cons
 # Core only — HMAC/random generators, mapping store, streaming scanner,
 # and the always-on JSON/YAML/TOML/INI/env/key-value/log-line processors.
 # Drops clap, ureq, walkdir, ctrlc, rpassword, zip, tar, flate2, csv, csv-core, quick-xml.
-scour-secrets = { version = "0.13", default-features = false }
+scour-secrets = { version = "0.16", default-features = false }
 
 # Add archive (zip/tar/tar.gz) and/or the CSV + XML processors as needed.
-scour-secrets = { version = "0.13", default-features = false, features = ["archive", "structured"] }
+scour-secrets = { version = "0.16", default-features = false, features = ["archive", "structured"] }
 ```
 
 | Feature | Pulls in | Enables |

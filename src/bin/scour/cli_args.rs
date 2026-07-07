@@ -52,7 +52,7 @@ pub(crate) enum ReportFormat {
 EXAMPLES:\n  \
   scour-secrets data.log -s secrets.yaml\n  \
   scour-secrets data.log -s secrets.yaml -o clean.log\n  \
-  grep \"error\" log.txt | sanitize -s secrets.yaml\n\n  \
+  grep \"error\" log.txt | scour-secrets -s secrets.yaml\n\n  \
   # Encrypted secrets:\n  \
   scour-secrets data.log -s s.enc --encrypted-secrets -p\n  \
   SCOUR_SECRETS_PASSWORD=hunter2 scour-secrets data.log -s s.enc --encrypted-secrets\n\n  \
@@ -448,9 +448,9 @@ pub(crate) enum SubCommand {
     /// Argon2id (19 MiB memory, 2 passes).
     #[command(after_help = "\
 EXAMPLES:\n  \
-  sanitize encrypt secrets.json secrets.json.enc --password \"my-password\"\n  \
+  scour-secrets encrypt secrets.json secrets.json.enc --password \"my-password\"\n  \
   SCOUR_SECRETS_PASSWORD=hunter2 scour-secrets encrypt secrets.yaml secrets.yaml.enc\n  \
-  sanitize encrypt secrets.toml secrets.toml.enc  # interactive prompt")]
+  scour-secrets encrypt secrets.toml secrets.toml.enc  # interactive prompt")]
     Encrypt(EncryptArgs),
 
     /// Decrypt an encrypted secrets file back to plaintext.
@@ -458,8 +458,8 @@ EXAMPLES:\n  \
     /// Useful for editing secrets before re-encrypting.
     #[command(after_help = "\
 EXAMPLES:\n  \
-  sanitize decrypt secrets.json.enc secrets.json --password \"my-password\"\n  \
-  sanitize decrypt secrets.enc out.yaml --password-file /run/secrets/pw")]
+  scour-secrets decrypt secrets.json.enc secrets.json --password \"my-password\"\n  \
+  scour-secrets decrypt secrets.enc out.yaml --password-file /run/secrets/pw")]
     Decrypt(DecryptArgs),
 
     /// Manage app bundles: list, add, remove, or show the user apps directory.
@@ -477,11 +477,11 @@ EXAMPLES:\n  \
         name = "allow-test",
         after_help = "\
 EXAMPLES:\n  \
-  sanitize allow-test --allow '*.internal' db.internal github.com\n  \
-  sanitize allow-test --allow localhost --allow '*.internal' --allow '192.168.1.*' db.internal 192.168.1.5 8.8.8.8\n  \
-  sanitize allow-test --allow 'regex:^10\\.[0-9]+\\.[0-9]+\\.[0-9]+$' 10.0.0.1 192.168.1.1\n  \
-  echo -e 'db.internal\\ngithub.com\\n192.168.1.5' | sanitize allow-test --allow '*.internal' --allow '192.168.1.*'\n  \
-  sanitize allow-test --allow '*.internal' db.internal --json"
+  scour-secrets allow-test --allow '*.internal' db.internal github.com\n  \
+  scour-secrets allow-test --allow localhost --allow '*.internal' --allow '192.168.1.*' db.internal 192.168.1.5 8.8.8.8\n  \
+  scour-secrets allow-test --allow 'regex:^10\\.[0-9]+\\.[0-9]+\\.[0-9]+$' 10.0.0.1 192.168.1.1\n  \
+  echo -e 'db.internal\\ngithub.com\\n192.168.1.5' | scour-secrets allow-test --allow '*.internal' --allow '192.168.1.*'\n  \
+  scour-secrets allow-test --allow '*.internal' db.internal --json"
     )]
     AllowTest(AllowTestArgs),
 
@@ -500,9 +500,9 @@ PRESETS\n  \
   database    Database configs: passwords, connection strings, usernames\n  \
   aws         AWS: access keys, ARNs, account IDs\n\n\
 EXAMPLES:\n  \
-  sanitize template                     # balanced → secrets.template.balanced.yaml\n  \
-  sanitize template aggressive          # aggressive preset\n  \
-  sanitize template k8s -o k8s.yaml    # k8s preset with custom output path")]
+  scour-secrets template                     # balanced → secrets.template.balanced.yaml\n  \
+  scour-secrets template aggressive          # aggressive preset\n  \
+  scour-secrets template k8s -o k8s.yaml    # k8s preset with custom output path")]
     Template(TemplateArgs),
 
     /// Install a git hook that scans (or sanitizes) staged files before each commit.
@@ -519,20 +519,20 @@ EXAMPLES:\n  \
         name = "install-hook",
         after_help = "\
 EXAMPLES:\n  \
-  sanitize install-hook                              # scan with auto-loaded default secrets\n  \
-  sanitize install-hook --app gitlab,kubernetes      # scan with app bundles\n  \
-  sanitize install-hook -s secrets.yaml              # scan with custom secrets file\n  \
-  sanitize install-hook --mode sanitize              # sanitize staged files in place\n  \
-  sanitize install-hook --hook pre-push              # install a pre-push hook\n  \
-  sanitize install-hook --global                     # apply to all repos on this machine\n  \
-  sanitize install-hook --remove                     # remove the installed hook\n  \
-  sanitize install-hook --dry-run                    # preview without writing"
+  scour-secrets install-hook                              # scan with auto-loaded default secrets\n  \
+  scour-secrets install-hook --app gitlab,kubernetes      # scan with app bundles\n  \
+  scour-secrets install-hook -s secrets.yaml              # scan with custom secrets file\n  \
+  scour-secrets install-hook --mode sanitize              # sanitize staged files in place\n  \
+  scour-secrets install-hook --hook pre-push              # install a pre-push hook\n  \
+  scour-secrets install-hook --global                     # apply to all repos on this machine\n  \
+  scour-secrets install-hook --remove                     # remove the installed hook\n  \
+  scour-secrets install-hook --dry-run                    # preview without writing"
     )]
     InstallHook(InstallHookArgs),
 
     /// Show the effective configuration that will be applied on the next run.
     ///
-    /// Prints the paths and active values from `~/.config/scour/settings.yaml`
+    /// Prints the paths and active values from `~/.config/scour-secrets/settings.yaml`
     /// and reports whether the default secrets file is present. Useful for
     /// debugging unexpected behaviour or verifying CI setup.
     #[command(name = "show-config")]
@@ -541,7 +541,7 @@ EXAMPLES:\n  \
     /// One-time repo setup: create the global settings file and install a git
     /// hook for the current repository.
     ///
-    /// The settings file is written to ~/.config/scour/settings.yaml
+    /// The settings file is written to ~/.config/scour-secrets/settings.yaml
     /// (or $XDG_CONFIG_HOME/scour/settings.yaml) and lets you set persistent
     /// flag defaults. The global secrets file is created automatically on the
     /// first plain `scour-secrets` run — no explicit setup needed.
@@ -549,10 +549,10 @@ EXAMPLES:\n  \
         name = "init-hook",
         after_help = "\
 EXAMPLES:\n  \
-  sanitize init-hook                        # create settings file + pre-commit hook\n  \
-  sanitize init-hook --mode sanitize        # hook sanitizes files in place\n  \
-  sanitize init-hook --hook pre-push        # hook runs on push instead\n  \
-  sanitize init-hook --global               # apply hook to all repos on this machine"
+  scour-secrets init-hook                        # create settings file + pre-commit hook\n  \
+  scour-secrets init-hook --mode sanitize        # hook sanitizes files in place\n  \
+  scour-secrets init-hook --hook pre-push        # hook runs on push instead\n  \
+  scour-secrets init-hook --global               # apply hook to all repos on this machine"
     )]
     InitHook(InitArgs),
 
@@ -563,12 +563,12 @@ EXAMPLES:\n  \
     /// for CI pipelines where you want detection without rewriting files.
     #[command(after_help = "\
 EXAMPLES:\n  \
-  sanitize scan app.log -s secrets.yaml              # scan a log file\n  \
-  sanitize scan ./logs/ -s secrets.yaml              # scan a directory\n  \
-  sanitize scan app.log --app gitlab                 # scan using an app bundle\n  \
-  sanitize scan . --exclude-path tests/fixtures/      # skip test fixtures\n  \
-  git diff HEAD | sanitize scan                      # scan a patch from stdin\n  \
-  sanitize scan app.log -s s.enc --encrypted-secrets -p  # encrypted secrets")]
+  scour-secrets scan app.log -s secrets.yaml              # scan a log file\n  \
+  scour-secrets scan ./logs/ -s secrets.yaml              # scan a directory\n  \
+  scour-secrets scan app.log --app gitlab                 # scan using an app bundle\n  \
+  scour-secrets scan . --exclude-path tests/fixtures/      # skip test fixtures\n  \
+  git diff HEAD | scour-secrets scan                      # scan a patch from stdin\n  \
+  scour-secrets scan app.log -s s.enc --encrypted-secrets -p  # encrypted secrets")]
     Scan(ScanArgs),
 
     /// Test whether secrets patterns match example values.
@@ -582,11 +582,11 @@ EXAMPLES:\n  \
         name = "test-pattern",
         after_help = "\
 EXAMPLES:\n  \
-  sanitize test-pattern --pattern 'ghp_[A-Za-z0-9_]{36}' 'ghp_abc123'\n  \
-  sanitize test-pattern -s secrets.yaml 'my-secret-value' 'safe-value'\n  \
-  sanitize test-pattern --app gitlab 'glpat-abc123'\n  \
-  echo 'AKIA1234567890ABCDEF' | sanitize test-pattern --app aws\n  \
-  sanitize test-pattern -s secrets.yaml --json 'value1' 'value2'"
+  scour-secrets test-pattern --pattern 'ghp_[A-Za-z0-9_]{36}' 'ghp_abc123'\n  \
+  scour-secrets test-pattern -s secrets.yaml 'my-secret-value' 'safe-value'\n  \
+  scour-secrets test-pattern --app gitlab 'glpat-abc123'\n  \
+  echo 'AKIA1234567890ABCDEF' | scour-secrets test-pattern --app aws\n  \
+  scour-secrets test-pattern -s secrets.yaml --json 'value1' 'value2'"
     )]
     TestPattern(TestPatternArgs),
 }
@@ -841,7 +841,7 @@ EXAMPLES:\n  \
     /// Copy a built-in app bundle to the user apps directory for editing.
     ///
     /// For built-in apps, copies profile.yaml and/or secrets.yaml into
-    /// `~/.config/scour/apps/<name>/` so they can be customised. The local
+    /// `~/.config/scour-secrets/apps/<name>/` so they can be customised. The local
     /// copy takes precedence over the built-in automatically — no extra flags
     /// needed. For user-defined apps the existing directory path is printed.
     ///

@@ -486,12 +486,12 @@ pub(crate) fn run_template(args: &TemplateArgs) -> Result<(), (String, i32)> {
         output_path.display()
     );
     eprintln!(
-        "  2. Encrypt:  sanitize encrypt {} {}.enc",
+        "  2. Encrypt:  scour-secrets encrypt {} {}.enc",
         output_path.display(),
         output_path.display()
     );
     eprintln!(
-        "  3. Sanitize: sanitize <input> -s {}.enc -o <output>",
+        "  3. Sanitize: scour-secrets <input> -s {}.enc -o <output>",
         output_path.display()
     );
     eprintln!();

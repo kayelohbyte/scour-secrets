@@ -11,9 +11,10 @@ use scour_secrets::{
 
 /// Environment variable supplying the deterministic seed salt directly.
 ///
-/// To reproduce deterministic output created before per-install salts existed
-/// (pre-0.14.2), set this to the legacy constant
-/// `scour-secrets:deterministic-seed:v1`.
+/// Set this (or `--seed-salt-file`) to a shared value to reproduce identical
+/// deterministic output across machines. Note that 0.16.0 switched the seed KDF
+/// to Argon2id, so output is not comparable to pre-0.16.0 runs even with the
+/// same salt.
 const SEED_SALT_ENV: &str = "SCOUR_SECRETS_SEED_SALT";
 
 /// Resolve the deterministic seed salt.
@@ -246,7 +247,7 @@ pub(crate) fn write_default_secrets(path: &Path) -> std::result::Result<(), Stri
     entries.push(SecretEntry::new("", "allow", "").with_values(common_allow_patterns()));
     let yaml = serde_yaml_ng::to_string(&entries)
         .map_err(|e| format!("cannot serialize default secrets: {e}"))?;
-    let header = "# Global sanitize secrets — balanced detection patterns + allowlist.\n# Auto-loaded on every plain run. Edit freely; deleted values take effect immediately.\n\n";
+    let header = "# Global scour-secrets secrets — balanced detection patterns + allowlist.\n# Auto-loaded on every plain run. Edit freely; deleted values take effect immediately.\n\n";
     atomic_write(path, format!("{header}{yaml}").as_bytes()).map_err(|e| {
         format!(
             "cannot write default secrets file {}: {e}\nPass --secrets-file or --app explicitly.",
@@ -258,7 +259,7 @@ pub(crate) fn write_default_secrets(path: &Path) -> std::result::Result<(), Stri
 /// Build the canonical balanced set of `SecretEntry` values.
 ///
 /// Used both to compile the in-memory scanner and to write the starter
-/// `~/.config/scour/secrets.yaml` on first run.
+/// `~/.config/scour-secrets/secrets.yaml` on first run.
 pub(crate) fn balanced_secret_entries() -> Vec<SecretEntry> {
     fn e(pattern: &str, category: &str, label: &str) -> SecretEntry {
         SecretEntry::new(pattern, "regex", category).with_label(label)

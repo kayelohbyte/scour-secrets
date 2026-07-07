@@ -438,7 +438,7 @@ fn run_apps_list() -> Result<(), (String, i32)> {
     let dir_display = apps_dir
         .as_ref()
         .map(|d| d.display().to_string())
-        .unwrap_or_else(|| "~/.config/scour/apps".into());
+        .unwrap_or_else(|| "~/.config/scour-secrets/apps".into());
 
     if let Some(ref dir) = apps_dir {
         if dir.is_dir() {
@@ -470,13 +470,15 @@ fn run_apps_list() -> Result<(), (String, i32)> {
         }
     }
 
-    println!("\nCombine multiple apps:  sanitize file.zip --app gitlab,nginx,postgresql");
+    println!("\nCombine multiple apps:  scour-secrets file.zip --app gitlab,nginx,postgresql");
     println!(
-        "Manage custom apps:     sanitize apps edit <name>        # copy built-in for editing"
+        "Manage custom apps:     scour-secrets apps edit <name>        # copy built-in for editing"
     );
-    println!("                        sanitize apps add <name> --profile p.yaml --secrets s.yaml");
-    println!("                        sanitize apps remove <name> --yes");
-    println!("                        sanitize apps dir");
+    println!(
+        "                        scour-secrets apps add <name> --profile p.yaml --secrets s.yaml"
+    );
+    println!("                        scour-secrets apps remove <name> --yes");
+    println!("                        scour-secrets apps dir");
     Ok(())
 }
 
@@ -549,7 +551,7 @@ fn run_apps_add(args: &AppsAddArgs) -> Result<(), (String, i32)> {
     if args.secrets_file.is_some() {
         println!("  secrets.yaml  ✓");
     }
-    println!("\nUse it with:  sanitize <file> --app {}", args.name);
+    println!("\nUse it with:  scour-secrets <file> --app {}", args.name);
     Ok(())
 }
 
@@ -632,7 +634,7 @@ fn run_apps_edit(args: &AppsEditArgs) -> Result<(), (String, i32)> {
             }
         }
         println!("\nEdits here already override the built-in.");
-        println!("To revert:  sanitize apps remove {} --yes", args.name);
+        println!("To revert:  scour-secrets apps remove {} --yes", args.name);
         return Ok(());
     }
 
@@ -678,7 +680,7 @@ fn run_apps_edit(args: &AppsEditArgs) -> Result<(), (String, i32)> {
         "\nEdits here override the built-in — use --app {} as usual.",
         args.name
     );
-    println!("To revert:  sanitize apps remove {} --yes", args.name);
+    println!("To revert:  scour-secrets apps remove {} --yes", args.name);
 
     Ok(())
 }

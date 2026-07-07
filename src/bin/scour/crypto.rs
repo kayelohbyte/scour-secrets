@@ -182,7 +182,7 @@ pub(crate) fn run_encrypt(args: &EncryptArgs) -> Result<(), (String, i32)> {
     eprintln!();
     eprintln!("To use with the sanitizer:");
     eprintln!(
-        "  sanitize data.log -s {} --password",
+        "  scour-secrets data.log -s {} --password",
         args.output.display()
     );
 
@@ -227,7 +227,7 @@ pub(crate) fn run_decrypt(args: &DecryptArgs) -> Result<(), (String, i32)> {
     eprintln!();
     eprintln!("Remember to re-encrypt after editing:");
     eprintln!(
-        "  sanitize encrypt {} {}.enc",
+        "  scour-secrets encrypt {} {}.enc",
         args.output.display(),
         args.output.display()
     );

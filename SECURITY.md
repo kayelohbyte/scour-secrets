@@ -1,6 +1,6 @@
 # Security Model
 
-> **scour-secrets** v0.14.0
+> **scour-secrets** v0.16.0
 
 This document describes the security properties, threat mitigations,
 and operational constraints of the sanitization engine.

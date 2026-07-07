@@ -3,13 +3,13 @@
 //! # Usage
 //!
 //! ```text
-//! sanitize [OPTIONS] [INPUT]...
-//! sanitize encrypt [OPTIONS] <INPUT> <OUTPUT>
-//! sanitize decrypt [OPTIONS] <INPUT> <OUTPUT>
+//! scour-secrets [OPTIONS] [INPUT]...
+//! scour-secrets encrypt [OPTIONS] <INPUT> <OUTPUT>
+//! scour-secrets decrypt [OPTIONS] <INPUT> <OUTPUT>
 //!
 //! # Read from stdin (plaintext secrets file — default):
-//! cat data.log | sanitize -s secrets.yaml
-//! grep "error" log.txt | sanitize -s secrets.json -o clean.log
+//! cat data.log | scour-secrets -s secrets.yaml
+//! grep "error" log.txt | scour-secrets -s secrets.json -o clean.log
 //! ```
 //!
 //! # Subcommands
@@ -22,34 +22,34 @@
 //!
 //! ```text
 //! # Encrypt a plaintext secrets file:
-//! sanitize encrypt secrets.json secrets.json.enc --password
+//! scour-secrets encrypt secrets.json secrets.json.enc --password
 //!
 //! # Decrypt it back (for editing):
-//! sanitize decrypt secrets.json.enc secrets.json --password
+//! scour-secrets decrypt secrets.json.enc secrets.json --password
 //!
 //! # Sanitize a log file (plaintext secrets — default):
-//! sanitize data.log -s secrets.yaml
+//! scour-secrets data.log -s secrets.yaml
 //!
 //! # Write output to a file:
-//! sanitize data.log -s secrets.yaml -o clean.log
+//! scour-secrets data.log -s secrets.yaml -o clean.log
 //!
 //! # Use an encrypted secrets file (requires --encrypted-secrets):
-//! sanitize data.log -s secrets.enc --encrypted-secrets -p
+//! scour-secrets data.log -s secrets.enc --encrypted-secrets -p
 //!
 //! # Read from stdin with encrypted secrets:
-//! grep "error" log.txt | sanitize -s secrets.enc --encrypted-secrets -P /run/secrets/pw
+//! grep "error" log.txt | scour-secrets -s secrets.enc --encrypted-secrets -P /run/secrets/pw
 //!
 //! # Deterministic mode with encrypted secrets:
-//! sanitize data.csv -s s.enc --encrypted-secrets -p -d
+//! scour-secrets data.csv -s s.enc --encrypted-secrets -p -d
 //!
 //! # Read password from a file (avoids process listing / env exposure):
-//! sanitize data.log -s s.enc --encrypted-secrets -P /run/secrets/pw
+//! scour-secrets data.log -s s.enc --encrypted-secrets -P /run/secrets/pw
 //!
 //! # Dry-run:
-//! sanitize config.yaml -s s.enc --encrypted-secrets -p -n
+//! scour-secrets config.yaml -s s.enc --encrypted-secrets -p -n
 //!
 //! # Fail CI if matches found:
-//! sanitize config.yaml -s s.enc --encrypted-secrets -P /run/secrets/pw --fail-on-match
+//! scour-secrets config.yaml -s s.enc --encrypted-secrets -P /run/secrets/pw --fail-on-match
 //! ```
 //!
 //! # One-Way Replacements
@@ -375,7 +375,7 @@ mod tests {
     #[test]
     fn progress_policy_auto_enables_live_when_stdout_is_tty_but_not_output_dest() {
         // Writing to files: stdout is a TTY but output doesn't go there.
-        // This is the common `sanitize dir/` case — spinner should work.
+        // This is the common `scour-secrets dir/` case — spinner should work.
         let policy = ProgressPolicy::from_mode(
             ProgressMode::Auto,
             ProgressContext {
