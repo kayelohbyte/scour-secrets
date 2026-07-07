@@ -171,7 +171,8 @@ pub(crate) fn build_store(
                 return Err(
                     "--deterministic requires --password (or SCOUR_SECRETS_PASSWORD). \
                      A deterministic seed cannot be derived without a key."
-                    .into());
+                        .into(),
+                );
             }
         }
     } else {
