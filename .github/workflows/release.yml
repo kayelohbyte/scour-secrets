@@ -168,6 +168,12 @@ jobs:
     name: Create Release
     needs: [build, build-mcp]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # Build-provenance attestation (SLSA): lets users verify artifacts came
+      # from this workflow with `gh attestation verify <file> -R <repo>`.
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
 
@@ -176,6 +182,13 @@ jobs:
         with:
           merge-multiple: true
           path: artifacts
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            artifacts/*.tar.gz
+            artifacts/*.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
