@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 
 /// Unified scan configuration loaded from any of the three config files:
 ///
-/// - `~/.config/sanitize/settings.yaml`      — global per-user defaults
-/// - `<project>/.sanitize.yaml`              — per-project defaults (cwd-walk)
+/// - `~/.config/scour-secrets/settings.yaml`      — global per-user defaults
+/// - `<project>/.scour-secrets.yaml`              — per-project defaults (cwd-walk)
 /// - `<namespace-dir>/settings.yaml`         — per-namespace defaults (MCP only)
 ///
 /// All fields are optional. An explicit CLI flag always wins over any layer.
@@ -102,10 +102,10 @@ pub(crate) struct SanitizeConfig {
 // Global settings (~/.config/sanitize/settings.yaml)
 // ---------------------------------------------------------------------------
 
-/// Load `~/.config/sanitize/settings.yaml`. Silently returns defaults when
-/// absent or unreadable. Set `SANITIZE_NO_SETTINGS=1` to skip entirely.
+/// Load `~/.config/scour-secrets/settings.yaml`. Silently returns defaults when
+/// absent or unreadable. Set `SCOUR_SECRETS_NO_SETTINGS=1` to skip entirely.
 pub(crate) fn load_settings() -> SanitizeConfig {
-    if std::env::var("SANITIZE_NO_SETTINGS").as_deref() == Ok("1") {
+    if std::env::var("SCOUR_SECRETS_NO_SETTINGS").as_deref() == Ok("1") {
         return SanitizeConfig::default();
     }
     let path = global_settings_path();
@@ -113,15 +113,15 @@ pub(crate) fn load_settings() -> SanitizeConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Project config (.sanitize.yaml)
+// Project config (.scour-secrets.yaml)
 // ---------------------------------------------------------------------------
 
-/// Search for `.sanitize.yaml` starting from `dir` and walking upward.
+/// Search for `.scour-secrets.yaml` starting from `dir` and walking upward.
 /// Returns the path of the first file found, or `None`.
 pub(crate) fn find_project_config_from(dir: &Path) -> Option<PathBuf> {
     let mut current = dir.to_path_buf();
     loop {
-        let candidate = current.join(".sanitize.yaml");
+        let candidate = current.join(".scour-secrets.yaml");
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -135,26 +135,26 @@ pub(crate) fn find_project_config_from(dir: &Path) -> Option<PathBuf> {
 /// Locate the project config to load.
 ///
 /// Resolution order:
-/// 1. `SANITIZE_NO_CONFIG=1` → skip (returns `None`).
-/// 2. `SANITIZE_CONFIG=<path>` → use that file if it exists.
-/// 3. Walk up from CWD looking for `.sanitize.yaml`.
+/// 1. `SCOUR_SECRETS_NO_CONFIG=1` → skip (returns `None`).
+/// 2. `SCOUR_SECRETS_CONFIG=<path>` → use that file if it exists.
+/// 3. Walk up from CWD looking for `.scour-secrets.yaml`.
 pub(crate) fn find_project_config() -> Option<PathBuf> {
-    if std::env::var("SANITIZE_NO_CONFIG").as_deref() == Ok("1") {
+    if std::env::var("SCOUR_SECRETS_NO_CONFIG").as_deref() == Ok("1") {
         return None;
     }
-    if let Ok(explicit) = std::env::var("SANITIZE_CONFIG") {
+    if let Ok(explicit) = std::env::var("SCOUR_SECRETS_CONFIG") {
         let p = PathBuf::from(&explicit);
         if p.is_file() {
             return Some(p);
         }
-        eprintln!("warning: SANITIZE_CONFIG={explicit} does not exist — ignoring");
+        eprintln!("warning: SCOUR_SECRETS_CONFIG={explicit} does not exist — ignoring");
         return None;
     }
     let cwd = std::env::current_dir().ok()?;
     find_project_config_from(&cwd)
 }
 
-/// Parse a `.sanitize.yaml` file. Returns `(config, config_dir)` so relative
+/// Parse a `.scour-secrets.yaml` file. Returns `(config, config_dir)` so relative
 /// paths inside the file can be resolved against the file's location.
 /// Silently returns defaults on read or parse error.
 pub(crate) fn load_project_config(path: &Path) -> (SanitizeConfig, PathBuf) {
@@ -194,7 +194,7 @@ fn load_yaml_config(path: &Path, label: &str) -> SanitizeConfig {
 // Templates
 // ---------------------------------------------------------------------------
 
-/// Template written to `settings.yaml` by `sanitize init-hook`.
+/// Template written to `settings.yaml` by `scour-secrets init-hook`.
 pub(crate) const SETTINGS_TEMPLATE: &str = "\
 # sanitize settings  (~/.config/sanitize/settings.yaml)
 # Values here become defaults for every run. Explicit CLI flags always win.
@@ -311,8 +311,8 @@ pub(crate) const SETTINGS_TEMPLATE: &str = "\
 pub(crate) fn run_show_config() -> Result<(), (String, i32)> {
     let secrets_path = global_default_secrets_path();
     let settings_path = global_settings_path();
-    let no_settings = std::env::var("SANITIZE_NO_SETTINGS").as_deref() == Ok("1");
-    let no_config = std::env::var("SANITIZE_NO_CONFIG").as_deref() == Ok("1");
+    let no_settings = std::env::var("SCOUR_SECRETS_NO_SETTINGS").as_deref() == Ok("1");
+    let no_config = std::env::var("SCOUR_SECRETS_NO_CONFIG").as_deref() == Ok("1");
 
     println!("Config directory: {}", sanitize_config_dir().display());
     println!();
@@ -329,7 +329,7 @@ pub(crate) fn run_show_config() -> Result<(), (String, i32)> {
     println!();
     print!("Settings: {}", settings_path.display());
     if no_settings {
-        println!(" (skipped — SANITIZE_NO_SETTINGS=1)");
+        println!(" (skipped — SCOUR_SECRETS_NO_SETTINGS=1)");
     } else if !settings_path.exists() {
         println!(" (not found — run 'sanitize init-hook' to create it)");
     } else {
@@ -338,16 +338,16 @@ pub(crate) fn run_show_config() -> Result<(), (String, i32)> {
         show_config_fields(&s, None);
     }
 
-    // ── project config (.sanitize.yaml) ──────────────────────────────────────
+    // ── project config (.scour-secrets.yaml) ──────────────────────────────────────
     println!();
     if no_config {
-        println!("Project config: (skipped — SANITIZE_NO_CONFIG=1)");
+        println!("Project config: (skipped — SCOUR_SECRETS_NO_CONFIG=1)");
         return Ok(());
     }
     match find_project_config() {
         None => {
             println!(
-                "Project config: (none — no .sanitize.yaml found in this directory or its parents)"
+                "Project config: (none — no .scour-secrets.yaml found in this directory or its parents)"
             );
         }
         Some(ref path) => {
@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn find_project_config_from_finds_in_same_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".sanitize.yaml");
+        let config = dir.path().join(".scour-secrets.yaml");
         fs::write(&config, "").unwrap();
         assert_eq!(find_project_config_from(dir.path()), Some(config));
     }
@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn find_project_config_from_finds_in_parent() {
         let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join(".sanitize.yaml");
+        let config = dir.path().join(".scour-secrets.yaml");
         fs::write(&config, "").unwrap();
         let child = dir.path().join("subdir/nested");
         fs::create_dir_all(&child).unwrap();
@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn load_project_config_parses_all_fields() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(".sanitize.yaml");
+        let path = dir.path().join(".scour-secrets.yaml");
         fs::write(
             &path,
             r#"
@@ -596,7 +596,7 @@ quiet: true
     #[test]
     fn load_project_config_partial_file_fills_rest_with_defaults() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(".sanitize.yaml");
+        let path = dir.path().join(".scour-secrets.yaml");
         fs::write(&path, "app:\n  - gitlab\nfail_on_match: true\n").unwrap();
         let (cfg, _) = load_project_config(&path);
         assert_eq!(cfg.app, vec!["gitlab"]);
@@ -608,7 +608,7 @@ quiet: true
     #[test]
     fn load_project_config_returns_default_on_invalid_yaml() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(".sanitize.yaml");
+        let path = dir.path().join(".scour-secrets.yaml");
         fs::write(&path, "this: is: not: valid: ][[[").unwrap();
         let (cfg, _) = load_project_config(&path);
         assert!(cfg.app.is_empty());
@@ -618,7 +618,7 @@ quiet: true
     #[test]
     fn load_project_config_resolves_config_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(".sanitize.yaml");
+        let path = dir.path().join(".scour-secrets.yaml");
         fs::write(&path, "secrets_file: secrets.yaml\n").unwrap();
         let (cfg, cfg_dir) = load_project_config(&path);
         assert_eq!(cfg.secrets_file, Some(PathBuf::from("secrets.yaml")));
@@ -630,9 +630,9 @@ quiet: true
     #[test]
     fn load_settings_skips_when_env_var_set() {
         let _guard = env_lock();
-        std::env::set_var("SANITIZE_NO_SETTINGS", "1");
+        std::env::set_var("SCOUR_SECRETS_NO_SETTINGS", "1");
         let s = load_settings();
-        std::env::remove_var("SANITIZE_NO_SETTINGS");
+        std::env::remove_var("SCOUR_SECRETS_NO_SETTINGS");
         assert!(s.app.is_empty());
         assert!(s.allow.is_empty());
     }
@@ -641,7 +641,7 @@ quiet: true
     fn load_settings_returns_default_when_file_missing() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
-        std::env::remove_var("SANITIZE_NO_SETTINGS");
+        std::env::remove_var("SCOUR_SECRETS_NO_SETTINGS");
         #[cfg(windows)]
         std::env::set_var("APPDATA", dir.path());
         #[cfg(not(windows))]
@@ -658,14 +658,14 @@ quiet: true
     fn load_settings_parses_all_fields() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
-        let config_dir = dir.path().join("sanitize");
+        let config_dir = dir.path().join("scour-secrets");
         fs::create_dir_all(&config_dir).unwrap();
         fs::write(
             config_dir.join("settings.yaml"),
             "app:\n  - gitlab\nallow:\n  - localhost\nfail_on_match: true\nthreads: 4\nno_progress: true\nforce_text: true\nentropy_threshold: 3.5\n",
         )
         .unwrap();
-        std::env::remove_var("SANITIZE_NO_SETTINGS");
+        std::env::remove_var("SCOUR_SECRETS_NO_SETTINGS");
         #[cfg(windows)]
         std::env::set_var("APPDATA", dir.path());
         #[cfg(not(windows))]
@@ -688,14 +688,14 @@ quiet: true
     fn load_settings_returns_default_on_malformed_yaml() {
         let _guard = env_lock();
         let dir = tempfile::tempdir().unwrap();
-        let config_dir = dir.path().join("sanitize");
+        let config_dir = dir.path().join("scour-secrets");
         fs::create_dir_all(&config_dir).unwrap();
         fs::write(
             config_dir.join("settings.yaml"),
             "this: is: not: valid: ][[[",
         )
         .unwrap();
-        std::env::remove_var("SANITIZE_NO_SETTINGS");
+        std::env::remove_var("SCOUR_SECRETS_NO_SETTINGS");
         #[cfg(windows)]
         std::env::set_var("APPDATA", dir.path());
         #[cfg(not(windows))]
@@ -713,9 +713,9 @@ quiet: true
     #[test]
     fn find_project_config_returns_none_when_disabled() {
         let _guard = env_lock();
-        std::env::set_var("SANITIZE_NO_CONFIG", "1");
+        std::env::set_var("SCOUR_SECRETS_NO_CONFIG", "1");
         let result = find_project_config();
-        std::env::remove_var("SANITIZE_NO_CONFIG");
+        std::env::remove_var("SCOUR_SECRETS_NO_CONFIG");
         assert!(result.is_none());
     }
 
@@ -725,20 +725,20 @@ quiet: true
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("custom.yaml");
         fs::write(&path, "").unwrap();
-        std::env::remove_var("SANITIZE_NO_CONFIG");
-        std::env::set_var("SANITIZE_CONFIG", path.to_str().unwrap());
+        std::env::remove_var("SCOUR_SECRETS_NO_CONFIG");
+        std::env::set_var("SCOUR_SECRETS_CONFIG", path.to_str().unwrap());
         let result = find_project_config();
-        std::env::remove_var("SANITIZE_CONFIG");
+        std::env::remove_var("SCOUR_SECRETS_CONFIG");
         assert_eq!(result, Some(path));
     }
 
     #[test]
     fn find_project_config_returns_none_for_nonexistent_explicit_path() {
         let _guard = env_lock();
-        std::env::remove_var("SANITIZE_NO_CONFIG");
-        std::env::set_var("SANITIZE_CONFIG", "/nonexistent/path/custom.yaml");
+        std::env::remove_var("SCOUR_SECRETS_NO_CONFIG");
+        std::env::set_var("SCOUR_SECRETS_CONFIG", "/nonexistent/path/custom.yaml");
         let result = find_project_config();
-        std::env::remove_var("SANITIZE_CONFIG");
+        std::env::remove_var("SCOUR_SECRETS_CONFIG");
         assert!(result.is_none());
     }
 }

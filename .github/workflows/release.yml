@@ -9,7 +9,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  BINARY_NAME: sanitize
+  BINARY_NAME: scour-secrets
 
 jobs:
   build:
@@ -109,19 +109,19 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.gz
-            binary: sanitize-mcp
+            binary: scour-secrets-mcp
           - target: x86_64-apple-darwin
             os: macos-latest
             archive: tar.gz
-            binary: sanitize-mcp
+            binary: scour-secrets-mcp
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
-            binary: sanitize-mcp
+            binary: scour-secrets-mcp
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             archive: zip
-            binary: sanitize-mcp.exe
+            binary: scour-secrets-mcp.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -140,29 +140,29 @@ jobs:
 
       - name: Package (Unix)
         if: matrix.archive == 'tar.gz'
-        run: tar czf sanitize-mcp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz ${{ matrix.binary }}
+        run: tar czf scour-secrets-mcp-${{ github.ref_name }}-${{ matrix.target }}.tar.gz ${{ matrix.binary }}
 
       - name: Package (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
-        run: Compress-Archive -Path "${{ matrix.binary }}" -DestinationPath "sanitize-mcp-${{ github.ref_name }}-${{ matrix.target }}.zip"
+        run: Compress-Archive -Path "${{ matrix.binary }}" -DestinationPath "scour-secrets-mcp-${{ github.ref_name }}-${{ matrix.target }}.zip"
 
       - name: Generate checksum (Unix)
         if: runner.os != 'Windows'
-        run: sha256sum sanitize-mcp-${{ github.ref_name }}-${{ matrix.target }}.* > sanitize-mcp-${{ github.ref_name }}-${{ matrix.target }}.sha256
+        run: sha256sum scour-secrets-mcp-${{ github.ref_name }}-${{ matrix.target }}.* > scour-secrets-mcp-${{ github.ref_name }}-${{ matrix.target }}.sha256
 
       - name: Generate checksum (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $hash = (Get-FileHash "sanitize-mcp-${{ github.ref_name }}-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  sanitize-mcp-${{ github.ref_name }}-${{ matrix.target }}.zip" | Out-File -Encoding utf8 "sanitize-mcp-${{ github.ref_name }}-${{ matrix.target }}.sha256"
+          $hash = (Get-FileHash "scour-secrets-mcp-${{ github.ref_name }}-${{ matrix.target }}.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  scour-secrets-mcp-${{ github.ref_name }}-${{ matrix.target }}.zip" | Out-File -Encoding utf8 "scour-secrets-mcp-${{ github.ref_name }}-${{ matrix.target }}.sha256"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: mcp-${{ matrix.target }}
-          path: sanitize-mcp-${{ github.ref_name }}-${{ matrix.target }}.*
+          path: scour-secrets-mcp-${{ github.ref_name }}-${{ matrix.target }}.*
 
   release:
     name: Create Release
@@ -201,7 +201,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           # Derive the URL-encoded project path from the mirror remote URL.
-          # GITLAB_REPO is e.g. "gitlab.com/kayelohbyte/rust-sanitize.git"
+          # GITLAB_REPO is e.g. "gitlab.com/kayelohbyte/scour-secrets.git"
           PROJECT_PATH=$(echo "$GITLAB_REPO" \
             | sed 's|https\?://||' \
             | sed 's|gitlab\.com/||' \
@@ -219,7 +219,7 @@ jobs:
             curl --fail --silent --show-error \
               --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
               --upload-file "$f" \
-              "${API}/packages/generic/rust-sanitize/${TAG}/${filename}" &
+              "${API}/packages/generic/scour-secrets/${TAG}/${filename}" &
             pids+=($!)
           done
           failed=0
@@ -233,7 +233,7 @@ jobs:
           first=true
           for f in artifacts/*; do
             filename=$(basename "$f")
-            url="${API}/packages/generic/rust-sanitize/${TAG}/${filename}"
+            url="${API}/packages/generic/scour-secrets/${TAG}/${filename}"
             [ "$first" = true ] && first=false || LINKS+=","
             LINKS+=$(printf '{"name":"%s","url":"%s","link_type":"package"}' \
               "$filename" "$url")

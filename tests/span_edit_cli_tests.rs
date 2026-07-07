@@ -1,6 +1,6 @@
 //! CLI-level integration tests for span-based structured editing (Solution A).
 //!
-//! Each test drives the real `sanitize` binary end-to-end for one format with a
+//! Each test drives the real `scour-secrets` binary end-to-end for one format with a
 //! `--profile`, asserting two properties: (1) the secret — including values that
 //! are *escaped in the source* — is gone, and (2) comments / formatting /
 //! non-matched content are preserved byte-for-byte.
@@ -29,7 +29,7 @@ fn sanitize(input_name: &str, input: &[u8], profile_json: &str) -> String {
     let outdir = dir.path().join("out");
     fs::create_dir_all(&outdir).unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input_path.to_str().unwrap(),
             "--profile",
@@ -39,13 +39,13 @@ fn sanitize(input_name: &str, input: &[u8], profile_json: &str) -> String {
             "--output",
             outdir.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .output()
         .unwrap();
     assert!(
         out.status.success(),
-        "sanitize failed for {input_name}; stderr: {}",
+        "scour-secrets failed for {input_name}; stderr: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     fs::read_to_string(outdir.join(sanitized_name(input_name))).unwrap()

@@ -1,18 +1,18 @@
-# rust-sanitize
+# scour-secrets
 
-[![CI](https://github.com/kayelohbyte/rust-sanitize/actions/workflows/ci.yml/badge.svg)](https://github.com/kayelohbyte/rust-sanitize/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/rust-sanitize.svg)](https://crates.io/crates/rust-sanitize)
-[![docs.rs](https://docs.rs/rust-sanitize/badge.svg)](https://docs.rs/rust-sanitize)
+[![CI](https://github.com/kayelohbyte/scour-secrets/actions/workflows/ci.yml/badge.svg)](https://github.com/kayelohbyte/scour-secrets/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/scour-secrets.svg)](https://crates.io/crates/scour-secrets)
+[![docs.rs](https://docs.rs/scour-secrets/badge.svg)](https://docs.rs/scour-secrets)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/rust-1.86%2B-blue.svg)]()
 
 Scrub sensitive data from logs and configs before sharing them — with support teams, vendors, or AI tools.
 
-`rust-sanitize` replaces API keys, emails, IPs, passwords, tokens, and other secrets with structurally plausible substitutes. Replacements are **one-way**: no mapping file is stored, there's no restore mode, and nothing sensitive persists after the run.
+`scour-secrets` replaces API keys, emails, IPs, passwords, tokens, and other secrets with structurally plausible substitutes. Replacements are **one-way**: no mapping file is stored, there's no restore mode, and nothing sensitive persists after the run.
 
 Works as a **CLI**, a **Rust library**, and an **MCP server** — so AI assistants like Claude and Cursor can sanitize files on your behalf before raw content ever reaches the model.
 
-> **Scope:** `rust-sanitize` targets **structured secret patterns** — API keys, tokens, credentials, emails, IPs, and other typed values in logs and configs. It is **not** a general-purpose anonymization tool and does **not** perform free-text NLP redaction of prose PII (names, addresses buried in sentences). For that, reach for a dedicated anonymization/NER library.
+> **Scope:** `scour-secrets` targets **structured secret patterns** — API keys, tokens, credentials, emails, IPs, and other typed values in logs and configs. It is **not** a general-purpose anonymization tool and does **not** perform free-text NLP redaction of prose PII (names, addresses buried in sentences). For that, reach for a dedicated anonymization/NER library.
 
 ---
 
@@ -22,15 +22,15 @@ Install the MCP server and your AI assistant can sanitize files directly — sec
 
 **Step 1 — Install the binaries**
 
-Download `sanitize` and `sanitize-mcp` for your platform from the [Releases](https://github.com/kayelohbyte/rust-sanitize/releases) page and place them on your `$PATH` (e.g. `/usr/local/bin/`). No Deno or Node required — the runtime is embedded.
+Download `scour-secrets` and `scour-secrets-mcp` for your platform from the [Releases](https://github.com/kayelohbyte/scour-secrets/releases) page and place them on your `$PATH` (e.g. `/usr/local/bin/`). No Deno or Node required — the runtime is embedded.
 
 **Step 2 — Register with your AI tool**
 
 **Claude Code:**
 
 ```bash
-claude mcp add rust-sanitize /usr/local/bin/sanitize-mcp \
-  -e SANITIZE_BIN=/usr/local/bin/sanitize
+claude mcp add scour-secrets /usr/local/bin/scour-secrets-mcp \
+  -e SCOUR_SECRETS_BIN=/usr/local/bin/scour-secrets
 ```
 
 **Claude Desktop** (`claude_desktop_config.json`):
@@ -38,9 +38,9 @@ claude mcp add rust-sanitize /usr/local/bin/sanitize-mcp \
 ```json
 {
   "mcpServers": {
-    "rust-sanitize": {
-      "command": "/usr/local/bin/sanitize-mcp",
-      "env": { "SANITIZE_BIN": "/usr/local/bin/sanitize" }
+    "scour-secrets": {
+      "command": "/usr/local/bin/scour-secrets-mcp",
+      "env": { "SCOUR_SECRETS_BIN": "/usr/local/bin/scour-secrets" }
     }
   }
 }
@@ -55,16 +55,16 @@ Once connected, the assistant can sanitize inline text or files, scan for leaks 
 **CLI from crates.io:**
 
 ```bash
-cargo install rust-sanitize
+cargo install scour-secrets
 ```
 
 **From source:**
 
 ```bash
-git clone https://github.com/kayelohbyte/rust-sanitize.git
-cd rust-sanitize
+git clone https://github.com/kayelohbyte/scour-secrets.git
+cd scour-secrets
 cargo build --release
-# Binary: target/release/sanitize
+# Binary: target/release/scour-secrets
 ```
 
 > **Windows:** Requires the MSVC linker. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) and select the **Desktop development with C++** workload.
@@ -72,10 +72,10 @@ cargo build --release
 **As a Rust library:**
 
 ```bash
-cargo add rust-sanitize
+cargo add scour-secrets
 ```
 
-**MCP binary:** Download `sanitize-mcp` for your platform from the [Releases](https://github.com/kayelohbyte/rust-sanitize/releases) page — no Deno or Node required, the runtime is embedded.
+**MCP binary:** Download `scour-secrets-mcp` for your platform from the [Releases](https://github.com/kayelohbyte/scour-secrets/releases) page — no Deno or Node required, the runtime is embedded.
 
 ---
 
@@ -87,36 +87,36 @@ cargo add rust-sanitize
 
 ### No setup — scan immediately
 
-When you run `sanitize` with no secrets file or app bundle, the built-in patterns activate automatically. They cover the most common secrets: API keys (AWS, GCP, GitHub, Stripe, Slack, OpenAI, Anthropic, HuggingFace, and more), JWTs, emails, IPv4/IPv6, UUIDs, MAC addresses, PEM headers, credential URLs, and password/secret key=value pairs.
+When you run `scour-secrets` with no secrets file or app bundle, the built-in patterns activate automatically. They cover the most common secrets: API keys (AWS, GCP, GitHub, Stripe, Slack, OpenAI, Anthropic, HuggingFace, and more), JWTs, emails, IPv4/IPv6, UUIDs, MAC addresses, PEM headers, credential URLs, and password/secret key=value pairs.
 
 ```bash
-sanitize server.log
+scour-secrets server.log
 ```
 
 Output goes to `server-sanitized.log` next to the source. Use `-o /path/to/output` to override, or `-o -` for stdout.
 
-On first run, the same balanced pattern set is written to `~/.config/sanitize/secrets.yaml` so you can extend it for repeat use. See [Configuration](docs/cli-reference.md#configuration) for the full layered config model, env vars, and project-level `.sanitize.yaml`.
+On first run, the same balanced pattern set is written to `~/.config/scour-secrets/secrets.yaml` so you can extend it for repeat use. See [Configuration](docs/cli-reference.md#configuration) for the full layered config model, env vars, and project-level `.scour-secrets.yaml`.
 
 ```bash
 # Dry-run — see what would be replaced without writing anything:
-sanitize server.log -n
+scour-secrets server.log -n
 
 # CI gate — fail if secrets are detected:
-sanitize config.yaml --fail-on-match
+scour-secrets config.yaml --fail-on-match
 ```
 
 ### Template-based setup — start from a preset
 
 ```bash
-sanitize template balanced       # mirrors the built-in runtime defaults
-sanitize template aggressive     # balanced + entropy detection + broad token patterns
-sanitize template k8s -o k8s.secrets.yaml
+scour-secrets template balanced       # mirrors the built-in runtime defaults
+scour-secrets template aggressive     # balanced + entropy detection + broad token patterns
+scour-secrets template k8s -o k8s.secrets.yaml
 ```
 
 Each preset writes a ready-to-edit `secrets.template.<preset>.yaml` covering one use case. Available presets: `balanced` (default), `aggressive`, `generic`, `web`, `k8s`, `database`, `aws`.
 
 ```bash
-sanitize server.log -s secrets.template.balanced.yaml
+scour-secrets server.log -s secrets.template.balanced.yaml
 ```
 
 `aggressive` also matches broad hostnames, short container IDs, and high-entropy token patterns — recommended when sharing logs with an LLM.
@@ -126,12 +126,12 @@ sanitize server.log -s secrets.template.balanced.yaml
 Built-in bundles for 28 applications pair a secrets pattern set with a structured field profile so field-level sanitization works out of the box, no authoring required.
 
 ```bash
-sanitize /etc/gitlab/gitlab.rb --app gitlab
-sanitize nginx.conf docker-compose.yml --app nginx,docker-compose
-sanitize values.yaml --app kubernetes
+scour-secrets /etc/gitlab/gitlab.rb --app gitlab
+scour-secrets nginx.conf docker-compose.yml --app nginx,docker-compose
+scour-secrets values.yaml --app kubernetes
 
 # See all available bundles:
-sanitize apps
+scour-secrets apps
 ```
 
 Built-in bundles: `ansible`, `aws-cli`, `bruno`, `circleci`, `datadog`, `dataiku`, `django`, `docker-compose`, `elasticsearch`, `fstab`, `github-actions`, `gitlab`, `grafana`, `har`, `heroku`, `insomnia`, `kubernetes`, `laravel`, `mongodb`, `mysql`, `nginx`, `postgresql`, `postman`, `rails`, `redis`, `splunk`, `spring-boot`, `terraform`.
@@ -143,11 +143,11 @@ Built-in bundles: `ansible`, `aws-cli`, `bruno`, `circleci`, `datadog`, `dataiku
 ### Multiple files and archives in one pass
 
 ```bash
-sanitize server.log config.yaml backup.zip -s patterns.yaml
+scour-secrets server.log config.yaml backup.zip -s patterns.yaml
 # Produces: server-sanitized.log  config-sanitized.yaml  backup.sanitized.zip
 
 # Send all outputs to a directory:
-sanitize server.log config.yaml backup.zip -s patterns.yaml -o /tmp/clean/
+scour-secrets server.log config.yaml backup.zip -s patterns.yaml -o /tmp/clean/
 ```
 
 ### Pipe from another command
@@ -155,11 +155,11 @@ sanitize server.log config.yaml backup.zip -s patterns.yaml -o /tmp/clean/
 Stdin is sanitized and sent to stdout automatically.
 
 ```bash
-grep "error" server.log | sanitize -s patterns.yaml
-mysqldump mydb | sanitize | gzip > dump.sql.gz
+grep "error" server.log | scour-secrets -s patterns.yaml
+mysqldump mydb | scour-secrets | gzip > dump.sql.gz
 
 # Mix stdin with file inputs (stdin → stdout; files → per-file siblings):
-cat extra.log | sanitize - config.yaml -s patterns.yaml
+cat extra.log | scour-secrets - config.yaml -s patterns.yaml
 ```
 
 When reading from stdin and the format can't be inferred from a filename, use `-f` to specify it: `-f yaml`, `-f json`, `-f csv`, `-f log`, etc.
@@ -168,13 +168,13 @@ When reading from stdin and the format can't be inferred from a filename, use `-
 
 ```bash
 # Fail the build if secrets are detected:
-sanitize config.yaml -s patterns.yaml --fail-on-match
+scour-secrets config.yaml -s patterns.yaml --fail-on-match
 
 # Same with encrypted patterns file:
-SANITIZE_PASSWORD="..." sanitize config.yaml -s patterns.enc --encrypted-secrets --fail-on-match
+SCOUR_SECRETS_PASSWORD="..." scour-secrets config.yaml -s patterns.enc --encrypted-secrets --fail-on-match
 
 # Stream per-match findings as NDJSON for jq or SIEM ingest:
-sanitize server.log -s patterns.yaml --dry-run --findings | \
+scour-secrets server.log -s patterns.yaml --dry-run --findings | \
   jq 'select(.type=="file") | .pattern_counts'
 ```
 
@@ -184,13 +184,13 @@ Filter which entries inside an archive are processed. `*` matches within a singl
 
 ```bash
 # Keep only the config directory:
-sanitize backup.zip --only 'config/' -s patterns.yaml
+scour-secrets backup.zip --only 'config/' -s patterns.yaml
 
 # Keep all JSON, drop the secrets file:
-sanitize backup.zip --only '**/*.json' --exclude config/secrets.json -s patterns.yaml
+scour-secrets backup.zip --only '**/*.json' --exclude config/secrets.json -s patterns.yaml
 
 # Independent filters per archive in one command:
-sanitize a.zip --only 'config/' b.tar.gz --only '**/*.log' -s patterns.yaml
+scour-secrets a.zip --only 'config/' b.tar.gz --only '**/*.log' -s patterns.yaml
 ```
 
 ### Structured field rules (`--profile`)
@@ -219,7 +219,7 @@ Replace specific named fields in YAML, JSON, TOML, CSV, `.env`, and INI files. C
 ```
 
 ```bash
-sanitize config.yaml server.log --profile fields.yaml -s patterns.yaml
+scour-secrets config.yaml server.log --profile fields.yaml -s patterns.yaml
 ```
 
 When `--profile` is active, values discovered in structured fields are automatically written back to the patterns file as literals so the streaming scanner can match them in other files too. See [Structured Processing](docs/structured-processing.md) for the full field pattern syntax and two-phase pipeline.
@@ -228,21 +228,21 @@ When `--profile` is active, values discovered in structured fields are automatic
 
 ```bash
 # Encrypt once:
-sanitize encrypt patterns.yaml patterns.yaml.enc --password
+scour-secrets encrypt patterns.yaml patterns.yaml.enc --password
 
 # Use interactively:
-sanitize data.log -s patterns.enc --encrypted-secrets -p
+scour-secrets data.log -s patterns.enc --encrypted-secrets -p
 
 # Non-interactive (CI / pipes):
-SANITIZE_PASSWORD="my-password" sanitize data.log -s patterns.enc --encrypted-secrets
+SCOUR_SECRETS_PASSWORD="my-password" scour-secrets data.log -s patterns.enc --encrypted-secrets
 # Or read from a file:
-sanitize data.log -s patterns.enc --encrypted-secrets -P /run/secrets/pw
+scour-secrets data.log -s patterns.enc --encrypted-secrets -P /run/secrets/pw
 ```
 
 ### Allowlist — pass specific values through unchanged
 
 ```bash
-sanitize data.log -s patterns.yaml --allow localhost --allow "*.internal" --allow "192.168.1.*"
+scour-secrets data.log -s patterns.yaml --allow localhost --allow "*.internal" --allow "192.168.1.*"
 ```
 
 For project-stable allowlists, add `kind: allow` entries directly to your patterns file:
@@ -259,7 +259,7 @@ For project-stable allowlists, add `kind: allow` entries directly to your patter
 Same seed + same input produces identical replacements across runs and machines — useful when correlating sanitized data across multiple files or sharing a reproducible dataset with a team.
 
 ```bash
-sanitize data.csv -s patterns.yaml -d
+scour-secrets data.csv -s patterns.yaml -d
 ```
 
 ### Shannon entropy detection
@@ -267,10 +267,10 @@ sanitize data.csv -s patterns.yaml -d
 Catch high-entropy tokens not covered by any pattern — useful for novel API keys, obfuscated secrets, or anything that wasn't anticipated when the patterns file was written.
 
 ```bash
-sanitize server.log -s patterns.yaml --entropy-threshold 4.5
+scour-secrets server.log -s patterns.yaml --entropy-threshold 4.5
 
 # Dry-run prints a calibration histogram to help tune the threshold:
-sanitize server.log -s patterns.yaml -n --entropy-threshold 4.5
+scour-secrets server.log -s patterns.yaml -n --entropy-threshold 4.5
 ```
 
 ### LLM-ready output
@@ -278,15 +278,15 @@ sanitize server.log -s patterns.yaml -n --entropy-threshold 4.5
 Sanitize and produce a structured prompt in one step:
 
 ```bash
-sanitize server.log -s patterns.yaml --llm                  # incident triage
-sanitize nginx.conf --app nginx --llm review-config         # configuration review
-sanitize nginx.conf --app nginx --llm review-security       # security posture review
+scour-secrets server.log -s patterns.yaml --llm                  # incident triage
+scour-secrets nginx.conf --app nginx --llm review-config         # configuration review
+scour-secrets nginx.conf --app nginx --llm review-security       # security posture review
 ```
 
 The prompt includes a `## Files Analyzed` manifest and embeds sanitized content inline (`<content>` blocks). For large file sets or agentic LLMs that can read files with their own tools, add `--output` to switch to **reference mode** — files are written to disk and the prompt lists their absolute paths instead:
 
 ```bash
-sanitize logs/ -s patterns.yaml --llm review-security --output /tmp/sanitized/
+scour-secrets logs/ -s patterns.yaml --llm review-security --output /tmp/sanitized/
 ```
 
 ---
@@ -315,13 +315,13 @@ sanitize logs/ -s patterns.yaml --llm review-security --output /tmp/sanitized/
 ## Library
 
 ```bash
-cargo add rust-sanitize
+cargo add scour-secrets
 ```
 
 ```rust
-use rust_sanitize::category::Category;
-use rust_sanitize::generator::HmacGenerator;
-use rust_sanitize::store::MappingStore;
+use scour_secrets::category::Category;
+use scour_secrets::generator::HmacGenerator;
+use scour_secrets::store::MappingStore;
 use std::sync::Arc;
 
 // Deterministic generator seeded with a fixed 32-byte key.
@@ -348,15 +348,15 @@ The default build includes the CLI binary and every processor. Library-only cons
 # Core only — HMAC/random generators, mapping store, streaming scanner,
 # and the always-on JSON/YAML/TOML/INI/env/key-value/log-line processors.
 # Drops clap, ureq, walkdir, ctrlc, rpassword, zip, tar, flate2, csv, csv-core, quick-xml.
-rust-sanitize = { version = "0.13", default-features = false }
+scour-secrets = { version = "0.13", default-features = false }
 
 # Add archive (zip/tar/tar.gz) and/or the CSV + XML processors as needed.
-rust-sanitize = { version = "0.13", default-features = false, features = ["archive", "structured"] }
+scour-secrets = { version = "0.13", default-features = false, features = ["archive", "structured"] }
 ```
 
 | Feature | Pulls in | Enables |
 |---------|----------|---------|
-| `cli` *(default)* | `clap`, `ureq`, `walkdir`, `ctrlc`, `rpassword` | The `sanitize` binary; implies `archive` + `structured` |
+| `cli` *(default)* | `clap`, `ureq`, `walkdir`, `ctrlc`, `rpassword` | The `scour-secrets` binary; implies `archive` + `structured` |
 | `archive` *(default)* | `zip`, `tar`, `flate2` | `ArchiveProcessor` (zip / tar / tar.gz) |
 | `structured` *(default)* | `csv`, `csv-core`, `quick-xml` | `CsvProcessor` and `XmlProcessor` |
 
@@ -385,7 +385,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model and mitigations.
 | Document | Description |
 |----------|-------------|
 | [MCP Reference](docs/mcp.md) | MCP server setup, all tool parameters, JSON examples, IDE configs (Cursor, Neovim, OpenCode), and namespace-based multi-tenant setup. |
-| [CLI Reference](docs/cli-reference.md) | Full `sanitize` command reference including all flags, subcommands, secrets file format, and examples. |
+| [CLI Reference](docs/cli-reference.md) | Full `scour-secrets` command reference including all flags, subcommands, secrets file format, and examples. |
 | [Structured Processing](docs/structured-processing.md) | `--profile` usage, field patterns, two-phase pipeline, format preservation, and processor options. |
 | [Supported Categories](docs/categories.md) | All 18 built-in replacement categories with strategies and examples, plus custom categories. |
 | [Pluggable Strategies](docs/strategies.md) | The `Strategy` trait, 6 built-in strategies, and guide to writing custom strategies. |

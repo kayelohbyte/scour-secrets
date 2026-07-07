@@ -2,9 +2,9 @@
 //!
 //! Run with: `cargo run --example custom_strategy`
 
-use rust_sanitize::category::Category;
-use rust_sanitize::store::MappingStore;
-use rust_sanitize::strategy::{EntropyMode, Strategy, StrategyGenerator};
+use scour_secrets::category::Category;
+use scour_secrets::store::MappingStore;
+use scour_secrets::strategy::{EntropyMode, Strategy, StrategyGenerator};
 use std::sync::Arc;
 
 /// A simple strategy that replaces every character with `X`.
@@ -17,7 +17,7 @@ impl Strategy for Redact {
 
     fn replace(
         &self,
-        _category: &rust_sanitize::Category,
+        _category: &scour_secrets::Category,
         original: &str,
         _entropy: &[u8; 32],
     ) -> String {

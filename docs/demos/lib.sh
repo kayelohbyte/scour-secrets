@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared setup for the rust-sanitize demo recordings (VHS tapes + asciinema casts).
+# Shared setup for the scour-secrets demo recordings (VHS tapes + asciinema casts).
 #
 # Builds a clean, hermetic work directory full of sample inputs that contain
 # ONLY clearly-fake secrets — AWS's published example access key, the Stripe
@@ -18,8 +18,8 @@
 # Repo root = two levels up from this file (docs/demos/lib.sh).
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/../.." && pwd)"
 
-# Binary under test. Override with SANITIZE_BIN; defaults to the release build.
-export SANITIZE_BIN="${SANITIZE_BIN:-$REPO_ROOT/target/release/sanitize}"
+# Binary under test. Override with SCOUR_SECRETS_BIN; defaults to the release build.
+export SCOUR_SECRETS_BIN="${SCOUR_SECRETS_BIN:-$REPO_ROOT/target/release/scour-secrets}"
 
 # Ephemeral work dir. Override with DEMO if you want it elsewhere.
 export DEMO="${DEMO:-/tmp/sanitize-demo-work}"
@@ -27,8 +27,8 @@ export DEMO="${DEMO:-/tmp/sanitize-demo-work}"
 # Hermetic, throwaway HOME so recordings never leak the operator's config/home.
 export HOME="$DEMO/home"
 
-# Make the typed command read as a bare `sanitize`, not an absolute path.
-export PATH="$(dirname "$SANITIZE_BIN"):$PATH"
+# Make the typed command read as a bare `scour-secrets`, not an absolute path.
+export PATH="$(dirname "$SCOUR_SECRETS_BIN"):$PATH"
 
 # Quiet, predictable prompts for both bash and zsh.
 export PS1='$ '
@@ -98,5 +98,5 @@ EOF
 if [[ "${BASH_SOURCE[0]:-}" == "${0:-}" ]]; then
   set -euo pipefail
   prepare_workdir
-  echo "Prepared demo work dir at $DEMO (HOME=$HOME, sanitize=$SANITIZE_BIN)"
+  echo "Prepared demo work dir at $DEMO (HOME=$HOME, scour-secrets=$SCOUR_SECRETS_BIN)"
 fi

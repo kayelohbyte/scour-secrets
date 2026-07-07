@@ -19,7 +19,7 @@ labels: bug
 
 ## Environment
 
-- rust-sanitize version (`sanitize --version`):
+- scour-secrets version (`scour-secrets --version`):
 - Rust version (`rustc --version`):
 - OS:
 

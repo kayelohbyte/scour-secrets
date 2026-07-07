@@ -3,15 +3,15 @@ use std::io::{self, IsTerminal};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
-use rust_sanitize::secrets::{decrypt_secrets, encrypt_secrets, parse_secrets, SecretsFormat};
-use rust_sanitize::{atomic_write, atomic_write_private};
+use scour_secrets::secrets::{decrypt_secrets, encrypt_secrets, parse_secrets, SecretsFormat};
+use scour_secrets::{atomic_write, atomic_write_private};
 
 use crate::cli_args::{Cli, DecryptArgs, EncryptArgs};
 
 /// Resolve a password from multiple sources (priority order):
 ///   1. `--password` CLI flag
 ///   2. `--password-file <PATH>` (read file, check Unix permissions)
-///   3. `SANITIZE_PASSWORD` environment variable
+///   3. `SCOUR_SECRETS_PASSWORD` environment variable
 ///   4. Interactive prompt via rpassword (stderr)
 pub(crate) fn resolve_password(
     password_flag: bool,
@@ -22,7 +22,7 @@ pub(crate) fn resolve_password(
         if !io::stdin().is_terminal() {
             return Err("--password requires an interactive terminal. \
                  For non-interactive use, supply the password via \
-                 --password-file or the SANITIZE_PASSWORD environment variable."
+                 --password-file or the SCOUR_SECRETS_PASSWORD environment variable."
                 .into());
         }
         return prompt_password(interactive_label);
@@ -32,7 +32,7 @@ pub(crate) fn resolve_password(
         return read_password_file(path);
     }
 
-    if let Ok(pw) = std::env::var("SANITIZE_PASSWORD") {
+    if let Ok(pw) = std::env::var("SCOUR_SECRETS_PASSWORD") {
         if !pw.is_empty() {
             // Remove the variable immediately after reading so the plaintext
             // password is no longer visible to child processes or subsequent
@@ -43,8 +43,8 @@ pub(crate) fn resolve_password(
             // here because it happens during single-threaded startup, before the
             // Rayon thread pool or any library worker threads are initialised.
             // Do NOT move this call to a context where worker threads are active.
-            std::env::remove_var("SANITIZE_PASSWORD");
-            eprintln!("info: using password from SANITIZE_PASSWORD environment variable");
+            std::env::remove_var("SCOUR_SECRETS_PASSWORD");
+            eprintln!("info: using password from SCOUR_SECRETS_PASSWORD environment variable");
             return Ok(Zeroizing::new(pw));
         }
     }

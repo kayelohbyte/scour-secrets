@@ -373,12 +373,12 @@ impl ArchiveStats {
 /// # Usage
 ///
 /// ```rust,no_run
-/// use rust_sanitize::processor::archive::{ArchiveProcessor, ArchiveFormat};
-/// use rust_sanitize::processor::registry::ProcessorRegistry;
-/// use rust_sanitize::scanner::{StreamScanner, ScanPattern, ScanConfig};
-/// use rust_sanitize::generator::HmacGenerator;
-/// use rust_sanitize::store::MappingStore;
-/// use rust_sanitize::category::Category;
+/// use scour_secrets::processor::archive::{ArchiveProcessor, ArchiveFormat};
+/// use scour_secrets::processor::registry::ProcessorRegistry;
+/// use scour_secrets::scanner::{StreamScanner, ScanPattern, ScanConfig};
+/// use scour_secrets::generator::HmacGenerator;
+/// use scour_secrets::store::MappingStore;
+/// use scour_secrets::category::Category;
 /// use std::sync::Arc;
 ///
 /// let gen = Arc::new(HmacGenerator::new([42u8; 32]));

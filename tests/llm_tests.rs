@@ -52,12 +52,12 @@ fn empty_secrets(dir: &std::path::Path) -> std::path::PathBuf {
 /// Spawn the binary with piped stdin/stdout/stderr, write `input` to stdin,
 /// and return the collected output.
 fn run_stdin(args: &[&str], input: &[u8]) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .spawn()
         .unwrap();
     child.stdin.as_mut().unwrap().write_all(input).unwrap();
@@ -78,7 +78,7 @@ fn llm_reference_mode_with_output_writes_file_and_lists_path() {
     let output = dir.path().join("out.log");
     fs::write(&input, "value SUPERSECRET end\n").unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "-s",
@@ -87,7 +87,7 @@ fn llm_reference_mode_with_output_writes_file_and_lists_path() {
             "--output",
             output.to_str().unwrap(),
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -129,7 +129,7 @@ fn llm_rejects_dry_run_combination() {
     let input = dir.path().join("in.log");
     fs::write(&input, "data\n").unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "-s",
@@ -137,7 +137,7 @@ fn llm_rejects_dry_run_combination() {
             "--llm",
             "--dry-run",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -156,7 +156,7 @@ fn llm_rejects_nonexistent_template_path() {
     let input = dir.path().join("in.log");
     fs::write(&input, "data\n").unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             input.to_str().unwrap(),
             "-s",
@@ -164,7 +164,7 @@ fn llm_rejects_nonexistent_template_path() {
             "--llm",
             "/no/such/template.txt",
         ])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
@@ -356,9 +356,9 @@ fn llm_file_input_uses_reference_mode() {
     fs::write(&input, "line with SUPERSECRET here\n").unwrap();
     let expected_out = dir.path().join("data-sanitized.log");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([input.to_str().unwrap(), "-s", s.to_str().unwrap(), "--llm"])
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 

@@ -79,7 +79,7 @@ mod scanner_builder;
 use cli_args::{Cli, SubCommand};
 
 use clap::Parser;
-use rust_sanitize::ArchiveFilter;
+use scour_secrets::ArchiveFilter;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -115,7 +115,7 @@ fn run() -> Result<(), (String, i32)> {
         })
         .collect::<Result<HashMap<_, _>, _>>()?;
 
-    let cli = Cli::parse_from(std::iter::once(OsString::from("sanitize")).chain(cleaned_args));
+    let cli = Cli::parse_from(std::iter::once(OsString::from("scour-secrets")).chain(cleaned_args));
 
     input::init_logging(cli.effective_log_format(), cli.effective_log_level());
 
@@ -198,26 +198,26 @@ mod tests {
     fn cli_debug_assert_does_not_panic() {
         // clap runs internal validation on first parse attempt.
         // This catches issues like invalid required_unless_present references.
-        let _ = Cli::try_parse_from(["sanitize", "input.txt"]);
+        let _ = Cli::try_parse_from(["scour-secrets", "input.txt"]);
     }
 
     #[test]
     fn cli_parses_basic_input() {
-        let cli = Cli::try_parse_from(["sanitize", "input.txt"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "input.txt"]).unwrap();
         assert_eq!(cli.input, vec![PathBuf::from("input.txt")]);
         assert!(cli.command.is_none());
     }
 
     #[test]
     fn cli_parses_input_with_output() {
-        let cli = Cli::try_parse_from(["sanitize", "input.txt", "-o", "output.txt"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "input.txt", "-o", "output.txt"]).unwrap();
         assert_eq!(cli.input, vec![PathBuf::from("input.txt")]);
         assert_eq!(cli.output.unwrap(), PathBuf::from("output.txt"));
     }
 
     #[test]
     fn cli_parses_multiple_inputs() {
-        let cli = Cli::try_parse_from(["sanitize", "test.txt", "a.json", "b.zip"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "test.txt", "a.json", "b.zip"]).unwrap();
         assert_eq!(
             cli.input,
             vec![
@@ -230,21 +230,27 @@ mod tests {
 
     #[test]
     fn cli_parses_output_long_flag() {
-        let cli = Cli::try_parse_from(["sanitize", "input.txt", "--output", "out.txt"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["scour-secrets", "input.txt", "--output", "out.txt"]).unwrap();
         assert_eq!(cli.output.unwrap(), PathBuf::from("out.txt"));
     }
 
     #[test]
     fn cli_parses_secrets_file_flag() {
-        let cli = Cli::try_parse_from(["sanitize", "input.txt", "--secrets-file", "secrets.json"])
-            .unwrap();
+        let cli = Cli::try_parse_from([
+            "scour-secrets",
+            "input.txt",
+            "--secrets-file",
+            "secrets.json",
+        ])
+        .unwrap();
         assert_eq!(cli.secrets_file.unwrap(), PathBuf::from("secrets.json"));
     }
 
     #[test]
     fn cli_parses_short_flags() {
         let cli = Cli::try_parse_from([
-            "sanitize",
+            "scour-secrets",
             "input.txt",
             "-s",
             "secrets.json",
@@ -270,29 +276,34 @@ mod tests {
 
     #[test]
     fn cli_parses_dry_run() {
-        let cli = Cli::try_parse_from(["sanitize", "input.txt", "--dry-run"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "input.txt", "--dry-run"]).unwrap();
         assert!(cli.dry_run);
     }
 
     #[test]
     fn cli_parses_progress_mode() {
-        let cli = Cli::try_parse_from(["sanitize", "input.txt", "--progress", "on"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "input.txt", "--progress", "on"]).unwrap();
         assert_eq!(cli.progress, Some(ProgressMode::On));
         assert_eq!(cli.effective_progress_mode(), ProgressMode::On);
     }
 
     #[test]
     fn cli_no_progress_maps_to_off() {
-        let cli = Cli::try_parse_from(["sanitize", "input.txt", "--no-progress"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "input.txt", "--no-progress"]).unwrap();
         assert!(cli.no_progress);
         assert_eq!(cli.effective_progress_mode(), ProgressMode::Off);
     }
 
     #[test]
     fn cli_explicit_progress_takes_precedence_over_no_progress() {
-        let cli =
-            Cli::try_parse_from(["sanitize", "input.txt", "--no-progress", "--progress", "on"])
-                .unwrap();
+        let cli = Cli::try_parse_from([
+            "scour-secrets",
+            "input.txt",
+            "--no-progress",
+            "--progress",
+            "on",
+        ])
+        .unwrap();
         assert!(cli.no_progress);
         assert_eq!(cli.progress, Some(ProgressMode::On));
         assert_eq!(cli.effective_progress_mode(), ProgressMode::On);
@@ -300,14 +311,19 @@ mod tests {
 
     #[test]
     fn cli_parses_progress_interval() {
-        let cli = Cli::try_parse_from(["sanitize", "input.txt", "--progress-interval-ms", "500"])
-            .unwrap();
+        let cli = Cli::try_parse_from([
+            "scour-secrets",
+            "input.txt",
+            "--progress-interval-ms",
+            "500",
+        ])
+        .unwrap();
         assert_eq!(cli.progress_interval_ms, 500);
     }
 
     #[test]
     fn validate_args_rejects_zero_progress_interval() {
-        let mut cli = Cli::try_parse_from(["sanitize", "input.txt"]).unwrap();
+        let mut cli = Cli::try_parse_from(["scour-secrets", "input.txt"]).unwrap();
         cli.input = vec![std::env::current_dir().unwrap().join("Cargo.toml")];
         cli.progress_interval_ms = 0;
         let err = validate_args(&cli).unwrap_err();
@@ -394,38 +410,38 @@ mod tests {
 
     #[test]
     fn cli_writes_to_stdout_stdin_no_output() {
-        let cli = Cli::try_parse_from(["sanitize"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets"]).unwrap();
         assert!(cli_writes_to_stdout(&cli));
     }
 
     #[test]
     fn cli_writes_to_stdout_explicit_dash_input() {
-        let cli = Cli::try_parse_from(["sanitize", "-"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "-"]).unwrap();
         assert!(cli_writes_to_stdout(&cli));
     }
 
     #[test]
     fn cli_writes_to_stdout_explicit_dash_output() {
-        let cli = Cli::try_parse_from(["sanitize", "file.txt", "-o", "-"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "file.txt", "-o", "-"]).unwrap();
         assert!(cli_writes_to_stdout(&cli));
     }
 
     #[test]
     fn cli_writes_to_stdout_file_input_no_output_is_false() {
-        let cli = Cli::try_parse_from(["sanitize", "file.txt"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "file.txt"]).unwrap();
         assert!(!cli_writes_to_stdout(&cli));
     }
 
     #[test]
     fn cli_writes_to_stdout_dir_input_no_output_is_false() {
-        let cli = Cli::try_parse_from(["sanitize", "some_dir/"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "some_dir/"]).unwrap();
         assert!(!cli_writes_to_stdout(&cli));
     }
 
     #[test]
     fn cli_parses_encrypt_subcommand() {
         let cli = Cli::try_parse_from([
-            "sanitize",
+            "scour-secrets",
             "encrypt",
             "secrets.json",
             "secrets.enc",
@@ -439,7 +455,7 @@ mod tests {
     #[test]
     fn cli_parses_decrypt_subcommand() {
         let cli = Cli::try_parse_from([
-            "sanitize",
+            "scour-secrets",
             "decrypt",
             "secrets.enc",
             "secrets.json",
@@ -453,7 +469,7 @@ mod tests {
     #[test]
     fn cli_no_input_no_subcommand_is_ok_at_parse_time() {
         // Clap allows it (input is Vec); we validate manually in run().
-        let cli = Cli::try_parse_from(["sanitize", "--dry-run"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "--dry-run"]).unwrap();
         assert!(cli.input.is_empty());
         assert!(cli.command.is_none());
     }
@@ -461,7 +477,7 @@ mod tests {
     #[test]
     fn cli_parses_all_flags() {
         let cli = Cli::try_parse_from([
-            "sanitize",
+            "scour-secrets",
             "input.log",
             "--output",
             "output.log",
@@ -501,25 +517,25 @@ mod tests {
 
     #[test]
     fn cli_stdin_dash_input() {
-        let cli = Cli::try_parse_from(["sanitize", "-", "-s", "s.json"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "-", "-s", "s.json"]).unwrap();
         assert!(has_stdin_input(&cli));
     }
 
     #[test]
     fn cli_stdin_no_input() {
-        let cli = Cli::try_parse_from(["sanitize", "-s", "s.json"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "-s", "s.json"]).unwrap();
         assert!(has_stdin_input(&cli));
     }
 
     #[test]
     fn cli_file_input_not_stdin() {
-        let cli = Cli::try_parse_from(["sanitize", "data.log"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "data.log"]).unwrap();
         assert!(!has_stdin_input(&cli));
     }
 
     #[test]
     fn cli_file_and_stdin_mix_is_supported() {
-        let cli = Cli::try_parse_from(["sanitize", "test.txt", "-", "-s", "s.json"]).unwrap();
+        let cli = Cli::try_parse_from(["scour-secrets", "test.txt", "-", "-s", "s.json"]).unwrap();
         assert!(has_stdin_input(&cli));
         assert_eq!(file_inputs(&cli).len(), 1);
     }
@@ -550,7 +566,7 @@ mod tests {
         fs::write(&zip, "PK\x03\x04").unwrap();
 
         let cli = Cli::try_parse_from([
-            "sanitize",
+            "scour-secrets",
             txt.to_str().unwrap(),
             json.to_str().unwrap(),
             zip.to_str().unwrap(),
@@ -596,7 +612,7 @@ mod tests {
         fs::write(&f2, "y").unwrap();
 
         let cli = Cli::try_parse_from([
-            "sanitize",
+            "scour-secrets",
             f1.to_str().unwrap(),
             f2.to_str().unwrap(),
             "--output",
@@ -624,7 +640,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn real_file_cli() -> Cli {
-        let mut cli = Cli::try_parse_from(["sanitize", "placeholder"]).unwrap();
+        let mut cli = Cli::try_parse_from(["scour-secrets", "placeholder"]).unwrap();
         cli.input = vec![std::env::current_dir().unwrap().join("Cargo.toml")];
         cli
     }
@@ -808,7 +824,7 @@ mod tests {
             "scan mode must use --dry-run --fail-on-match"
         );
         assert!(
-            script.contains("SANITIZE_SKIP"),
+            script.contains("SCOUR_SECRETS_SKIP"),
             "escape hatch must be present"
         );
         assert!(

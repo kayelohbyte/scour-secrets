@@ -1,6 +1,6 @@
 use crate::cli_args::{AppsAddArgs, AppsArgs, AppsEditArgs, AppsRemoveArgs, AppsSubCommand};
-use rust_sanitize::processor::FileTypeProfile;
-use rust_sanitize::secrets::SecretEntry;
+use scour_secrets::processor::FileTypeProfile;
+use scour_secrets::secrets::SecretEntry;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -13,11 +13,11 @@ use std::path::{Path, PathBuf};
 //   profile.yaml  — Vec<FileTypeProfile> (optional)
 //
 // User-defined apps follow the same two-file convention in a directory
-// specified by the SANITIZE_APPS_DIR environment variable, falling back to
+// specified by the SCOUR_SECRETS_APPS_DIR environment variable, falling back to
 // ~/.config/sanitize/apps  (XDG-compatible).
 //
 // The first YAML comment line (# ...) in either file is shown as the
-// description in  `sanitize apps`.
+// description in  `scour-secrets apps`.
 
 /// Compiled content loaded from an app bundle directory.
 pub(crate) struct AppBundle {
@@ -213,10 +213,10 @@ pub(crate) fn builtin_app_names() -> Vec<&'static str> {
 
 /// Resolve the user-defined apps directory.
 ///
-/// Checks `SANITIZE_APPS_DIR` first, then falls back to
+/// Checks `SCOUR_SECRETS_APPS_DIR` first, then falls back to
 /// `~/.config/sanitize/apps` (XDG base directory convention).
 pub(crate) fn user_apps_dir() -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("SANITIZE_APPS_DIR") {
+    if let Ok(dir) = std::env::var("SCOUR_SECRETS_APPS_DIR") {
         if !dir.is_empty() {
             return Some(PathBuf::from(dir));
         }
@@ -261,7 +261,7 @@ fn read_app_description(app_dir: &Path) -> String {
 /// for `name` does not yet exist, both `profile.yaml` and `secrets.yaml` are
 /// copied from the built-in bundle so that:
 ///
-/// - The profile and secrets files are editable without running `sanitize apps edit`.
+/// - The profile and secrets files are editable without running `scour-secrets apps edit`.
 /// - Discovered literal values from the profile pass can be persisted back into
 ///   `secrets.yaml` by subsequent runs.
 ///
@@ -319,7 +319,7 @@ pub(crate) fn ensure_user_app_copy(name: &str) -> Option<PathBuf> {
 /// Load an app bundle by name.
 ///
 /// Resolution order:
-///   1. User apps directory (`SANITIZE_APPS_DIR` or `~/.config/sanitize/apps/<name>/`)
+///   1. User apps directory (`SCOUR_SECRETS_APPS_DIR` or `~/.config/sanitize/apps/<name>/`)
 ///   2. Built-in apps embedded in the binary
 pub(crate) fn load_app_bundle(name: &str) -> Result<AppBundle, String> {
     // 1. User-defined app takes precedence over built-in.
@@ -350,7 +350,7 @@ pub(crate) fn load_app_bundle(name: &str) -> Result<AppBundle, String> {
         .ok_or_else(|| {
             format!(
                 "unknown app '{}'. Built-in apps: {}. \
-                 Add a custom app at $SANITIZE_APPS_DIR/{} (secrets.yaml / profile.yaml).",
+                 Add a custom app at $SCOUR_SECRETS_APPS_DIR/{} (secrets.yaml / profile.yaml).",
                 name,
                 builtin_app_names().join(", "),
                 name,
@@ -572,7 +572,7 @@ fn run_apps_remove(args: &AppsRemoveArgs) -> Result<(), (String, i32)> {
             return Err((
                 format!(
                     "'{}' is a built-in app — nothing to remove.\n\
-                     Use `sanitize apps edit {}` first to create a local copy.",
+                     Use `scour-secrets apps edit {}` first to create a local copy.",
                     args.name, args.name
                 ),
                 1,
@@ -695,7 +695,7 @@ fn run_apps_dir() -> Result<(), (String, i32)> {
 
     if !apps_dir.exists() {
         eprintln!(
-            "note: directory does not exist yet — it will be created automatically by `sanitize apps add`"
+            "note: directory does not exist yet — it will be created automatically by `scour-secrets apps add`"
         );
     }
 

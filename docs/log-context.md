@@ -7,7 +7,7 @@ captures surrounding context windows. The result is structured for LLM triage
 ## Quick Start
 
 ```rust
-use rust_sanitize::log_context::{extract_context, LogContextConfig};
+use scour_secrets::log_context::{extract_context, LogContextConfig};
 
 let log = "INFO  start\nERROR disk full\nINFO  retrying\nWARN  degraded\nINFO  done";
 
@@ -26,7 +26,7 @@ assert_eq!(result.matches[0].line_number, 2);           // 1-based
 `LogContextConfig` is built with a fluent API:
 
 ```rust
-use rust_sanitize::log_context::LogContextConfig;
+use scour_secrets::log_context::LogContextConfig;
 
 let config = LogContextConfig::new()
     .with_extra_keywords(["timeout", "oomkilled"])  // append to defaults
@@ -76,7 +76,7 @@ For large files where reading the entire content into a `String` is undesirable,
 use `extract_context_reader`:
 
 ```rust
-use rust_sanitize::log_context::{extract_context_reader, LogContextConfig};
+use scour_secrets::log_context::{extract_context_reader, LogContextConfig};
 use std::io::Cursor;
 
 let log = b"INFO start\nERROR disk full\nINFO done";
@@ -94,7 +94,7 @@ LLM prompts when `Some(&report)` is passed to `format_llm_prompt`. The
 notable events section is only emitted when `match_count > 0`.
 
 ```rust
-use rust_sanitize::log_context::{extract_context, LogContextConfig};
+use scour_secrets::log_context::{extract_context, LogContextConfig};
 
 // After sanitizing, extract context from the sanitized output.
 let ctx = extract_context(&sanitized_text, &LogContextConfig::new());

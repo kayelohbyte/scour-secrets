@@ -1,4 +1,4 @@
-# Contributing to rust-sanitize
+# Contributing to scour-secrets
 
 Thank you for your interest in contributing! This document explains how to
 get started.
@@ -11,8 +11,8 @@ that can't be merged.
 ## Getting Started
 
 ```bash
-git clone https://github.com/kayelohbyte/rust-sanitize.git
-cd rust-sanitize
+git clone https://github.com/kayelohbyte/scour-secrets.git
+cd scour-secrets
 cargo build
 ```
 

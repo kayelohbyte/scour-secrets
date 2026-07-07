@@ -1191,9 +1191,9 @@ checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quick-xml"
-version = "0.31.0"
+version = "0.38.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1004a344b30a54e2ee58d66a71b32d2db2feb0a31f9a2d302bf0536f15de2a33"
+checksum = "b66c2058c55a409d601666cffe35f04333cf1013010882cec174a7467cd4e21c"
 dependencies = [
  "memchr",
 ]
@@ -1390,50 +1390,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-sanitize"
-version = "0.15.0"
-dependencies = [
- "aes-gcm",
- "aho-corasick",
- "bytecount",
- "clap",
- "compact_str",
- "criterion",
- "csv",
- "csv-core",
- "ctrlc",
- "dashmap",
- "flate2",
- "glob",
- "hmac",
- "jiter",
- "nix 0.29.0",
- "pbkdf2",
- "proptest",
- "quick-xml",
- "rand 0.9.4",
- "rayon",
- "regex",
- "rpassword",
- "saphyr-parser",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha2",
- "tar",
- "tempfile",
- "thiserror 1.0.69",
- "toml",
- "toml_edit",
- "tracing",
- "tracing-subscriber",
- "ureq",
- "walkdir",
- "zeroize",
- "zip",
-]
-
-[[package]]
 name = "rustix"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1529,6 +1485,50 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "scour-secrets"
+version = "0.15.0"
+dependencies = [
+ "aes-gcm",
+ "aho-corasick",
+ "bytecount",
+ "clap",
+ "compact_str",
+ "criterion",
+ "csv",
+ "csv-core",
+ "ctrlc",
+ "dashmap",
+ "flate2",
+ "glob",
+ "hmac",
+ "jiter",
+ "nix 0.29.0",
+ "pbkdf2",
+ "proptest",
+ "quick-xml",
+ "rand 0.9.4",
+ "rayon",
+ "regex",
+ "rpassword",
+ "saphyr-parser",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "tar",
+ "tempfile",
+ "thiserror 1.0.69",
+ "toml",
+ "toml_edit",
+ "tracing",
+ "tracing-subscriber",
+ "ureq",
+ "walkdir",
+ "zeroize",
+ "zip",
+]
 
 [[package]]
 name = "serde"

@@ -8,11 +8,11 @@ use std::time::SystemTime;
 use tracing::{info, warn};
 use zeroize::Zeroizing;
 
-use rust_sanitize::secrets::{
+use scour_secrets::secrets::{
     decrypt_secrets, entries_to_patterns, extract_allow_patterns, parse_secrets, SecretEntry,
     SecretsFormat,
 };
-use rust_sanitize::{
+use scour_secrets::{
     atomic_write, format_llm_prompt, format_llm_prompt_reference, strip_values_from_text,
     ArchiveFilter, ArchiveFormat, ArchiveProcessor, FileTypeProfile, LlmPathEntry, MappingStore,
     ProcessorRegistry, ReportBuilder, ReportMetadata, ScanConfig, ScanPattern, StreamScanner,
@@ -41,7 +41,7 @@ use crate::scanner_builder::{
     builtin_field_name_signals, common_allow_patterns, field_signals_from_entries,
     write_default_secrets,
 };
-use rust_sanitize::{DEFAULT_ARCHIVE_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_MAX_MATCHES};
+use scour_secrets::{DEFAULT_ARCHIVE_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_MAX_MATCHES};
 
 mod config_layer;
 mod output;
@@ -125,7 +125,7 @@ pub(crate) fn run_sanitize(
              discovered literals automatically:\n\
              \n\
              touch secrets.yaml\n\
-             sanitize --profile my.profile.yaml --secrets-file secrets.yaml [paths...]"
+             scour-secrets --profile my.profile.yaml --secrets-file secrets.yaml [paths...]"
                 .into(),
             1,
         ));

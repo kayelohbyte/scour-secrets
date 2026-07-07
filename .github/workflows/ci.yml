@@ -76,7 +76,7 @@ jobs:
       matrix:
         # Prove every feature combination compiles cleanly. Plain `cargo clippy`
         # (not --all-targets) builds the lib plus any bin whose required-features
-        # are satisfied — so the `sanitize` binary is only built for `cli`, and
+        # are satisfied — so the `scour-secrets` binary is only built for `cli`, and
         # the integration tests (which use gated types) are not compiled here.
         features:
           - ""                    # core library only (--no-default-features)
@@ -173,8 +173,8 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.3.3
-      # The server shells out to the `sanitize` binary; build it first.
-      - run: cargo build --release --bin sanitize
+      # The server shells out to the `scour-secrets` binary; build it first.
+      - run: cargo build --release --bin scour-secrets
       - name: Typecheck
         working-directory: mcp
         run: deno task check
@@ -182,7 +182,7 @@ jobs:
         working-directory: mcp
         run: deno task test
         env:
-          SANITIZE_BIN: ${{ github.workspace }}/target/release/sanitize
+          SCOUR_SECRETS_BIN: ${{ github.workspace }}/target/release/scour-secrets
 
   fmt:
     name: Format

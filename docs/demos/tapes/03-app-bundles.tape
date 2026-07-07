@@ -1,4 +1,4 @@
-# rust-sanitize demo 03 — zero-config app bundles
+# scour-secrets demo 03 — zero-config app bundles
 # Render from the repo root:  vhs docs/demos/tapes/03-app-bundles.tape
 Output docs/demos/out/03-app-bundles.gif
 
@@ -18,12 +18,12 @@ Show
 Sleep 800ms
 Type "# 28 built-in bundles pair secret patterns with structured field profiles" Enter
 Sleep 600ms
-Type "sanitize apps | head -n 12" Sleep 500ms Enter
+Type "scour-secrets apps | head -n 12" Sleep 500ms Enter
 Sleep 3s
 
 Type "# Point --app at the matching bundle — no profile authoring needed" Enter
 Sleep 600ms
-Type "sanitize nginx.conf --app nginx" Sleep 500ms Enter
+Type "scour-secrets nginx.conf --app nginx" Sleep 500ms Enter
 Sleep 3s
 
 Type "# Secrets gone; comments, directives, and layout preserved exactly" Enter

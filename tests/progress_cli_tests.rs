@@ -59,19 +59,19 @@ fn forced_progress_uses_stderr_and_keeps_stdout_payload_clean() {
     let (_dir, input_path, secrets_path) = write_test_inputs();
     let output_path = input_path.with_file_name("input-sanitized.log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let output = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .arg(&input_path)
         .arg("-s")
         .arg(&secrets_path)
         .arg("--progress")
         .arg("on")
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
     assert!(
         output.status.success(),
-        "sanitize failed: {}",
+        "scour-secrets failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -97,17 +97,17 @@ fn auto_progress_is_silent_in_non_tty_mode() {
     let (_dir, input_path, secrets_path) = write_test_inputs();
     let output_path = input_path.with_file_name("input-sanitized.log");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let output = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .arg(&input_path)
         .arg("-s")
         .arg(&secrets_path)
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
     assert!(
         output.status.success(),
-        "sanitize failed: {}",
+        "scour-secrets failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -144,7 +144,7 @@ fn stdin_pipeline_forced_progress_keeps_stdout_clean() {
     .unwrap();
     let out_path = dir.path().join("out.txt");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .arg("-")
         .arg("-s")
         .arg(&secrets_path)
@@ -152,7 +152,7 @@ fn stdin_pipeline_forced_progress_keeps_stdout_clean() {
         .arg(&out_path)
         .arg("--progress")
         .arg("on")
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -168,7 +168,7 @@ fn stdin_pipeline_forced_progress_keeps_stdout_clean() {
     let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
-        "sanitize failed: {}",
+        "scour-secrets failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -220,19 +220,19 @@ fn multi_input_writes_per_file_outputs_with_matching_extensions() {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let output = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .arg(&txt)
         .arg(&json)
         .arg(&zip)
         .arg("-s")
         .arg(&secrets_path)
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
     assert!(
         output.status.success(),
-        "sanitize failed: {}",
+        "scour-secrets failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -287,7 +287,7 @@ fn write_multi_inputs(
 fn multi_input_progress_shows_done_for_every_file() {
     let (_dir, inputs, secrets_path) = write_multi_inputs(4);
 
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_sanitize"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_scour-secrets"));
     for p in &inputs {
         cmd.arg(p);
     }
@@ -297,13 +297,13 @@ fn multi_input_progress_shows_done_for_every_file() {
         .arg("on")
         .arg("--threads")
         .arg("4")
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .stdin(std::process::Stdio::null());
 
     let output = cmd.output().unwrap();
     assert!(
         output.status.success(),
-        "sanitize failed: {}",
+        "scour-secrets failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -323,7 +323,7 @@ fn multi_input_progress_shows_done_for_every_file() {
 fn multi_input_fail_on_match_returns_exit_code_2() {
     let (_dir, inputs, secrets_path) = write_multi_inputs(3);
 
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_sanitize"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_scour-secrets"));
     for p in &inputs {
         cmd.arg(p);
     }
@@ -332,7 +332,7 @@ fn multi_input_fail_on_match_returns_exit_code_2() {
         .arg("--fail-on-match")
         .arg("--threads")
         .arg("3")
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .stdin(std::process::Stdio::null());
 
     let output = cmd.output().unwrap();
@@ -364,15 +364,15 @@ fn determinism_parallel_matches_serial() {
     .unwrap();
 
     // Encrypt the secrets file with a fixed test password.
-    let enc_status = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let enc_status = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .arg("encrypt")
         .arg(&secrets_plain)
         .arg(&secrets_enc)
-        .env("SANITIZE_PASSWORD", "det-test-key-bench")
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_PASSWORD", "det-test-key-bench")
+        .env("SCOUR_SECRETS_LOG", "error")
         .status()
         .unwrap();
-    assert!(enc_status.success(), "sanitize encrypt failed");
+    assert!(enc_status.success(), "scour-secrets encrypt failed");
 
     let n_files = 5;
     let mut inputs = Vec::new();
@@ -388,7 +388,7 @@ fn determinism_parallel_matches_serial() {
     fs::create_dir_all(&out4).unwrap();
 
     // Run with --threads 1.
-    let mut cmd1 = Command::new(env!("CARGO_BIN_EXE_sanitize"));
+    let mut cmd1 = Command::new(env!("CARGO_BIN_EXE_scour-secrets"));
     for p in &inputs {
         cmd1.arg(p);
     }
@@ -401,15 +401,15 @@ fn determinism_parallel_matches_serial() {
         .arg("--deterministic")
         .arg("--threads")
         .arg("1")
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_PASSWORD", "det-test-key-bench")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_PASSWORD", "det-test-key-bench")
         .stdin(Stdio::null())
         .status()
         .unwrap();
     assert!(status1.success(), "threads=1 run failed");
 
     // Run with --threads 4.
-    let mut cmd4 = Command::new(env!("CARGO_BIN_EXE_sanitize"));
+    let mut cmd4 = Command::new(env!("CARGO_BIN_EXE_scour-secrets"));
     for p in &inputs {
         cmd4.arg(p);
     }
@@ -422,8 +422,8 @@ fn determinism_parallel_matches_serial() {
         .arg("--deterministic")
         .arg("--threads")
         .arg("4")
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_PASSWORD", "det-test-key-bench")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_PASSWORD", "det-test-key-bench")
         .stdin(Stdio::null())
         .status()
         .unwrap();
@@ -467,7 +467,7 @@ fn determinism_parallel_matches_serial() {
 fn multi_input_output_mapping_single_thread() {
     let (_dir, inputs, secrets_path) = write_multi_inputs(3);
 
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_sanitize"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_scour-secrets"));
     for p in &inputs {
         cmd.arg(p);
     }
@@ -476,13 +476,13 @@ fn multi_input_output_mapping_single_thread() {
         .arg(&secrets_path)
         .arg("--threads")
         .arg("1")
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .output()
         .unwrap();
 
     assert!(
         output.status.success(),
-        "sanitize failed: {}",
+        "scour-secrets failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 

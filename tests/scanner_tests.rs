@@ -9,11 +9,11 @@
 //! - Mixed pattern types
 //! - Edge cases (empty input, no matches, very small chunks)
 
-use rust_sanitize::category::Category;
-use rust_sanitize::error::SanitizeError;
-use rust_sanitize::generator::HmacGenerator;
-use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
-use rust_sanitize::store::MappingStore;
+use scour_secrets::category::Category;
+use scour_secrets::error::SanitizeError;
+use scour_secrets::generator::HmacGenerator;
+use scour_secrets::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use scour_secrets::store::MappingStore;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -479,7 +479,7 @@ fn stats_pattern_counts_per_type() {
 
 #[test]
 fn scanner_with_strategy_generator() {
-    use rust_sanitize::strategy::{EntropyMode, RandomString, StrategyGenerator};
+    use scour_secrets::strategy::{EntropyMode, RandomString, StrategyGenerator};
 
     let strat = Box::new(RandomString::new());
     let gen = Arc::new(StrategyGenerator::new(
@@ -507,7 +507,7 @@ fn scanner_with_strategy_generator() {
 
 #[test]
 fn scanner_with_category_aware_strategy() {
-    use rust_sanitize::strategy::{CategoryAwareStrategy, EntropyMode, StrategyGenerator};
+    use scour_secrets::strategy::{CategoryAwareStrategy, EntropyMode, StrategyGenerator};
 
     let gen = Arc::new(StrategyGenerator::new(
         Box::new(CategoryAwareStrategy::new()),

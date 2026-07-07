@@ -1,6 +1,6 @@
 # Library API Reference
 
-All public types are re-exported from the crate root (`rust_sanitize::*`) for convenience. The table below summarises every module and its key exports.
+All public types are re-exported from the crate root (`scour_secrets::*`) for convenience. The table below summarises every module and its key exports.
 
 ## Scanner Module (`scanner`)
 
@@ -121,7 +121,7 @@ Scans sanitized output for error/warning keywords and captures the surrounding l
 ### Example — in-memory
 
 ```rust
-use rust_sanitize::log_context::{extract_context, LogContextConfig};
+use scour_secrets::log_context::{extract_context, LogContextConfig};
 
 let log = "INFO  startup\nERROR disk full\nINFO  retrying\nINFO  done";
 let config = LogContextConfig::new().with_context_lines(1);
@@ -137,7 +137,7 @@ assert_eq!(result.matches[0].after,  vec!["INFO  retrying"]);
 ### Example — streaming (large files)
 
 ```rust
-use rust_sanitize::log_context::{extract_context_reader, LogContextConfig};
+use scour_secrets::log_context::{extract_context_reader, LogContextConfig};
 use std::io::BufReader;
 use std::fs::File;
 
@@ -220,7 +220,7 @@ The allowlist suppresses specific values from sanitization. Values that match an
 | `AllowlistMatcher::new(patterns)` | Build a **case-insensitive** matcher. Both patterns and query values are lowercased before comparison, so `"Localhost"` matches a pattern of `"localhost"` and vice-versa. This is the default for allowlists loaded from secrets files. |
 | `AllowlistMatcher::new_case_sensitive(patterns)` | Build a **case-sensitive** matcher. Use when exact-case matching is required (e.g. allowlisting a known token that must not match a differently-cased substring). |
 | `AllowlistMatcher::is_allowed(value)` | Returns `true` if `value` matches any pattern. Thread-safe; increments an internal counter. |
-| `AllowlistMatcher::match_pattern(value)` | Returns the first matching pattern string, or `None`. Useful for diagnostics (see also `sanitize allow-test`). |
+| `AllowlistMatcher::match_pattern(value)` | Returns the first matching pattern string, or `None`. Useful for diagnostics (see also `scour-secrets allow-test`). |
 | `AllowlistMatcher::seen_count()` | Total values allowed through since construction. |
 | `AllowlistMatcher::pattern_count()` | Number of registered patterns (exact + glob). |
 | `AllowlistMatcher::is_empty()` | `true` when no patterns are registered. |
@@ -236,7 +236,7 @@ The allowlist suppresses specific values from sanitization. Values that match an
 | `*` | Anything |
 
 ```rust
-use rust_sanitize::allowlist::AllowlistMatcher;
+use scour_secrets::allowlist::AllowlistMatcher;
 
 let (matcher, warnings) = AllowlistMatcher::new(vec![
     "localhost".into(),

@@ -4,8 +4,8 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 use zeroize::Zeroizing;
 
-use rust_sanitize::secrets::{parse_secrets, SecretsFormat};
-use rust_sanitize::{
+use scour_secrets::secrets::{parse_secrets, SecretsFormat};
+use scour_secrets::{
     atomic_write, DEFAULT_ARCHIVE_DEPTH, DEFAULT_CONTEXT_LINES, DEFAULT_MAX_MATCHES,
 };
 
@@ -28,9 +28,9 @@ pub(crate) fn run_scan(args: &ScanArgs) -> Result<(), (String, i32)> {
         if args.encrypted_secrets && !args.password {
             if let Some(ref pf) = args.password_file {
                 Some(read_password_file(pf).map_err(|e| (e, 1))?)
-            } else if let Ok(pw) = std::env::var("SANITIZE_PASSWORD") {
-                std::env::remove_var("SANITIZE_PASSWORD");
-                eprintln!("info: using password from SANITIZE_PASSWORD environment variable");
+            } else if let Ok(pw) = std::env::var("SCOUR_SECRETS_PASSWORD") {
+                std::env::remove_var("SCOUR_SECRETS_PASSWORD");
+                eprintln!("info: using password from SCOUR_SECRETS_PASSWORD environment variable");
                 Some(Zeroizing::new(pw))
             } else {
                 None
@@ -111,10 +111,10 @@ pub(crate) fn run_scan(args: &ScanArgs) -> Result<(), (String, i32)> {
 }
 
 pub(crate) fn run_test_pattern(args: &TestPatternArgs) -> Result<(), (String, i32)> {
-    let mut entries: Vec<rust_sanitize::secrets::SecretEntry> = Vec::new();
+    let mut entries: Vec<scour_secrets::secrets::SecretEntry> = Vec::new();
 
     for p in &args.patterns {
-        entries.push(rust_sanitize::secrets::SecretEntry {
+        entries.push(scour_secrets::secrets::SecretEntry {
             pattern: p.clone(),
             kind: "regex".to_string(),
             category: "auth_token".to_string(),
@@ -360,7 +360,7 @@ pub(crate) fn run_test_pattern(args: &TestPatternArgs) -> Result<(), (String, i3
 }
 
 pub(crate) fn run_allow_test(args: &AllowTestArgs) -> Result<(), (String, i32)> {
-    use rust_sanitize::allowlist::AllowlistMatcher;
+    use scour_secrets::allowlist::AllowlistMatcher;
 
     let result = AllowlistMatcher::new(args.allow.clone());
     for w in &result.warnings {

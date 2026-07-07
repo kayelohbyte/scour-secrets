@@ -1,4 +1,4 @@
-/// Template preset names accepted by `sanitize template`.
+/// Template preset names accepted by `scour-secrets template`.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TemplatePreset {
     Balanced,

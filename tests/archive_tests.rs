@@ -12,13 +12,13 @@
 //! - Secrets from memory (decrypted patterns via ScanPattern)
 //! - Format auto-detection
 
-use rust_sanitize::category::Category;
-use rust_sanitize::generator::HmacGenerator;
-use rust_sanitize::processor::archive::{ArchiveFilter, ArchiveFormat, ArchiveProcessor};
-use rust_sanitize::processor::profile::{FieldRule, FileTypeProfile};
-use rust_sanitize::processor::registry::ProcessorRegistry;
-use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
-use rust_sanitize::store::MappingStore;
+use scour_secrets::category::Category;
+use scour_secrets::generator::HmacGenerator;
+use scour_secrets::processor::archive::{ArchiveFilter, ArchiveFormat, ArchiveProcessor};
+use scour_secrets::processor::profile::{FieldRule, FileTypeProfile};
+use scour_secrets::processor::registry::ProcessorRegistry;
+use scour_secrets::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use scour_secrets::store::MappingStore;
 use std::io::{Cursor, Read, Write};
 use std::sync::Arc;
 
@@ -886,8 +886,8 @@ fn nested_archive_custom_depth_limit() {
     };
     let outer_zip = make_zip(&[("l1.tar.gz", &l1_tar_gz)]);
 
-    let gen = Arc::new(rust_sanitize::generator::HmacGenerator::new([99u8; 32]));
-    let store = Arc::new(rust_sanitize::store::MappingStore::new(gen, None));
+    let gen = Arc::new(scour_secrets::generator::HmacGenerator::new([99u8; 32]));
+    let store = Arc::new(scour_secrets::store::MappingStore::new(gen, None));
     let patterns = vec![ScanPattern::from_literal(
         "TOP_SECRET_KEY_12345",
         Category::Custom("api_key".into()),
@@ -895,14 +895,14 @@ fn nested_archive_custom_depth_limit() {
     )
     .unwrap()];
     let scanner = Arc::new(
-        rust_sanitize::scanner::StreamScanner::new(
+        scour_secrets::scanner::StreamScanner::new(
             patterns,
             Arc::clone(&store),
             ScanConfig::default(),
         )
         .unwrap(),
     );
-    let registry = Arc::new(rust_sanitize::processor::registry::ProcessorRegistry::with_builtins());
+    let registry = Arc::new(scour_secrets::processor::registry::ProcessorRegistry::with_builtins());
     let proc = ArchiveProcessor::new(registry, scanner, store, vec![]).with_max_depth(7);
 
     let reader = Cursor::new(outer_zip);

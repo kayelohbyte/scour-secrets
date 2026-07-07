@@ -9,7 +9,7 @@
 //! # Example
 //!
 //! ```rust
-//! use rust_sanitize::log_context::{LogContextConfig, extract_context};
+//! use scour_secrets::log_context::{LogContextConfig, extract_context};
 //!
 //! let log = "INFO  start\nERROR disk full\nINFO  retrying\nINFO  done";
 //!
@@ -58,7 +58,7 @@ pub const DEFAULT_MAX_MATCHES: usize = 50;
 /// # Example
 ///
 /// ```rust
-/// use rust_sanitize::log_context::LogContextConfig;
+/// use scour_secrets::log_context::LogContextConfig;
 ///
 /// let config = LogContextConfig::new()
 ///     .with_extra_keywords(["timeout", "oomkilled"])
@@ -298,7 +298,7 @@ pub fn extract_context(content: &str, config: &LogContextConfig) -> LogContextRe
 /// # Example
 ///
 /// ```rust
-/// use rust_sanitize::log_context::{LogContextConfig, extract_context_reader};
+/// use scour_secrets::log_context::{LogContextConfig, extract_context_reader};
 /// use std::io::BufReader;
 ///
 /// let data = b"INFO start\nERROR disk full\nINFO retrying\n";

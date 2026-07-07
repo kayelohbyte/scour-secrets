@@ -39,7 +39,7 @@ const FIELD_EDIT_LABEL: &str = "profile-field";
 
 /// Fold `count` in-place structured field edits into `stats` so they appear in
 /// `total_matches` and the run summary. No-op when `count == 0`.
-fn record_field_edits(stats: &mut rust_sanitize::scanner::ScanStats, count: usize) {
+fn record_field_edits(stats: &mut scour_secrets::scanner::ScanStats, count: usize) {
     if count == 0 {
         return;
     }
@@ -274,7 +274,7 @@ impl FileProcessor<'_> {
         let mut had_matches = false;
 
         let store_snapshot = if fp.full_store_pass {
-            rust_sanitize::store::StoreSnapshot::start()
+            scour_secrets::store::StoreSnapshot::start()
         } else {
             fp.store.snapshot()
         };
@@ -503,7 +503,7 @@ impl FileProcessor<'_> {
         let input_bytes =
             fs::read(input).map_err(|e| format!("failed to read {}: {e}", input.display()))?;
         let store_snapshot = if fp.full_store_pass {
-            rust_sanitize::store::StoreSnapshot::start()
+            scour_secrets::store::StoreSnapshot::start()
         } else {
             fp.store.snapshot()
         };

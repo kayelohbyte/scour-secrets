@@ -7,12 +7,12 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use rust_sanitize::category::Category;
-use rust_sanitize::generator::HmacGenerator;
-use rust_sanitize::processor::archive::ArchiveProcessor;
-use rust_sanitize::processor::{FieldRule, FileTypeProfile, ProcessorRegistry};
-use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
-use rust_sanitize::store::MappingStore;
+use scour_secrets::category::Category;
+use scour_secrets::generator::HmacGenerator;
+use scour_secrets::processor::archive::ArchiveProcessor;
+use scour_secrets::processor::{FieldRule, FileTypeProfile, ProcessorRegistry};
+use scour_secrets::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use scour_secrets::store::MappingStore;
 use std::sync::Arc;
 
 fuzz_target!(|data: &[u8]| {

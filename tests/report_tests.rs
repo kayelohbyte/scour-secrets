@@ -8,11 +8,11 @@
 //! - Large-file and multi-file aggregation
 //! - Report + scanner end-to-end integration
 
-use rust_sanitize::category::Category;
-use rust_sanitize::generator::HmacGenerator;
-use rust_sanitize::report::{FileReport, ReportBuilder, ReportMetadata};
-use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
-use rust_sanitize::store::MappingStore;
+use scour_secrets::category::Category;
+use scour_secrets::generator::HmacGenerator;
+use scour_secrets::report::{FileReport, ReportBuilder, ReportMetadata};
+use scour_secrets::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use scour_secrets::store::MappingStore;
 use std::collections::HashMap;
 use std::sync::Arc;
 

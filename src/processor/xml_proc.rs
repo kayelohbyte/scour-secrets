@@ -117,7 +117,7 @@ impl Processor for XmlProcessor {
         // Security: quick-xml disables external entity expansion by default,
         // so XXE attacks are not possible with this configuration.
         let mut reader = Reader::from_reader(content);
-        reader.trim_text(false);
+        reader.config_mut().trim_text(false);
 
         let mut writer = Writer::new(Cursor::new(Vec::new()));
         let mut element_stack: Vec<String> = Vec::new();
@@ -169,10 +169,7 @@ impl Processor for XmlProcessor {
                 Ok(Event::Text(ref e)) => {
                     let current_path = element_stack.join("/");
                     if let Some(rule) = find_matching_rule(&current_path, profile) {
-                        let text = e.unescape().map_err(|e| SanitizeError::ParseError {
-                            format: "XML".into(),
-                            message: format!("XML decode error: {}", e),
-                        })?;
+                        let text = unescape_text(e)?;
                         let replaced = replace_value(&text, rule, store)?;
                         writer
                             .write_event(Event::Text(BytesText::new(&replaced)))
@@ -231,13 +228,13 @@ impl Processor for XmlProcessor {
             });
         }
         let mut reader = Reader::from_reader(content);
-        reader.trim_text(false);
+        reader.config_mut().trim_text(false);
         let mut edits = Vec::new();
         let mut stack: Vec<String> = Vec::new();
         let mut buf = Vec::new();
 
         loop {
-            let before = reader.buffer_position();
+            let before = to_pos(reader.buffer_position());
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Start(e)) => {
                     let name = String::from_utf8_lossy(e.name().as_ref()).into_owned();
@@ -252,7 +249,7 @@ impl Processor for XmlProcessor {
                         &e,
                         content,
                         before,
-                        reader.buffer_position(),
+                        to_pos(reader.buffer_position()),
                         &path,
                         profile,
                         store,
@@ -270,7 +267,7 @@ impl Processor for XmlProcessor {
                         &e,
                         content,
                         before,
-                        reader.buffer_position(),
+                        to_pos(reader.buffer_position()),
                         &path,
                         profile,
                         store,
@@ -278,13 +275,10 @@ impl Processor for XmlProcessor {
                     )?;
                 }
                 Ok(Event::Text(e)) => {
-                    let end = reader.buffer_position();
+                    let end = to_pos(reader.buffer_position());
                     let path = stack.join("/");
                     let key = stack.last().map_or("", String::as_str);
-                    let text = e.unescape().map_err(|e| SanitizeError::ParseError {
-                        format: "XML".into(),
-                        message: format!("XML decode error: {e}"),
-                    })?;
+                    let text = unescape_text(&e)?;
                     if let Some(token) = edit_token(key, &path, &text, profile, store)? {
                         edits.push(Replacement {
                             start: before,
@@ -319,6 +313,26 @@ fn xml_escape_token(token: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+/// Byte position from the reader as `usize`. Inputs are capped at
+/// `DEFAULT_INPUT_SIZE`, so positions always fit.
+fn to_pos(p: u64) -> usize {
+    usize::try_from(p).expect("XML input is bounded by DEFAULT_INPUT_SIZE")
+}
+
+/// Decode and entity-unescape element text (quick-xml 0.38 split the old
+/// `BytesText::unescape` into `decode()` + `escape::unescape()`).
+fn unescape_text(e: &quick_xml::events::BytesText<'_>) -> Result<String> {
+    let raw = e.decode().map_err(|e| SanitizeError::ParseError {
+        format: "XML".into(),
+        message: format!("XML decode error: {e}"),
+    })?;
+    let text = quick_xml::escape::unescape(&raw).map_err(|e| SanitizeError::ParseError {
+        format: "XML".into(),
+        message: format!("XML decode error: {e}"),
+    })?;
+    Ok(text.into_owned())
 }
 
 /// Emit edits for matched attribute values of a start/empty element. Uses

@@ -32,14 +32,14 @@ fn write_json_profile(dir: &tempfile::TempDir, filename: &str) -> std::path::Pat
     write_file(dir.path(), filename, content)
 }
 
-/// Run the sanitize binary with `stdin_bytes` piped via stdin.
+/// Run the scour-secrets binary with `stdin_bytes` piped via stdin.
 fn run_with_stdin(args: &[&str], stdin_bytes: &[u8]) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .spawn()
         .unwrap();
     child

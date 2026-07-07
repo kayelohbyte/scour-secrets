@@ -290,8 +290,8 @@ impl ScanPattern {
     /// # Examples
     ///
     /// ```
-    /// use rust_sanitize::scanner::ScanPattern;
-    /// use rust_sanitize::category::Category;
+    /// use scour_secrets::scanner::ScanPattern;
+    /// use scour_secrets::category::Category;
     ///
     /// // No capture group — full match replaced:
     /// let email = ScanPattern::from_regex(
@@ -348,8 +348,8 @@ impl ScanPattern {
     /// # Examples
     ///
     /// ```
-    /// use rust_sanitize::scanner::ScanPattern;
-    /// use rust_sanitize::category::Category;
+    /// use scour_secrets::scanner::ScanPattern;
+    /// use scour_secrets::category::Category;
     ///
     /// let pat = ScanPattern::from_literal(
     ///     "sk-proj-abc123secret",
@@ -547,10 +547,10 @@ pub struct ScanProgress {
 /// # Usage
 ///
 /// ```rust
-/// use rust_sanitize::scanner::{StreamScanner, ScanPattern, ScanConfig};
-/// use rust_sanitize::category::Category;
-/// use rust_sanitize::generator::HmacGenerator;
-/// use rust_sanitize::store::MappingStore;
+/// use scour_secrets::scanner::{StreamScanner, ScanPattern, ScanConfig};
+/// use scour_secrets::category::Category;
+/// use scour_secrets::generator::HmacGenerator;
+/// use scour_secrets::store::MappingStore;
 /// use std::sync::Arc;
 ///
 /// // 1. Build the replacement store.

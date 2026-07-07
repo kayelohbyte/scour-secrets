@@ -1,4 +1,4 @@
-# rust-sanitize demo 01 — zero-config scan (before / after)
+# scour-secrets demo 01 — zero-config scan (before / after)
 # Render from the repo root:  vhs docs/demos/tapes/01-quickstart.tape
 Output docs/demos/out/01-quickstart.gif
 
@@ -24,7 +24,7 @@ Sleep 2.5s
 
 Type "# No secrets file, no flags — built-in patterns just work" Enter
 Sleep 600ms
-Type "sanitize server.log" Sleep 500ms Enter
+Type "scour-secrets server.log" Sleep 500ms Enter
 Sleep 3s
 
 Type "# Every secret is gone; structure and timestamps stay intact" Enter

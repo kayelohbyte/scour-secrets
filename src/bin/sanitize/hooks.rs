@@ -1,5 +1,5 @@
 use crate::cli_args::{HookMode, HookType, InstallHookArgs};
-use rust_sanitize::atomic_write;
+use scour_secrets::atomic_write;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -7,7 +7,7 @@ use std::process;
 // ─── install-hook implementation ─────────────────────────────────────────────
 
 /// Sentinel embedded in every installed hook so we can identify and remove it.
-pub(crate) const HOOK_MARKER: &str = "# installed-by: rust-sanitize";
+pub(crate) const HOOK_MARKER: &str = "# installed-by: scour-secrets";
 
 /// Minimum version string embedded in the hook for runtime compatibility checks.
 const HOOK_MIN_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -25,10 +25,10 @@ fn git_output(args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// Returns the per-user sanitize config directory.
+/// Returns the per-user scour-secrets config directory.
 ///
-/// - **Windows**: `%APPDATA%\sanitize\` (falls back to `%USERPROFILE%\.config\sanitize\`).
-/// - **Unix/macOS**: `$XDG_CONFIG_HOME/sanitize/` (falls back to `~/.config/sanitize/`).
+/// - **Windows**: `%APPDATA%\scour-secrets\` (falls back to `%USERPROFILE%\.config\scour-secrets\`).
+/// - **Unix/macOS**: `$XDG_CONFIG_HOME/scour-secrets/` (falls back to `~/.config/scour-secrets/`).
 pub(crate) fn sanitize_config_dir() -> PathBuf {
     #[cfg(windows)]
     {
@@ -41,7 +41,7 @@ pub(crate) fn sanitize_config_dir() -> PathBuf {
                     .map(|p| PathBuf::from(p).join(".config"))
                     .unwrap_or_else(|_| PathBuf::from("."))
             });
-        return base.join("sanitize");
+        return base.join("scour-secrets");
     }
     #[cfg(not(windows))]
     {
@@ -50,7 +50,7 @@ pub(crate) fn sanitize_config_dir() -> PathBuf {
             .unwrap_or_else(|_| {
                 PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".config")
             });
-        base.join("sanitize")
+        base.join("scour-secrets")
     }
 }
 
@@ -140,40 +140,40 @@ pub(crate) fn hook_script_pre_commit_scan(flags: &str) -> String {
     format!(
         r#"#!/bin/sh
 {marker}
-# requires sanitize >= {min_version}
+# requires scour-secrets >= {min_version}
 # Scans staged files for secrets before each commit.
-# Skip for one commit:  SANITIZE_SKIP=1 git commit ...
-# Uninstall:            sanitize install-hook --remove
+# Skip for one commit:  SCOUR_SECRETS_SKIP=1 git commit ...
+# Uninstall:            scour-secrets install-hook --remove
 
-[ "${{SANITIZE_SKIP:-0}}" = "1" ] && exit 0
+[ "${{SCOUR_SECRETS_SKIP:-0}}" = "1" ] && exit 0
 
 STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null)
 [ -z "$STAGED" ] && exit 0
 
-if ! command -v sanitize >/dev/null 2>&1; then
-  printf 'sanitize: not found in PATH — hook skipped\n' >&2
+if ! command -v scour-secrets >/dev/null 2>&1; then
+  printf 'scour-secrets: not found in PATH — hook skipped\n' >&2
   exit 0
 fi
 
-_ver=$(sanitize --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+_ver=$(scour-secrets --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 _req="{min_version}"
 if [ -n "$_ver" ] && [ "$(printf '%s\n' "$_req" "$_ver" | sort -V | head -1)" != "$_req" ]; then
-  printf 'sanitize: hook requires >= %s but found %s — update with: cargo install rust-sanitize\n' "$_req" "$_ver" >&2
+  printf 'scour-secrets: hook requires >= %s but found %s — update with: cargo install scour-secrets\n' "$_req" "$_ver" >&2
   exit 1
 fi
 
 # shellcheck disable=SC2086
 printf '%s\n' "$STAGED" | tr '\n' '\0' | xargs -0 \
-  sanitize --dry-run --fail-on-match {flags}
+  scour-secrets --dry-run --fail-on-match {flags}
 
 EXIT=$?
 if [ "$EXIT" -eq 2 ]; then
-  printf '\nsanitize: secrets detected in staged files — commit blocked.\n' >&2
+  printf '\nscour-secrets: secrets detected in staged files — commit blocked.\n' >&2
   printf '  Sanitize the file(s), then re-stage and commit.\n' >&2
-  printf '  Skip once with:  SANITIZE_SKIP=1 git commit ...\n' >&2
+  printf '  Skip once with:  SCOUR_SECRETS_SKIP=1 git commit ...\n' >&2
   exit 1
 fi
-[ "$EXIT" -ne 0 ] && printf 'sanitize: unexpected exit code %d\n' "$EXIT" >&2
+[ "$EXIT" -ne 0 ] && printf 'scour-secrets: unexpected exit code %d\n' "$EXIT" >&2
 exit 0
 "#,
         marker = HOOK_MARKER,
@@ -187,36 +187,36 @@ fn hook_script_pre_commit_sanitize(flags: &str) -> String {
     format!(
         r#"#!/bin/sh
 {marker}
-# requires sanitize >= {min_version}
+# requires scour-secrets >= {min_version}
 # Sanitizes staged files in place before each commit, then re-stages them.
 # WARNING: the committed content will differ from what you typed.
-# Skip for one commit:  SANITIZE_SKIP=1 git commit ...
-# Uninstall:            sanitize install-hook --remove
+# Skip for one commit:  SCOUR_SECRETS_SKIP=1 git commit ...
+# Uninstall:            scour-secrets install-hook --remove
 
-[ "${{SANITIZE_SKIP:-0}}" = "1" ] && exit 0
+[ "${{SCOUR_SECRETS_SKIP:-0}}" = "1" ] && exit 0
 
 STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null)
 [ -z "$STAGED" ] && exit 0
 
-if ! command -v sanitize >/dev/null 2>&1; then
-  printf 'sanitize: not found in PATH — hook skipped\n' >&2
+if ! command -v scour-secrets >/dev/null 2>&1; then
+  printf 'scour-secrets: not found in PATH — hook skipped\n' >&2
   exit 0
 fi
 
-_ver=$(sanitize --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+_ver=$(scour-secrets --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 _req="{min_version}"
 if [ -n "$_ver" ] && [ "$(printf '%s\n' "$_req" "$_ver" | sort -V | head -1)" != "$_req" ]; then
-  printf 'sanitize: hook requires >= %s but found %s — update with: cargo install rust-sanitize\n' "$_req" "$_ver" >&2
+  printf 'scour-secrets: hook requires >= %s but found %s — update with: cargo install scour-secrets\n' "$_req" "$_ver" >&2
   exit 1
 fi
 
 # shellcheck disable=SC2086
 printf '%s\n' "$STAGED" | tr '\n' '\0' | xargs -0 \
-  sanitize --output . {flags}
+  scour-secrets --output . {flags}
 
 EXIT=$?
 if [ "$EXIT" -ne 0 ]; then
-  printf 'sanitize: failed to sanitize staged files (exit %d) — commit blocked\n' "$EXIT" >&2
+  printf 'scour-secrets: failed to sanitize staged files (exit %d) — commit blocked\n' "$EXIT" >&2
   exit 1
 fi
 
@@ -234,22 +234,22 @@ fn hook_script_pre_push_scan(flags: &str) -> String {
     format!(
         r#"#!/bin/sh
 {marker}
-# requires sanitize >= {min_version}
+# requires scour-secrets >= {min_version}
 # Scans files changed in commits about to be pushed for secrets.
-# Skip for one push:  SANITIZE_SKIP=1 git push ...
-# Uninstall:          sanitize install-hook --hook pre-push --remove
+# Skip for one push:  SCOUR_SECRETS_SKIP=1 git push ...
+# Uninstall:          scour-secrets install-hook --hook pre-push --remove
 
-[ "${{SANITIZE_SKIP:-0}}" = "1" ] && exit 0
+[ "${{SCOUR_SECRETS_SKIP:-0}}" = "1" ] && exit 0
 
-if ! command -v sanitize >/dev/null 2>&1; then
-  printf 'sanitize: not found in PATH — hook skipped\n' >&2
+if ! command -v scour-secrets >/dev/null 2>&1; then
+  printf 'scour-secrets: not found in PATH — hook skipped\n' >&2
   exit 0
 fi
 
-_ver=$(sanitize --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+_ver=$(scour-secrets --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
 _req="{min_version}"
 if [ -n "$_ver" ] && [ "$(printf '%s\n' "$_req" "$_ver" | sort -V | head -1)" != "$_req" ]; then
-  printf 'sanitize: hook requires >= %s but found %s — update with: cargo install rust-sanitize\n' "$_req" "$_ver" >&2
+  printf 'scour-secrets: hook requires >= %s but found %s — update with: cargo install scour-secrets\n' "$_req" "$_ver" >&2
   exit 1
 fi
 
@@ -273,15 +273,15 @@ while IFS=' ' read -r local_ref local_sha remote_ref remote_sha; do
 
   # shellcheck disable=SC2086
   printf '%s' "$EXISTING" | xargs -0 \
-    sanitize --dry-run --fail-on-match {flags}
+    scour-secrets --dry-run --fail-on-match {flags}
 
   EXIT=$?
   if [ "$EXIT" -eq 2 ]; then
-    printf '\nsanitize: secrets detected — push blocked.\n' >&2
-    printf '  Skip once with:  SANITIZE_SKIP=1 git push ...\n' >&2
+    printf '\nscour-secrets: secrets detected — push blocked.\n' >&2
+    printf '  Skip once with:  SCOUR_SECRETS_SKIP=1 git push ...\n' >&2
     exit 1
   fi
-  [ "$EXIT" -ne 0 ] && printf 'sanitize: unexpected exit code %d\n' "$EXIT" >&2
+  [ "$EXIT" -ne 0 ] && printf 'scour-secrets: unexpected exit code %d\n' "$EXIT" >&2
 done
 exit 0
 "#,
@@ -319,11 +319,11 @@ fn detect_framework_hooks_dir(repo_root: &Path, hook_name: &str) -> Option<PathB
         eprintln!();
         eprintln!("  {hook_name}:");
         eprintln!("    commands:");
-        eprintln!("      sanitize:");
-        eprintln!("        run: sanitize --dry-run --fail-on-match {{staged_files}}");
+        eprintln!("      scour-secrets:");
+        eprintln!("        run: scour-secrets --dry-run --fail-on-match {{staged_files}}");
         eprintln!("        glob: '*.{{yaml,yml,json,toml,env,conf,rb,py,go,ts,js}}'");
         eprintln!();
-        eprintln!("Then re-run `sanitize install-hook` without the lefthook config to install a fallback raw hook,");
+        eprintln!("Then re-run `scour-secrets install-hook` without the lefthook config to install a fallback raw hook,");
         eprintln!("or skip and rely on lefthook alone.");
     }
 
@@ -337,9 +337,9 @@ fn detect_framework_hooks_dir(repo_root: &Path, hook_name: &str) -> Option<PathB
         eprintln!();
         eprintln!("  - repo: local");
         eprintln!("    hooks:");
-        eprintln!("      - id: sanitize-scan");
-        eprintln!("        name: Scan for secrets (rust-sanitize)");
-        eprintln!("        entry: sanitize --dry-run --fail-on-match");
+        eprintln!("      - id: scour-secrets-scan");
+        eprintln!("        name: Scan for secrets (scour-secrets)");
+        eprintln!("        entry: scour-secrets --dry-run --fail-on-match");
         eprintln!("        language: system");
         eprintln!("        pass_filenames: true");
         eprintln!();
@@ -348,9 +348,9 @@ fn detect_framework_hooks_dir(repo_root: &Path, hook_name: &str) -> Option<PathB
     None
 }
 
-/// Remove a hook installed by `sanitize install-hook`.
-/// If the file only contains the sanitize hook (single hook), the file is
-/// deleted.  If it was appended to an existing hook, the sanitize block is
+/// Remove a hook installed by `scour-secrets install-hook`.
+/// If the file only contains the scour-secrets hook (single hook), the file is
+/// deleted.  If it was appended to an existing hook, the scour-secrets block is
 /// excised and the rest of the file is preserved.
 pub(crate) fn remove_hook(hook_path: &Path, _hook_name: &str) -> Result<(), (String, i32)> {
     if !hook_path.exists() {
@@ -371,7 +371,7 @@ pub(crate) fn remove_hook(hook_path: &Path, _hook_name: &str) -> Result<(), (Str
         ));
     }
 
-    // Count meaningful lines that appear *before* the sanitize marker.
+    // Count meaningful lines that appear *before* the scour-secrets marker.
     // If there are none (only a shebang or whitespace before our block),
     // the file is entirely ours and should be deleted outright.
     let lines_before_marker = content
@@ -394,7 +394,7 @@ pub(crate) fn remove_hook(hook_path: &Path, _hook_name: &str) -> Result<(), (Str
             .join("\n");
         fs::write(hook_path, trimmed.trim_end().to_string() + "\n")
             .map_err(|e| (format!("failed to write {}: {e}", hook_path.display()), 1))?;
-        println!("Removed sanitize block from {}", hook_path.display());
+        println!("Removed scour-secrets block from {}", hook_path.display());
     }
 
     Ok(())
@@ -436,7 +436,7 @@ pub(crate) fn run_install_hook(args: &InstallHookArgs) -> Result<(), (String, i3
         if !existing.contains(HOOK_MARKER) {
             return Err((
                 format!(
-                    "{} already exists and was not installed by sanitize.\n\
+                    "{} already exists and was not installed by scour-secrets.\n\
                      Inspect it first, then use --force to overwrite.",
                     hook_path.display()
                 ),
@@ -477,14 +477,14 @@ pub(crate) fn run_install_hook(args: &InstallHookArgs) -> Result<(), (String, i3
         println!("  Secrets:  {}", s.display());
     }
     println!();
-    println!("Skip one commit:  SANITIZE_SKIP=1 git commit ...");
+    println!("Skip one commit:  SCOUR_SECRETS_SKIP=1 git commit ...");
     let remove_extra = if args.global { " --global" } else { "" };
     let hook_extra = if args.hook == HookType::PrePush {
         " --hook pre-push"
     } else {
         ""
     };
-    println!("Uninstall:        sanitize install-hook --remove{hook_extra}{remove_extra}");
+    println!("Uninstall:        scour-secrets install-hook --remove{hook_extra}{remove_extra}");
 
     #[cfg(windows)]
     println!(
@@ -605,7 +605,7 @@ mod tests {
         std::env::set_var("XDG_CONFIG_HOME", "/tmp/xdg-test");
         let dir = sanitize_config_dir();
         std::env::remove_var("XDG_CONFIG_HOME");
-        assert_eq!(dir, PathBuf::from("/tmp/xdg-test/sanitize"));
+        assert_eq!(dir, PathBuf::from("/tmp/xdg-test/scour-secrets"));
     }
 
     #[cfg(unix)]
@@ -616,7 +616,7 @@ mod tests {
         std::env::set_var("HOME", "/tmp/home-test");
         let dir = sanitize_config_dir();
         std::env::remove_var("HOME");
-        assert_eq!(dir, PathBuf::from("/tmp/home-test/.config/sanitize"));
+        assert_eq!(dir, PathBuf::from("/tmp/home-test/.config/scour-secrets"));
     }
 
     #[cfg(unix)]
@@ -629,11 +629,11 @@ mod tests {
         std::env::remove_var("XDG_CONFIG_HOME");
         assert_eq!(
             secrets,
-            PathBuf::from("/tmp/xdg-test/sanitize/secrets.yaml")
+            PathBuf::from("/tmp/xdg-test/scour-secrets/secrets.yaml")
         );
         assert_eq!(
             settings,
-            PathBuf::from("/tmp/xdg-test/sanitize/settings.yaml")
+            PathBuf::from("/tmp/xdg-test/scour-secrets/settings.yaml")
         );
     }
 }

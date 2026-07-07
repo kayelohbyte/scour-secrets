@@ -486,14 +486,14 @@ When `--deterministic` is set alongside `--profile`, values found by the structu
 ```bash
 # First run: config.yaml is processed structurally.
 # Discovered values (e.g. "hunter2") are appended to secrets.yaml.
-SANITIZE_PASSWORD=secret sanitize config.yaml \
+SCOUR_SECRETS_PASSWORD=secret sanitize config.yaml \
   --profile profile.yaml \
   --deterministic \
   --secrets-file secrets.yaml
 
 # Second run against a log file: "hunter2" is now in secrets.yaml
 # so the streaming scanner replaces it in app.log with the same value.
-SANITIZE_PASSWORD=secret sanitize app.log \
+SCOUR_SECRETS_PASSWORD=secret sanitize app.log \
   --deterministic \
   --secrets-file secrets.yaml
 ```
@@ -508,8 +508,8 @@ The replacement value for any given input is determined solely by the password a
 
 ```bash
 # Separate runs, same password → consistent replacements across both outputs
-SANITIZE_PASSWORD=secret sanitize log-one.txt --deterministic -s secrets.yaml
-SANITIZE_PASSWORD=secret sanitize log-two.txt --deterministic -s secrets.yaml
+SCOUR_SECRETS_PASSWORD=secret sanitize log-one.txt --deterministic -s secrets.yaml
+SCOUR_SECRETS_PASSWORD=secret sanitize log-two.txt --deterministic -s secrets.yaml
 # "hunter2" maps to the same replacement in both outputs
 ```
 
@@ -541,12 +541,12 @@ sanitize config.yaml app.log --profile profile.yaml -s secrets.yaml
 ## Library API
 
 ```rust
-use rust_sanitize::category::Category;
-use rust_sanitize::generator::HmacGenerator;
-use rust_sanitize::processor::key_value::KeyValueProcessor;
-use rust_sanitize::processor::profile::{FieldRule, FileTypeProfile};
-use rust_sanitize::processor::Processor;
-use rust_sanitize::store::MappingStore;
+use scour_secrets::category::Category;
+use scour_secrets::generator::HmacGenerator;
+use scour_secrets::processor::key_value::KeyValueProcessor;
+use scour_secrets::processor::profile::{FieldRule, FileTypeProfile};
+use scour_secrets::processor::Processor;
+use scour_secrets::store::MappingStore;
 use std::sync::Arc;
 
 let generator = Arc::new(HmacGenerator::new([42u8; 32]));

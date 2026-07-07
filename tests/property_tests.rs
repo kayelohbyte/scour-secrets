@@ -4,10 +4,10 @@
 //! arbitrary inputs, not just hand-crafted examples.
 
 use proptest::prelude::*;
-use rust_sanitize::category::Category;
-use rust_sanitize::generator::{HmacGenerator, ReplacementGenerator};
-use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
-use rust_sanitize::store::MappingStore;
+use scour_secrets::category::Category;
+use scour_secrets::generator::{HmacGenerator, ReplacementGenerator};
+use scour_secrets::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use scour_secrets::store::MappingStore;
 use std::sync::Arc;
 
 /// Arbitrary `Category` generator for proptest.

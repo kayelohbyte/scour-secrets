@@ -10,22 +10,22 @@
 //! - Integration with encrypted secrets (shared MappingStore)
 //! - File-type profile matching
 
-use rust_sanitize::category::Category;
-use rust_sanitize::generator::HmacGenerator;
-use rust_sanitize::processor::csv_proc::CsvProcessor;
-use rust_sanitize::processor::env_proc::EnvProcessor;
-use rust_sanitize::processor::ini_proc::IniProcessor;
-use rust_sanitize::processor::json_proc::JsonProcessor;
-use rust_sanitize::processor::key_value::KeyValueProcessor;
-use rust_sanitize::processor::profile::{FieldRule, FileTypeProfile};
-use rust_sanitize::processor::registry::ProcessorRegistry;
-use rust_sanitize::processor::toml_proc::TomlProcessor;
-use rust_sanitize::processor::xml_proc::XmlProcessor;
-use rust_sanitize::processor::yaml_proc::YamlProcessor;
-use rust_sanitize::processor::Processor;
-use rust_sanitize::scanner::{ScanConfig, ScanPattern, SecretsLoadResult, StreamScanner};
-use rust_sanitize::secrets::{encrypt_secrets, SecretsFormat};
-use rust_sanitize::store::MappingStore;
+use scour_secrets::category::Category;
+use scour_secrets::generator::HmacGenerator;
+use scour_secrets::processor::csv_proc::CsvProcessor;
+use scour_secrets::processor::env_proc::EnvProcessor;
+use scour_secrets::processor::ini_proc::IniProcessor;
+use scour_secrets::processor::json_proc::JsonProcessor;
+use scour_secrets::processor::key_value::KeyValueProcessor;
+use scour_secrets::processor::profile::{FieldRule, FileTypeProfile};
+use scour_secrets::processor::registry::ProcessorRegistry;
+use scour_secrets::processor::toml_proc::TomlProcessor;
+use scour_secrets::processor::xml_proc::XmlProcessor;
+use scour_secrets::processor::yaml_proc::YamlProcessor;
+use scour_secrets::processor::Processor;
+use scour_secrets::scanner::{ScanConfig, ScanPattern, SecretsLoadResult, StreamScanner};
+use scour_secrets::secrets::{encrypt_secrets, SecretsFormat};
+use scour_secrets::store::MappingStore;
 use std::sync::Arc;
 
 // ---------------------------------------------------------------------------
@@ -551,7 +551,7 @@ impl Processor for DummyProcessor {
         content: &[u8],
         _profile: &FileTypeProfile,
         _store: &MappingStore,
-    ) -> rust_sanitize::Result<Vec<u8>> {
+    ) -> scour_secrets::Result<Vec<u8>> {
         // Just uppercases everything (for testing).
         let text = String::from_utf8_lossy(content).to_uppercase();
         Ok(text.into_bytes())
@@ -1041,7 +1041,7 @@ fn xml_depth_limit_exceeded_returns_error() {
         .process(content.as_bytes(), &profile, &store)
         .unwrap_err();
     assert!(
-        matches!(err, rust_sanitize::SanitizeError::RecursionDepthExceeded(_)),
+        matches!(err, scour_secrets::SanitizeError::RecursionDepthExceeded(_)),
         "exceeding depth limit must return RecursionDepthExceeded; got: {err:?}",
     );
 }

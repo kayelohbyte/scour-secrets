@@ -28,8 +28,8 @@ deno.json
 deno.lock
 
 # Compiled MCP server artifacts (built via `deno compile` / released from CI)
-/sanitize-mcp
-/sanitize-mcp.exe
+/scour-secrets-mcp
+/scour-secrets-mcp.exe
 
 # Local FFI test harness (cdylib shim + Python/Go drivers); not part of the crate
 /ffi-test/

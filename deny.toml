@@ -1,4 +1,4 @@
-# Supply-chain security policy for rust-sanitize.
+# Supply-chain security policy for scour-secrets.
 # Run with: cargo deny check
 
 [advisories]

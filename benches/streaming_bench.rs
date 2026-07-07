@@ -2,12 +2,12 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rayon::prelude::*;
-use rust_sanitize::category::Category;
-use rust_sanitize::generator::HmacGenerator;
-use rust_sanitize::processor::archive::ArchiveProcessor;
-use rust_sanitize::processor::ProcessorRegistry;
-use rust_sanitize::scanner::{ScanConfig, ScanPattern, StreamScanner};
-use rust_sanitize::store::MappingStore;
+use scour_secrets::category::Category;
+use scour_secrets::generator::HmacGenerator;
+use scour_secrets::processor::archive::ArchiveProcessor;
+use scour_secrets::processor::ProcessorRegistry;
+use scour_secrets::scanner::{ScanConfig, ScanPattern, StreamScanner};
+use scour_secrets::store::MappingStore;
 use std::io::Cursor;
 use std::sync::Arc;
 

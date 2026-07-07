@@ -2,7 +2,7 @@
 //!
 //! The mock server binds to 127.0.0.1:0 (OS picks the port), handles exactly
 //! one connection per instance, and shuts down when that connection is done.
-//! Tests run the real `sanitize` binary against the mock and inspect exit
+//! Tests run the real `scour-secrets` binary against the mock and inspect exit
 //! code / stdout / stderr.
 
 use std::fs;
@@ -153,10 +153,10 @@ fn empty_secrets(dir: &std::path::Path) -> std::path::PathBuf {
 }
 
 fn run(args: &[&str], stdin_data: &[u8]) -> std::process::Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(args)
-        .env("SANITIZE_LOG", "error")
-        .env("SANITIZE_NO_SETTINGS", "1")
+        .env("SCOUR_SECRETS_LOG", "error")
+        .env("SCOUR_SECRETS_NO_SETTINGS", "1")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())

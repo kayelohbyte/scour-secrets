@@ -5,8 +5,8 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 
-use rust_sanitize::secrets::SecretEntry;
-use rust_sanitize::{
+use scour_secrets::secrets::SecretEntry;
+use scour_secrets::{
     atomic_write, atomic_write_private, extract_context, extract_context_reader, ArchiveFilter,
     ArchiveFormat, ArchiveProcessor, ArchiveProgress, AtomicFileWriter, EntryCallback, FileReport,
     FileTypeProfile, LlmEntry, LogContextConfig, LogContextResult, MappingStore, Processor,
@@ -172,7 +172,7 @@ pub(crate) fn print_entropy_histogram(buckets: &[EntropyBuckets]) {
 fn make_scan_callback(
     progress: Option<SharedProgressReporter>,
     label: impl Into<String>,
-) -> impl FnMut(&rust_sanitize::ScanProgress) {
+) -> impl FnMut(&scour_secrets::ScanProgress) {
     let label = label.into();
     move |scan_progress| {
         if let Some(reporter) = &progress {
@@ -189,14 +189,14 @@ fn scan_with_locations<R, W>(
     reader: R,
     writer: W,
     total_bytes: Option<u64>,
-    progress_cb: impl FnMut(&rust_sanitize::ScanProgress),
+    progress_cb: impl FnMut(&scour_secrets::ScanProgress),
     max_locations: usize,
-) -> Result<(ScanStats, Vec<rust_sanitize::scanner::MatchLocation>, bool), String>
+) -> Result<(ScanStats, Vec<scour_secrets::scanner::MatchLocation>, bool), String>
 where
     R: std::io::Read,
     W: std::io::Write,
 {
-    let mut locations: Vec<rust_sanitize::scanner::MatchLocation> = Vec::new();
+    let mut locations: Vec<scour_secrets::scanner::MatchLocation> = Vec::new();
     let mut truncated = false;
     let stats = scanner
         .scan_reader_with_callbacks(reader, writer, total_bytes, progress_cb, |loc| {
@@ -409,8 +409,8 @@ pub(crate) fn structured_base_bytes(
 fn build_format_preserving_scanner(
     base_scanner: &Arc<StreamScanner>,
     store: &Arc<MappingStore>,
-    snapshot: rust_sanitize::store::StoreSnapshot,
-) -> Result<StreamScanner, rust_sanitize::error::SanitizeError> {
+    snapshot: scour_secrets::store::StoreSnapshot,
+) -> Result<StreamScanner, scour_secrets::error::SanitizeError> {
     let extra: Vec<ScanPattern> = store
         .iter_since(snapshot)
         .filter(|(_, orig, _)| orig.len() >= 4)
@@ -523,7 +523,7 @@ pub(crate) fn save_discovered_secrets(
     Ok(added)
 }
 
-fn record_archive_stats(rb: &ReportBuilder, stats: &rust_sanitize::ArchiveStats) {
+fn record_archive_stats(rb: &ReportBuilder, stats: &scour_secrets::ArchiveStats) {
     for (path, method) in &stats.file_methods {
         if let Some(scan_stats) = stats.file_scan_stats.get(path) {
             rb.record_file(FileReport::from_scan_stats(
@@ -564,7 +564,7 @@ fn record_archive_stats(rb: &ReportBuilder, stats: &rust_sanitize::ArchiveStats)
     }
 }
 
-fn print_archive_stats(output: &Path, stats: &rust_sanitize::ArchiveStats) {
+fn print_archive_stats(output: &Path, stats: &scour_secrets::ArchiveStats) {
     info!(
         files = stats.files_processed,
         structured = stats.structured_hits,
@@ -581,7 +581,7 @@ mod stdin;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_sanitize::{MappingStore, RandomGenerator};
+    use scour_secrets::{MappingStore, RandomGenerator};
     use std::sync::Arc;
 
     fn empty_store() -> Arc<MappingStore> {
@@ -591,7 +591,7 @@ mod tests {
     fn store_with_entry(original: &str) -> Arc<MappingStore> {
         let store = empty_store();
         store
-            .get_or_insert(&rust_sanitize::Category::AuthToken, original)
+            .get_or_insert(&scour_secrets::Category::AuthToken, original)
             .unwrap();
         store
     }
@@ -723,7 +723,7 @@ mod tests {
 
     #[test]
     fn merge_entropy_counts_adds_to_stats() {
-        use rust_sanitize::ScanStats;
+        use scour_secrets::ScanStats;
         let mut stats = ScanStats::default();
         let mut counts = HashMap::new();
         counts.insert("high_entropy_token".to_string(), 3u64);
@@ -737,7 +737,7 @@ mod tests {
 
     #[test]
     fn merge_entropy_counts_empty_map_is_noop() {
-        use rust_sanitize::ScanStats;
+        use scour_secrets::ScanStats;
         let mut stats = ScanStats::default();
         merge_entropy_counts(&mut stats, HashMap::new());
         assert_eq!(stats.matches_found, 0);

@@ -39,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `<config_dir>/seed-salt`, mode `0600`) instead of a global constant. This
   prevents a single password→seed table from attacking every install, and
   closes the off-box dictionary-confirmation attack against shared output.
-  Override with `--seed-salt-file <PATH>` or `SANITIZE_SEED_SALT` to share a
+  Override with `--seed-salt-file <PATH>` or `SCOUR_SECRETS_SEED_SALT` to share a
   salt across machines for reproducible team output. See SECURITY.md §4.
 - **`min_length` / `max_length` secrets-file fields are now enforced.** These
   documented per-entry bounds were previously dropped during pattern
@@ -54,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **BREAKING (deterministic output):** because the seed salt is now per-install,
   deterministic output changes versus prior versions. To reproduce pre-upgrade
-  output, set `SANITIZE_SEED_SALT=rust-sanitize:deterministic-seed:v1` (the
+  output, set `SCOUR_SECRETS_SEED_SALT=scour-secrets:deterministic-seed:v1` (the
   legacy constant). Cross-machine reproducibility now requires copying the
   `seed-salt` file or setting the env/flag to a shared value.
 
@@ -106,7 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **The built-in baseline detectors are now composed under `--app`, not just on
   a plain run.** App bundles are now a layer *on top of* the generic baseline
   (email, IP, UUID, URL, home path, common token shapes) rather than a
-  replacement for it, so `sanitize --app <name>` scrubs generic PII in
+  replacement for it, so `scour-secrets --app <name>` scrubs generic PII in
   unstructured dumps that the bundle's curated rules don't target. Previously the
   baseline only loaded when no app/secrets file was given, so e.g. a Dataiku
   diagnosis sanitized with `--app dataiku` still shipped every email, IP, UUID,
@@ -288,13 +288,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **A previously-seeded local app copy shadows these built-in bundle changes.**
   The first time you run `--app <name>`, sanitize writes a user-local copy of the
-  bundle to `$SANITIZE_APPS_DIR/<name>/` (the two-pass write-back target), and on
+  bundle to `$SCOUR_SECRETS_APPS_DIR/<name>/` (the two-pass write-back target), and on
   later runs `load_app_bundle` loads that copy in preference to the embedded
   built-in. So if you ran a bundle under 0.14.0, the connection-string rule
   removals, new GitLab token types, expanded AWS prefixes, and Dataiku allow-list
   above will **not** take effect until you refresh the copy. Re-sync with
-  `sanitize apps remove <name> --yes` (then re-run `--app <name>`), or delete the
-  stale directory under `$SANITIZE_APPS_DIR`. Custom edits you made to that copy
+  `scour-secrets apps remove <name> --yes` (then re-run `--app <name>`), or delete the
+  stale directory under `$SCOUR_SECRETS_APPS_DIR`. Custom edits you made to that copy
   are intentionally preserved — this only matters for bundles you hadn't
   customized.
 
@@ -343,9 +343,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - **MCP file path guards** now resolve symlinks and match the operator denylist
   against the canonical path. This closes an absolute-path bypass where a path
-  like `/x/secrets/y` slipped past a `secrets/**` `SANITIZE_MCP_FILES_DENYLIST`
+  like `/x/secrets/y` slipped past a `secrets/**` `SCOUR_SECRETS_MCP_FILES_DENYLIST`
   pattern (start-anchored glob), and prevents a symlink in an allowed directory
-  from reaching `SANITIZE_SECRETS_DIR` or a `.password` file.
+  from reaching `SCOUR_SECRETS_SECRETS_DIR` or a `.password` file.
 - **MCP HTTP daemon** compares the bearer token in constant time (over SHA-256
   digests), removing a token timing/length oracle.
 
@@ -360,13 +360,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `--app` patterns for the same run.
 
 - **`balanced` and `aggressive` template presets** — two new presets for
-  `sanitize template`. `balanced` produces a ready-to-edit YAML that mirrors the
+  `scour-secrets template`. `balanced` produces a ready-to-edit YAML that mirrors the
   built-in runtime detection set (the same patterns activated by omitting
   `--secrets-file`). `aggressive` extends `balanced` with high-entropy block
   detection, bearer / authorization header patterns, and short container IDs.
 
 - **Namespace `settings.yaml` in MCP** — per-namespace behavior defaults loaded
-  from `$SANITIZE_SECRETS_DIR/<namespace>/settings.yaml` alongside the existing
+  from `$SCOUR_SECRETS_SECRETS_DIR/<namespace>/settings.yaml` alongside the existing
   secrets file and profile. Supports all scan-behavior flags (e.g. `fail_on_match`,
   `force_text`, `entropy_threshold`, `allow`, `exclude_path`). Per-call tool
   parameters always override namespace defaults.
@@ -412,26 +412,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Removed
 
-- **`sanitize guided` interactive subcommand** — removed. The pattern generation
-  it provided is now covered by `sanitize template balanced` (exact runtime
-  defaults, editable) and `sanitize template aggressive`. Removing it eliminates
+- **`scour-secrets guided` interactive subcommand** — removed. The pattern generation
+  it provided is now covered by `scour-secrets template balanced` (exact runtime
+  defaults, editable) and `scour-secrets template aggressive`. Removing it eliminates
   the `GuidedOptions` / `GuidedPreset` coupling between the wizard and the scanner
   defaults; `balanced_secret_entries()` in `scanner_builder` is now the single
   source of truth for the built-in detection set.
 
 ### Changed
 
-- **`sanitize template` preset is now a positional argument** *(breaking)* —
-  `sanitize template --preset k8s` becomes `sanitize template k8s`. Default
+- **`scour-secrets template` preset is now a positional argument** *(breaking)* —
+  `scour-secrets template --preset k8s` becomes `scour-secrets template k8s`. Default
   preset changes from `generic` → `balanced`.
 
-- **Project config format: `.sanitize.toml` → `.sanitize.yaml`** *(breaking)* —
-  the per-project config file is now `.sanitize.yaml` instead of `.sanitize.toml`.
-  Rename any existing `.sanitize.toml` files. The schema is unchanged; field names
+- **Project config format: `.scour-secrets.toml` → `.scour-secrets.yaml`** *(breaking)* —
+  the per-project config file is now `.scour-secrets.yaml` instead of `.scour-secrets.toml`.
+  Rename any existing `.scour-secrets.toml` files. The schema is unchanged; field names
   are identical in both formats.
 
-- **Unified config schema across all three layers** — `~/.config/sanitize/settings.yaml`,
-  `.sanitize.yaml`, and (MCP) `<namespace>/settings.yaml` now share a single
+- **Unified config schema across all three layers** — `~/.config/scour-secrets/settings.yaml`,
+  `.scour-secrets.yaml`, and (MCP) `<namespace>/settings.yaml` now share a single
   `SanitizeConfig` struct covering all 30+ behavior flags. Previously, the global
   settings file and project config file had different, partial schemas. Lists
   (`app`, `allow`, `exclude_path`, `include_path`, `context_keywords`) are merged
@@ -517,18 +517,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - **MCP `init` / `build_secrets` preset flag** — `toolInit` and
-  `toolBuildSecrets` were invoking `sanitize template --preset <name>` (old flag
+  `toolBuildSecrets` were invoking `scour-secrets template --preset <name>` (old flag
   syntax removed in v0.13.0); corrected to the positional form
-  `sanitize template <name>`. The `balanced` and `aggressive` presets are also
+  `scour-secrets template <name>`. The `balanced` and `aggressive` presets are also
   now included in the Zod schema and handler types for both tools.
 
 ## [0.12.0] - 2026-06-03
 
 ### Added
 
-- **`sanitize-mcp` HTTP daemon mode** — `sanitize-mcp --http` binds to
+- **`scour-secrets-mcp` HTTP daemon mode** — `scour-secrets-mcp --http` binds to
   `127.0.0.1:6277` (default) and serves the MCP protocol over HTTP. Pass
-  `--http <n>` to use a different port. Requires `SANITIZE_MCP_HTTP_TOKEN` to be
+  `--http <n>` to use a different port. Requires `SCOUR_SECRETS_MCP_HTTP_TOKEN` to be
   set; the server refuses to start without it.
 
 - **Daemon auto-restart on session close** — the HTTP daemon now exits with code
@@ -597,13 +597,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   existed only for internal use by the MCP server. The CLI's existing
   "nothing specified → activate built-in defaults" behaviour is unchanged; no
   caller needs to change anything. The `use_default` parameter has also been
-  removed from the MCP `sanitize` and `scan` tools for the same reason — omit
+  removed from the MCP `scour-secrets` and `scan` tools for the same reason — omit
   all pattern sources and defaults activate automatically.
 
 - **MCP agent instructions overhauled** — all 10 tool descriptions updated:
-  `sanitize` leads with "MODIFIES content — run scan first to preview"; `scan`
+  `scour-secrets` leads with "MODIFIES content — run scan first to preview"; `scan`
   leads with "Read-only audit"; `test_pattern` WARNING moved to the first
-  sentence; `strip_config_values` clarifies when to use it vs `sanitize`; `init`
+  sentence; `strip_config_values` clarifies when to use it vs `scour-secrets`; `init`
   and `build_secrets` cross-reference each other; `list_apps`, `list_processors`,
   and `list_templates` each explain when to call them; `namespace` and `seed`
   descriptions include security guidance.
@@ -611,7 +611,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Fixed
 
 - **`atomic_write_private` for sensitive output files** — decrypted secrets
-  written by `sanitize decrypt` and discovered secrets written by
+  written by `scour-secrets decrypt` and discovered secrets written by
   `save_discovered_secrets` now use a mode-0600 temp file (via
   `atomic_write_private`) so plaintext secrets are never world-readable, even
   briefly during the atomic rename window.
@@ -651,17 +651,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- **MCP `include_path` parameter on `sanitize` and `scan`** — mirrors the CLI's `--include-path` flag. Pass an array of glob patterns to restrict directory walks to only matching files (e.g. `["**/*.log", "**/*.conf"]`). Has no effect on explicitly named file arguments or archive entries. When both `include_path` and `exclude_path` match a file, exclusion wins.
+- **MCP `include_path` parameter on `scour-secrets` and `scan`** — mirrors the CLI's `--include-path` flag. Pass an array of glob patterns to restrict directory walks to only matching files (e.g. `["**/*.log", "**/*.conf"]`). Has no effect on explicitly named file arguments or archive entries. When both `include_path` and `exclude_path` match a file, exclusion wins.
 
-- **`regex:<pattern>` allowlist syntax documented in MCP schemas** — the `allow` parameter on `sanitize` and `scan`, and the `patterns` parameter on `test_allowlist`, now document the `regex:<pattern>` prefix form for full regex matching alongside the existing exact-string and `*`-glob forms. The underlying CLI already supported this; the MCP schema descriptions and docs now surface it.
+- **`regex:<pattern>` allowlist syntax documented in MCP schemas** — the `allow` parameter on `scour-secrets` and `scan`, and the `patterns` parameter on `test_allowlist`, now document the `regex:<pattern>` prefix form for full regex matching alongside the existing exact-string and `*`-glob forms. The underlying CLI already supported this; the MCP schema descriptions and docs now surface it.
 
 ### Changed
 
-- **Default archive nesting depth raised from 3 to 5** — `DEFAULT_ARCHIVE_DEPTH` in the Rust library and `--max-archive-depth` CLI default now allow five levels of nested archives before returning an error. The MCP server default (`SANITIZE_MCP_MAX_ARCHIVE_DEPTH`) is updated to match. Use `--max-archive-depth` / `max_archive_depth` to override per-call; the hard cap remains 10.
+- **Default archive nesting depth raised from 3 to 5** — `DEFAULT_ARCHIVE_DEPTH` in the Rust library and `--max-archive-depth` CLI default now allow five levels of nested archives before returning an error. The MCP server default (`SCOUR_SECRETS_MCP_MAX_ARCHIVE_DEPTH`) is updated to match. Use `--max-archive-depth` / `max_archive_depth` to override per-call; the hard cap remains 10.
 
 ### Fixed
 
-- **MCP security hardening** — several issues in the TypeScript MCP server were addressed: `test_allowlist`, `list_apps`, and `init` now respect the `MAX_CONCURRENT = 4` concurrency limit (previously they bypassed it); `build_secrets` and `init` now call `validateFilesPath` on the output path to prevent writing to `.password` files or paths inside `SANITIZE_SECRETS_DIR`; `label` and `category` fields in the YAML written by `build_secrets` are now double-quoted to prevent YAML injection; `allow`, `exclude_path`, `app`, `delimiter`, `comment_prefix`, and positional test values now reject inputs that start with `-` to prevent flag injection into the subprocess; `resolveNamespace` now uses the resolved (absolute) secrets dir path for consistent path comparison; the `llm_template` schema description was updated to include `review-security` as a valid built-in template; and the `context_keywords` description was corrected to reference `context_keywords_replace` (was `context_keywords_only`).
+- **MCP security hardening** — several issues in the TypeScript MCP server were addressed: `test_allowlist`, `list_apps`, and `init` now respect the `MAX_CONCURRENT = 4` concurrency limit (previously they bypassed it); `build_secrets` and `init` now call `validateFilesPath` on the output path to prevent writing to `.password` files or paths inside `SCOUR_SECRETS_SECRETS_DIR`; `label` and `category` fields in the YAML written by `build_secrets` are now double-quoted to prevent YAML injection; `allow`, `exclude_path`, `app`, `delimiter`, `comment_prefix`, and positional test values now reject inputs that start with `-` to prevent flag injection into the subprocess; `resolveNamespace` now uses the resolved (absolute) secrets dir path for consistent path comparison; the `llm_template` schema description was updated to include `review-security` as a valid built-in template; and the `context_keywords` description was corrected to reference `context_keywords_replace` (was `context_keywords_only`).
 
 - **MCP archive output filename prediction for `.tar.gz` and `.tgz`** — `predictOutputName` in the MCP TypeScript layer now correctly mirrors the CLI's `default_archive_output` logic: archives use `{stem}.sanitized.{full-ext}` (e.g. `archive.sanitized.tar.gz`), not `{stem}-sanitized.{last-ext}` (the plain-file convention). `.tgz` inputs are also normalised to `.tar.gz` in the output name, matching the CLI. The collision-suffix function (`uniquifyName`) was fixed to treat `.tar.gz` as a compound extension so suffixes land before `.tar.gz` rather than before `.gz` alone.
 
@@ -699,17 +699,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   tightened to `nginx.conf`, `conf.d/*.conf`, `sites-available/*`, and
   `sites-enabled/*`.
 
-- **`sanitize apps edit <name>`** — copies a built-in app bundle's YAML files
-  into `~/.config/sanitize/apps/<name>/` so they can be customised. The local
+- **`scour-secrets apps edit <name>`** — copies a built-in app bundle's YAML files
+  into `~/.config/scour-secrets/apps/<name>/` so they can be customised. The local
   copy automatically takes precedence over the compiled built-in (no extra
   flags needed). Re-running `edit` on an app that already has a user copy
-  just prints the file paths. Reverting to the built-in: `sanitize apps
+  just prints the file paths. Reverting to the built-in: `scour-secrets apps
   remove <name> --yes`.
 
-- **Built-in override indicator in `sanitize apps`** — when a built-in app has
+- **Built-in override indicator in `scour-secrets apps`** — when a built-in app has
   a user copy, the list now shows `(overridden by user copy)` next to its name.
 
-- **`sanitize apps remove` works on built-in overrides** — previously the
+- **`scour-secrets apps remove` works on built-in overrides** — previously the
   command refused to remove any app whose name matched a built-in; it now
   allows removal of user copies of built-ins and prints "Built-in 'X' is now
   active again." after removal.
@@ -817,25 +817,25 @@ contract and MSRV policy.
 
 - **`kind: allow` in secrets files** — allowlist entries can be placed in the secrets file alongside `kind: regex` and `kind: literal` entries. Patterns support the same `*` glob syntax as `--allow`. Entries from the secrets file and `--allow` flags are merged at runtime.
 
-- **`sanitize apps` subcommands** — `sanitize apps` now dispatches to four sub-subcommands:
-  - `sanitize apps` (no subcommand) — list built-in and user-defined bundles.
-  - `sanitize apps add <NAME> [--profile FILE] [--secrets FILE] [--overwrite]` — install a custom app bundle from local YAML files. Both files are validated before anything is written to disk.
-  - `sanitize apps remove <NAME> [--yes]` — remove a custom app bundle. Built-in bundles are protected. Requires `--yes` to confirm.
-  - `sanitize apps dir` — print the user apps directory (`$SANITIZE_APPS_DIR` or `~/.config/sanitize/apps`).
+- **`scour-secrets apps` subcommands** — `scour-secrets apps` now dispatches to four sub-subcommands:
+  - `scour-secrets apps` (no subcommand) — list built-in and user-defined bundles.
+  - `scour-secrets apps add <NAME> [--profile FILE] [--secrets FILE] [--overwrite]` — install a custom app bundle from local YAML files. Both files are validated before anything is written to disk.
+  - `scour-secrets apps remove <NAME> [--yes]` — remove a custom app bundle. Built-in bundles are protected. Requires `--yes` to confirm.
+  - `scour-secrets apps dir` — print the user apps directory (`$SCOUR_SECRETS_APPS_DIR` or `~/.config/scour-secrets/apps`).
 
-- **`sanitize allow-test` subcommand** — test allowlist patterns against values before a full run. Accepts `--allow` patterns, positional values or stdin (one per line), and `--json` for machine-readable output. Shows which pattern matched each value and a summary count.
+- **`scour-secrets allow-test` subcommand** — test allowlist patterns against values before a full run. Accepts `--allow` patterns, positional values or stdin (one per line), and `--json` for machine-readable output. Shows which pattern matched each value and a summary count.
 
-- **`sanitize template` subcommand** — generate a starter secrets template YAML for a preset use case (`generic`, `web`, `k8s`, `database`, `aws`). Output defaults to `secrets.template.<preset>.yaml`.
+- **`scour-secrets template` subcommand** — generate a starter secrets template YAML for a preset use case (`generic`, `web`, `k8s`, `database`, `aws`). Output defaults to `secrets.template.<preset>.yaml`.
 
-- **`AllowlistMatcher`** — new public type in `rust_sanitize::allowlist`. Compiles `*`-glob and exact patterns; `is_allowed()` and `match_pattern()` methods; atomic seen-counter; regex-character warning on construction.
+- **`AllowlistMatcher`** — new public type in `scour_secrets::allowlist`. Compiles `*`-glob and exact patterns; `is_allowed()` and `match_pattern()` methods; atomic seen-counter; regex-character warning on construction.
 
 - **`AllowlistMatcher::match_pattern`** — returns the first matching pattern string (not just a bool), used by `allow-test` to show which pattern matched.
 
 - **`MappingStore::new_with_allowlist`** — constructs a store with an injected `AllowlistMatcher`. Allowlist check happens inside `get_or_insert` before any replacement is recorded, so allowed values never enter the forward map or Phase 2 augmentation.
 
-- **MCP: `use_default`, `app`, `allow` parameters** — `sanitize` and `scan` tools now expose all three new flags. `use_default` is validated in TypeScript before spawning the subprocess (conflicts with `secrets_file`, `namespace`, and `patterns` are caught early with a clear error message).
+- **MCP: `use_default`, `app`, `allow` parameters** — `scour-secrets` and `scan` tools now expose all three new flags. `use_default` is validated in TypeScript before spawning the subprocess (conflicts with `secrets_file`, `namespace`, and `patterns` are caught early with a clear error message).
 
-- **MCP: `test_allowlist` tool** — accepts `patterns: string[]` and `values: string[]`, delegates to `sanitize allow-test --json`, and returns structured match results.
+- **MCP: `test_allowlist` tool** — accepts `patterns: string[]` and `values: string[]`, delegates to `scour-secrets allow-test --json`, and returns structured match results.
 
 - **`--strip-delimiter <DELIM>` flag** — sets the delimiter used to split key/value lines when `--strip-values` is active. Default: `=`. Use `--strip-delimiter :` for YAML-style or nginx-style configs. Requires `--strip-values`.
 
@@ -845,9 +845,9 @@ contract and MSRV policy.
 
 - **`--context-case-sensitive` flag** — makes keyword matching case-sensitive when `--extract-context` is active.
 
-- **MCP server (`mcp/`)** — Deno-based MCP server wrapping the `sanitize` binary as a subprocess. Ships as a standalone binary for Linux x64, macOS x64, macOS arm64, and Windows. Tools: `sanitize`, `scan`, `strip_config_values`, `test_allowlist`, `list_processors`, `list_templates`.
+- **MCP server (`mcp/`)** — Deno-based MCP server wrapping the `scour-secrets` binary as a subprocess. Ships as a standalone binary for Linux x64, macOS x64, macOS arm64, and Windows. Tools: `scour-secrets`, `scan`, `strip_config_values`, `test_allowlist`, `list_processors`, `list_templates`.
 
-- **MCP: `namespace` parameter** — per-namespace secrets resolution from `$SANITIZE_SECRETS_DIR/<namespace>/`.
+- **MCP: `namespace` parameter** — per-namespace secrets resolution from `$SCOUR_SECRETS_SECRETS_DIR/<namespace>/`.
 
 - **Test suites** — `tests/allow_test_cli_tests.rs` (11 tests), `tests/apps_cli_tests.rs` (19 tests), `tests/strip_values_cli_tests.rs` (6 tests); new unit tests for `AllowlistMatcher::match_pattern`, glob edge cases, `sanitize_zip_entry_name`, `parse_secrets` size cap, and `truncate_label` boundary.
 
@@ -859,7 +859,7 @@ contract and MSRV policy.
 
 ### Changed
 
-- **`sanitize apps` is now a subcommand group** — previously `sanitize apps` was a bare list command. It now accepts `add`, `remove`, and `dir` sub-subcommands. The bare `sanitize apps` (no subcommand) still lists bundles.
+- **`scour-secrets apps` is now a subcommand group** — previously `scour-secrets apps` was a bare list command. It now accepts `add`, `remove`, and `dir` sub-subcommands. The bare `scour-secrets apps` (no subcommand) still lists bundles.
 
 - **`validate_app_name` error messages** — now name the specific invalid character rather than giving a generic character-class description.
 
@@ -897,7 +897,7 @@ contract and MSRV policy.
 
 - **Discovered-value persistence** (`--deterministic` + `--profile`) — when `--deterministic` is set alongside `--profile`, values discovered by the structured pass are appended to `--secrets-file` after the run (creating the file if absent, deduplicating if it exists). Subsequent runs against unstructured files load those patterns and produce consistent replacements.
 
-- **`--deterministic` without `--encrypted-secrets`** — `--deterministic` can now be used with a plaintext secrets file. The password (via `SANITIZE_PASSWORD`, `--password-file`, or `-p`) is used as the HMAC seed only; `--encrypted-secrets` is no longer required when using deterministic mode without an encrypted secrets file.
+- **`--deterministic` without `--encrypted-secrets`** — `--deterministic` can now be used with a plaintext secrets file. The password (via `SCOUR_SECRETS_PASSWORD`, `--password-file`, or `-p`) is used as the HMAC seed only; `--encrypted-secrets` is no longer required when using deterministic mode without an encrypted secrets file.
 
 - **Archive structured discovery pre-pass** — archives in Phase 2 are opened once before the augmented scanner is built. Profile-matched entries inside the archive populate the store, so their values are included in the augmented scanner used for all Phase 2 processing.
 
@@ -909,21 +909,21 @@ contract and MSRV policy.
 
 ### Changed
 
-- **Default secrets mode is now plaintext** — `sanitize` loads secrets files as
+- **Default secrets mode is now plaintext** — `scour-secrets` loads secrets files as
   plaintext JSON / YAML / TOML by default. Encrypted (AES-256-GCM) files now
   require the explicit `--encrypted-secrets` flag.
 - **`--unencrypted-secrets` removed** — replaced by the inverse `--encrypted-secrets`
   flag. Scripts using `--unencrypted-secrets` must remove the flag (the default
   behaviour is now plaintext).
 - **Password inputs require `--encrypted-secrets`** — supplying `--password`,
-  `--password-file`, or the `SANITIZE_PASSWORD` environment variable without
+  `--password-file`, or the `SCOUR_SECRETS_PASSWORD` environment variable without
   `--encrypted-secrets` is now a hard error with a clear message.
 - **`--password` / `-p` is now interactive** — The flag no longer accepts an
   inline value. When provided, it triggers a secure interactive password prompt
   (masked input via `rpassword`, no shell history or process listing exposure).
   Passing `--password VALUE` is rejected by the parser. In non-interactive
   contexts (no TTY) the flag returns a clear error and directs users to
-  `--password-file` or `SANITIZE_PASSWORD`.
+  `--password-file` or `SCOUR_SECRETS_PASSWORD`.
 
 ## [0.2.0] — 2026-03-20
 
@@ -943,16 +943,16 @@ contract and MSRV policy.
 
 ### Changed
 
-- **Consolidated `encrypt-secrets` into `sanitize` subcommands.** The separate
-  `encrypt-secrets` binary has been removed. Use `sanitize encrypt <IN> <OUT>`
-  and `sanitize decrypt <IN> <OUT>` instead. The default sanitize mode
-  (`sanitize [INPUT]`) is unchanged and requires no subcommand.
+- **Consolidated `encrypt-secrets` into `scour-secrets` subcommands.** The separate
+  `encrypt-secrets` binary has been removed. Use `scour-secrets encrypt <IN> <OUT>`
+  and `scour-secrets decrypt <IN> <OUT>` instead. The default sanitize mode
+  (`scour-secrets [INPUT]`) is unchanged and requires no subcommand.
 - **Unified password handling** across all modes with a single resolution
-  chain: `--password` flag → `--password-file` → `SANITIZE_PASSWORD` env var
+  chain: `--password` flag → `--password-file` → `SCOUR_SECRETS_PASSWORD` env var
   → interactive prompt (masked via `rpassword`).
 - **Removed `--secrets-key`** — use `--password` instead.
 - **`OUTPUT` is now `--output` / `-o`** — Output path changed from a positional
-  argument to a named flag. Usage: `sanitize data.log -s s.enc -o output.log`.
+  argument to a named flag. Usage: `scour-secrets data.log -s s.enc -o output.log`.
   Plain files still default to stdout; archives default to
   `<input>.sanitized.<ext>`.
 - **Cross-platform support** — `nix` dependency is now Unix-only; password-file
@@ -963,9 +963,9 @@ contract and MSRV policy.
 - **CLI smoke tests** — 15 unit tests in `src/bin/sanitize.rs` covering argument
   parsing, subcommand dispatch, short flags, stdin detection, and flag
   combinations. Prevents future clap derive regressions.
-- **Stdin support** — When `INPUT` is omitted or set to `-`, `sanitize` reads
+- **Stdin support** — When `INPUT` is omitted or set to `-`, `scour-secrets` reads
   from stdin. Enables Unix pipeline usage:
-  `export SANITIZE_PASSWORD="secret"; grep "error" log.txt | sanitize -s secrets.enc`.
+  `export SCOUR_SECRETS_PASSWORD="secret"; grep "error" log.txt | scour-secrets -s secrets.enc`.
   TTY detection prevents hanging when run interactively without input.
 - **Short flags** — Common options now have short aliases: `-s` (secrets-file),
   `-p` (password), `-P` (password-file), `-o` (output), `-n` (dry-run),
@@ -973,12 +973,12 @@ contract and MSRV policy.
 - **`--format` / `-f` flag** — Force input format (`text`, `json`, `yaml`,
   `xml`, `csv`, `key-value`), overriding file-extension detection. Required
   for structured processing when reading from stdin.
-- **`sanitize encrypt`** subcommand — encrypts a plaintext secrets file with
+- **`scour-secrets encrypt`** subcommand — encrypts a plaintext secrets file with
   AES-256-GCM (replaces the standalone `encrypt-secrets` binary).
-- **`sanitize decrypt`** subcommand — decrypts an encrypted secrets file back
+- **`scour-secrets decrypt`** subcommand — decrypts an encrypted secrets file back
   to plaintext for editing, with optional format validation.
 - **`--password <PW>`** flag — provides the password for the default
-  sanitize mode. Also available in `encrypt` and `decrypt` subcommands.
+  scour-secrets mode. Also available in `encrypt` and `decrypt` subcommands.
 - **`--password-file <PATH>`** flag — read the password from a file with
   strict Unix permissions enforcement (`0600` or `0400`). Avoids shell
   history and `/proc/<pid>/environ` exposure.
@@ -989,7 +989,7 @@ contract and MSRV policy.
 ### Removed
 
 - **`encrypt-secrets` binary** — functionality absorbed into
-  `sanitize encrypt` and `sanitize decrypt`.
+  `scour-secrets encrypt` and `scour-secrets decrypt`.
 
 ## [0.1.0] — 2026-03-19
 
@@ -1014,7 +1014,7 @@ contract and MSRV policy.
 - **Plaintext secrets** support with auto-detection (JSON, YAML, TOML).
 - **`encrypt-secrets` CLI** (since removed — see 0.2.0) for converting
   plaintext secrets to encrypted form.
-- **`sanitize` CLI** with `--dry-run`, `--fail-on-match`, `--report`,
+- **`scour-secrets` CLI** with `--dry-run`, `--fail-on-match`, `--report`,
   `--deterministic`, `--strict`, and streaming/structured processing options.
 - **Regex hardening**: per-pattern automaton size limits (1 MiB), DFA size
   limits, and pattern count cap (10 000).
@@ -1031,16 +1031,16 @@ contract and MSRV policy.
 - **290+ tests** including unit, integration, property-based (proptest), and
   4 fuzz targets.
 
-[Unreleased]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.14.1...HEAD
-[0.14.1]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.14.0...v0.14.1
-[0.14.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.13.1...v0.14.0
-[0.13.1]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.13.0...v0.13.1
-[0.13.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.12.0...v0.13.0
-[0.12.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.11.0...v0.12.0
-[0.11.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.10.0...v0.11.0
-[0.8.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.5.0...v0.8.0
-[0.5.0]: https://github.com/kayelohbyte/rust-sanitize/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/kayelohbyte/rust-sanitize/releases/tag/v0.4.0
-[0.3.0]: https://github.com/kayelohbyte/rust-sanitize/releases/tag/v0.3.0
-[0.2.0]: https://github.com/kayelohbyte/rust-sanitize/releases/tag/v0.2.0
-[0.1.0]: https://github.com/kayelohbyte/rust-sanitize/releases/tag/v0.1.0
+[Unreleased]: https://github.com/kayelohbyte/scour-secrets/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/kayelohbyte/scour-secrets/compare/v0.14.0...v0.14.1
+[0.14.0]: https://github.com/kayelohbyte/scour-secrets/compare/v0.13.1...v0.14.0
+[0.13.1]: https://github.com/kayelohbyte/scour-secrets/compare/v0.13.0...v0.13.1
+[0.13.0]: https://github.com/kayelohbyte/scour-secrets/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/kayelohbyte/scour-secrets/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/kayelohbyte/scour-secrets/compare/v0.10.0...v0.11.0
+[0.8.0]: https://github.com/kayelohbyte/scour-secrets/compare/v0.5.0...v0.8.0
+[0.5.0]: https://github.com/kayelohbyte/scour-secrets/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/kayelohbyte/scour-secrets/releases/tag/v0.4.0
+[0.3.0]: https://github.com/kayelohbyte/scour-secrets/releases/tag/v0.3.0
+[0.2.0]: https://github.com/kayelohbyte/scour-secrets/releases/tag/v0.2.0
+[0.1.0]: https://github.com/kayelohbyte/scour-secrets/releases/tag/v0.1.0

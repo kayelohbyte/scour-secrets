@@ -1,5 +1,5 @@
-use rust_sanitize::secrets::{parse_category, SecretEntry};
-use rust_sanitize::{Category, MappingStore, ScanStats, StreamScanner};
+use scour_secrets::secrets::{parse_category, SecretEntry};
+use scour_secrets::{Category, MappingStore, ScanStats, StreamScanner};
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -330,8 +330,8 @@ impl io::Seek for NullSeekWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_sanitize::secrets::SecretEntry;
-    use rust_sanitize::{MappingStore, RandomGenerator};
+    use scour_secrets::secrets::SecretEntry;
+    use scour_secrets::{MappingStore, RandomGenerator};
     use std::sync::Arc;
 
     fn test_store() -> Arc<MappingStore> {

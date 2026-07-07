@@ -83,7 +83,7 @@ fn assert_no_canary(label: &str, text: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// `sanitize scan` (dry-run detector) — every output mode
+// `scour-secrets scan` (dry-run detector) — every output mode
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -92,9 +92,9 @@ fn scan_human_output_hides_canary() {
     let s = canary_secrets(dir.path());
     let input = write_fixture(dir.path());
 
-    // No SANITIZE_LOG override: exercise the default (chattier) verbosity that
+    // No SCOUR_SECRETS_LOG override: exercise the default (chattier) verbosity that
     // prints the "Matched: N canary_token" tally — a stronger leak test.
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args(["scan", input.to_str().unwrap(), "-s", s.to_str().unwrap()])
         .output()
         .unwrap();
@@ -114,7 +114,7 @@ fn scan_findings_ndjson_hides_canary() {
     let s = canary_secrets(dir.path());
     let input = write_fixture(dir.path());
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             "scan",
             input.to_str().unwrap(),
@@ -143,7 +143,7 @@ fn scan_report_format_hides_canary(format: &str, ext: &str) {
     let input = write_fixture(dir.path());
     let report = dir.path().join(format!("report.{ext}"));
 
-    let out = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let out = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             "scan",
             input.to_str().unwrap(),
@@ -207,7 +207,7 @@ fn extract_context_snippets_hide_canary() {
     let s = canary_secrets(dir.path());
     let report = dir.path().join("report.json");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_sanitize"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_scour-secrets"))
         .args([
             "-",
             "-s",
@@ -221,7 +221,7 @@ fn extract_context_snippets_hide_canary() {
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
-        .env("SANITIZE_LOG", "error")
+        .env("SCOUR_SECRETS_LOG", "error")
         .spawn()
         .unwrap();
     child
