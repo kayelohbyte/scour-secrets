@@ -33,6 +33,8 @@ Write a profile file describing which fields to sanitize, then pass it with `--p
 # --secrets-file is required when using --profile.
 # The file can be empty on the first run — scour populates it with discovered
 # literals automatically so Phase 2 can match them in logs and other files.
+# (An encrypted secrets file works too: the write-back re-encrypts with the
+#  same password. Plaintext JSON/YAML/TOML files keep their own format.)
 scour config.yaml -s secrets.yaml --profile profile.yaml
 ```
 

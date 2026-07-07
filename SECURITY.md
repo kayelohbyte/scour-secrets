@@ -409,3 +409,31 @@ replacement for a *partial* secret and pass the continuation through verbatim
    unbroken token larger than a chunk) is pathological; redaction is the safe
    default. A per-pattern `max_length` in the secrets file bounds greedy
    patterns before they reach this point.
+
+---
+
+## 17. Residual Leak Surface (Format Preservation)
+
+Format preservation (Core goal 2) intentionally keeps some properties of the
+original data in the sanitized output. None of these reveal a secret value
+directly, but each can carry information; know them before sharing output from
+highly sensitive contexts:
+
+| What survives | Where | Why | How to reduce it |
+|---------------|-------|-----|------------------|
+| **Value length** | All categories under the default `LengthPolicy::Preserve` | Replacement byte length exactly matches the original (keeps layouts/column alignment intact) | `--randomize-length` draws lengths from per-category bands instead |
+| **Email domain** | `email` | `alice@corp.com` → `x7f2…@corp.com`; the domain is treated as context, not secret | Add a `hostname`/`regex` pattern covering the domain itself |
+| **Hostname suffix** | `hostname` | `db01.internal.corp` keeps `.internal.corp` | Add a broader hostname pattern or an explicit literal |
+| **Structural shape** | `url`, `file_path`, `aws_arn`, `azure_resource_id`, JWT 3-segment form, UUID/MAC/IP formats | Separators and known segments are copied so the value stays type-valid | Inherent to format preservation; use `custom:` categories for full opacity |
+| **Match count & positions** | All output | Every replacement marks *where* a secret occurred and how many there were | Inherent — the output is a redaction of the input |
+| **File names & structure** | Reports, archive output, `--llm` manifests | Paths and entry names are treated as non-secret metadata | Rename inputs before running, or post-filter reports |
+
+Two related persistence notes:
+
+- **Structured handoff** (`--profile`): discovered original values are
+  appended to your secrets file as detection patterns — written `0600`,
+  re-encrypted when the file is encrypted, originals only (never the
+  replacements, so no mapping exists). Disable with `--no-structured-handoff`.
+- **Deterministic mode**: anyone holding the password **and** the per-install
+  seed salt can confirm guesses against sanitized output (see §4 and §8).
+  Treat the salt file like a key file.

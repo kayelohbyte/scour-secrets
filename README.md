@@ -222,7 +222,7 @@ Replace specific named fields in YAML, JSON, TOML, CSV, `.env`, and INI files. C
 scour-secrets config.yaml server.log --profile fields.yaml -s patterns.yaml
 ```
 
-When `--profile` is active, values discovered in structured fields are automatically written back to the patterns file as literals so the streaming scanner can match them in other files too. See [Structured Processing](docs/structured-processing.md) for the full field pattern syntax and two-phase pipeline.
+When `--profile` is active, values discovered in structured fields are automatically written back to the patterns file as literals so the streaming scanner can match them in other files too — and in future runs. The write-back preserves the file's on-disk form: an encrypted secrets file is re-encrypted with the same password, and JSON/YAML/TOML plaintext files keep their format. See [Structured Processing](docs/structured-processing.md) for the full field pattern syntax and two-phase pipeline.
 
 ### Encrypted patterns file
 
@@ -401,7 +401,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model and mitigations.
 ## Limitations
 
 - **No restore.** Replacements are one-way by design. No undo, decrypt-output, or reverse-mapping capability.
-- **Structured-to-scanner handoff.** When `--profile` is active, discovered values are appended to your secrets file as `kind: literal` entries so the scanner can find them in other files. Use `--no-structured-handoff` to suppress the write if needed.
+- **Structured-to-scanner handoff.** When `--profile` is active, discovered values are appended to your secrets file as `kind: literal` entries so the scanner can find them in other files and future runs. The file is written 0600 and re-encrypted when it was encrypted; it holds originals only (no mapping to replacements). Use `--no-structured-handoff` to suppress the write if needed.
 - **Structured processor size limit.** Files over 256 MiB (or `--max-structured-size`) fall back to the streaming scanner, which replaces raw bytes without document awareness. In practice this only affects large serialized data dumps, not real config files.
 - **Deterministic mode caveats.** Identical output requires the same secrets file and the same seed. Changing either produces completely different replacements.
 - **Zeroization scope.** Covers secrets, HMAC keys, and mapping-store keys. Incidental copies the Rust compiler creates during optimization passes are not covered — an inherent limitation of safe Rust zeroization.
