@@ -70,7 +70,7 @@ The two-pass design ensures cross-file consistency: a password extracted from `c
 
 ### Plain file path (no profile)
 
-1. Load encrypted secrets → decrypt with password (PBKDF2 + AES-256-GCM).
+1. Load encrypted secrets → decrypt with password (Argon2id + AES-256-GCM).
 2. Build `ScanPattern` list from decrypted plain-text entries.
 3. Create `StreamScanner` with chunk+overlap configuration.
 4. Open input as a `Read`, open output via `AtomicFileWriter`.
@@ -94,7 +94,7 @@ secrets file management. These are simple linear flows that do not
 involve the scanning/replacement pipeline:
 
 - **`scour-secrets encrypt <IN> <OUT>`** — reads a plaintext secrets file,
-  optionally validates it, encrypts with AES-256-GCM (PBKDF2 key
+  optionally validates it, encrypts with AES-256-GCM (Argon2id key
   derivation), and writes the ciphertext atomically.
 - **`scour-secrets decrypt <IN> <OUT>`** — reads an encrypted secrets file,
   decrypts, optionally validates the resulting plaintext, and writes
@@ -216,7 +216,7 @@ giving library users access to identical output without duplicating the logic.
 | `generator` | `ReplacementGenerator` trait. Two impls: `HmacGenerator` (deterministic), `RandomGenerator` (CSPRNG). Contains category-aware formatters used by the CLI. |
 | `strategy` | **Extensibility layer:** `Strategy` trait + `StrategyGenerator` adapter + 5 built-in strategies (`RandomString`, `FakeIp`, etc.). Public API for library users to implement custom replacement logic. |
 | `category` | `Category` enum. Drives domain separation in HMAC and replacement format selection. |
-| `secrets` | AES-256-GCM encrypted secrets file format. PBKDF2 key derivation. Zeroizes plaintext on drop. |
+| `secrets` | AES-256-GCM encrypted secrets file format. Argon2id key derivation. Zeroizes plaintext on drop. |
 | `processor::*` | Format-aware processors: JSON, YAML, TOML, JSONL, XML, CSV, key-value, INI, env, log-line. Each implements the `Processor` trait; the structured editors also implement `process_to_edits` for byte-exact, format-preserving span editing. |
 | `processor::archive` | Tar / tar.gz / zip processing. Per-entry structured-or-scanner routing. |
 | `processor::registry` | `ProcessorRegistry` — maps processor names to `Arc<dyn Processor>`. |

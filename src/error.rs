@@ -44,6 +44,9 @@ pub enum SanitizeError {
     #[error("secrets: encrypted file too short (corrupt or truncated)")]
     SecretsTooShort,
 
+    #[error("secrets: not a recognized encrypted secrets file (bad magic or unsupported version)")]
+    SecretsUnrecognizedFormat,
+
     #[error("secrets: decryption failed — wrong password or corrupted file")]
     SecretsDecryptFailed,
 

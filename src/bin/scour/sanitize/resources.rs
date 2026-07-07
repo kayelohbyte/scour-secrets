@@ -10,7 +10,7 @@ struct LoadedSecrets {
     raw_bytes: Zeroizing<Vec<u8>>,
     /// Decrypted plaintext for encrypted secrets files; `None` for plaintext files.
     /// Stored here so `apply_field_name_signals` can reuse it without a second
-    /// PBKDF2+AES-GCM round.
+    /// Argon2id+AES-GCM round.
     plaintext_bytes: Option<Zeroizing<Vec<u8>>>,
     /// Whether the file on disk was AES-256-GCM encrypted. The structured
     /// handoff must re-encrypt on write-back when this is set.

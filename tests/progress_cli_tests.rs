@@ -351,7 +351,7 @@ fn multi_input_fail_on_match_returns_exit_code_2() {
 fn determinism_parallel_matches_serial() {
     // Build 5 plaintext files with the same repeating secret.  We encrypt
     // the secrets file so that --deterministic (which requires a password for
-    // its PBKDF2 seed) can be exercised via the CLI.
+    // its Argon2id-derived seed) can be exercised via the CLI.
     use std::process::Stdio;
 
     let dir = tempdir().unwrap();

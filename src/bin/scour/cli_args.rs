@@ -143,7 +143,8 @@ pub(crate) struct Cli {
     #[arg(short = 'd', long)]
     pub(crate) deterministic: bool,
 
-    /// File holding the deterministic seed salt (used verbatim as the PBKDF2 salt).
+    /// File holding the deterministic seed salt (SHA-256-normalized, then used as
+    /// the Argon2id seed salt).
     /// Overrides the per-install salt and the SCOUR_SECRETS_SEED_SALT env var. Share this
     /// file across machines to reproduce identical deterministic output for a team.
     #[arg(long, value_name = "PATH")]
@@ -444,7 +445,7 @@ pub(crate) enum SubCommand {
     /// Encrypt a plaintext secrets file for use with the sanitizer.
     ///
     /// Uses AES-256-GCM authenticated encryption with a key derived via
-    /// PBKDF2-HMAC-SHA256 (600,000 iterations).
+    /// Argon2id (19 MiB memory, 2 passes).
     #[command(after_help = "\
 EXAMPLES:\n  \
   sanitize encrypt secrets.json secrets.json.enc --password \"my-password\"\n  \

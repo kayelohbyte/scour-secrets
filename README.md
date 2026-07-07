@@ -370,7 +370,7 @@ Replacements are one-way by design. No reverse mapping is stored or recoverable 
 
 Key properties:
 
-- **Encryption at rest** — secrets files use AES-256-GCM (PBKDF2-HMAC-SHA256, 600 000 iterations). Plaintext files are also supported.
+- **Encryption at rest** — secrets files use AES-256-GCM with an Argon2id-derived key (memory-hard: 19 MiB, 2 passes). Plaintext files are also supported.
 - **Zeroization** — HMAC keys, secret entries, mapping-store keys, and decrypted blobs are zeroized on drop.
 - **Regex hardening** — per-pattern automaton and DFA size limits (1 MiB each) prevent ReDoS and unbounded memory growth.
 - **Defensive limits** — input size caps, recursion depth limits, node-count caps, and pattern-count limits bound every parser.

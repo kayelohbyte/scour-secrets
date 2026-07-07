@@ -25,8 +25,8 @@ AES-256-GCM encrypted secrets file.
 
 | Parameter | Value |
 |-----------|-------|
-| KDF | PBKDF2-HMAC-SHA256 |
-| Iterations | 600 000 |
+| KDF | Argon2id (memory-hard) |
+| Parameters | m = 19 MiB, t = 2 passes, p = 1 lane |
 | Salt | 32 bytes (OS CSPRNG) |
 | Key length | 32 bytes (256 bits) |
 | Cipher | AES-256-GCM |
@@ -36,10 +36,18 @@ AES-256-GCM encrypted secrets file.
 The encrypted file format:
 
 ```
+[5 bytes magic "SCOUR"]
+[1 byte  format version = 1]
 [32 bytes salt]
 [12 bytes nonce]
 [N bytes ciphertext + 16-byte GCM tag]
 ```
+
+The magic + version prefix identifies the format exactly, so encrypted-vs-plaintext
+detection is deterministic (no content heuristic). There is no legacy headerless
+format — version 1 is the first release, and a blob without the header is rejected
+outright rather than decoded with an assumed layout. A future parameter or
+algorithm change bumps the version byte without changing the magic.
 
 After decryption, plaintext secrets are wrapped in `zeroize::Zeroizing`
 and each `SecretEntry`'s fields (`pattern`, `kind`, `category`, `label`)
@@ -69,20 +77,22 @@ a priority chain designed to balance convenience with security:
 When using `HmacGenerator`, replacements are derived from:
 
 ```
-seed         = PBKDF2-HMAC-SHA256(password, salt, 600_000)   // 32 bytes
+seed         = Argon2id(password, SHA-256(salt), m=19MiB, t=2, p=1)   // 32 bytes
 replacement  = HMAC-SHA256(seed, category_tag || "\x00" || plaintext_value)
 ```
 
 - The **seed** is a 32-byte key derived from the `--password` (or
-  `SCOUR_SECRETS_PASSWORD`) via PBKDF2. Same password + same salt + same value →
-  same replacement across runs.
+  `SCOUR_SECRETS_PASSWORD`) via Argon2id — the same memory-hard KDF as the
+  encrypted secrets file. The seed salt (arbitrary length) is SHA-256-normalized
+  to 32 bytes first, since Argon2 requires a salt of at least 8 bytes. Same
+  password + same salt + same value → same replacement across runs.
 - The seed is zeroized on `HmacGenerator` drop.
 - Category `domain_tag_hmac()` provides domain separation so e.g. an email
   `"alice"` and a hostname `"alice"` produce different replacements.
 
 ### Seed salt (per-install by default)
 
-The PBKDF2 salt is **unique per install**, not a global constant. On the first
+The seed salt is **unique per install**, not a global constant. On the first
 `--deterministic` run a 32-byte CSPRNG salt is generated and persisted at
 `<config_dir>/seed-salt` (mode `0600`), then reused on every later run.
 
@@ -94,19 +104,20 @@ password→seed table attack every install at once.
 
 Salt resolution order (deterministic mode):
 
-1. `--seed-salt-file <PATH>` — file contents, used verbatim as the PBKDF2 salt.
-2. `SCOUR_SECRETS_SEED_SALT` env var — string bytes, used verbatim.
+1. `--seed-salt-file <PATH>` — file contents (any length; SHA-256-normalized).
+2. `SCOUR_SECRETS_SEED_SALT` env var — string bytes (any length; SHA-256-normalized).
 3. Persisted per-install salt at `<config_dir>/seed-salt`.
 4. Freshly generated and persisted (the default first-run path).
 
 **Cross-machine reproducibility** now requires sharing the salt: copy the
 `seed-salt` file, or set `SCOUR_SECRETS_SEED_SALT` / `--seed-salt-file` to a common
-value across machines. **Migration:** output produced before per-install salts
-existed is reproducible by setting `SCOUR_SECRETS_SEED_SALT` to the legacy constant
-`scour-secrets:deterministic-seed:v1`.
+value across machines. Note that 0.16.0 switched the seed KDF from PBKDF2 to
+Argon2id, so deterministic output is **not** comparable across that boundary even
+with the same salt — re-share datasets produced on 0.16.0+.
 
 > **One password, two uses.** The same password seeds both secrets-file
-> decryption and the deterministic generator (with distinct salts). Guessing it
+> decryption and the deterministic generator (both via Argon2id, with distinct
+> salts). Guessing it
 > offline compromises both, but the per-install secret salt means an off-box
 > attacker cannot mount that guess against the seed at all. An in-process
 > attacker who could read the live seed already sees the plaintext input (§8),

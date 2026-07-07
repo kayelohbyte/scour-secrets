@@ -159,12 +159,14 @@ fn looks_encrypted_short_data_returns_false() {
 }
 
 #[test]
-fn looks_encrypted_binary_garbage_returns_true() {
-    // Random non-UTF-8 bytes ≥ MIN_ENCRYPTED_LEN.
+fn looks_encrypted_binary_garbage_without_header_returns_false() {
+    // As of the versioned format, only the `SCOUR` + version header identifies
+    // an encrypted blob. Random binary bytes without that header are NOT
+    // treated as encrypted (the pre-1.0 heuristic assumed they were).
     let mut data = vec![0xFFu8; 128];
     data[0] = 0x80;
     data[1] = 0xFE;
-    assert!(looks_encrypted(&data));
+    assert!(!looks_encrypted(&data));
 }
 
 // ===========================================================================

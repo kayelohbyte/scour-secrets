@@ -204,7 +204,7 @@ When `--extract-context` is used, each file entry in the report's `files` array 
 | `SecretsFormat` | Enum: `Json`, `Yaml`, `Toml`. |
 | `load_secrets_auto(data, password, format, force_plaintext)` | Detect encrypted vs plaintext and load secret patterns accordingly. Returns `AutoLoadedSecrets { patterns, warnings, allow_patterns, was_encrypted }`. |
 | `looks_encrypted(data)` | Heuristic: returns `true` if the data does not look like plaintext JSON/YAML/TOML (i.e. it's likely encrypted). |
-| `encrypt_secrets(plaintext, password)` | Encrypt a byte slice with AES-256-GCM (PBKDF2 key derivation). |
+| `encrypt_secrets(plaintext, password)` | Encrypt a byte slice with AES-256-GCM (Argon2id key derivation). |
 | `decrypt_secrets(encrypted, password)` | Decrypt and return `Zeroizing<Vec<u8>>`. |
 | `parse_secrets(content, format)` | Parse plaintext secrets into `Vec<SecretEntry>`. |
 | `serialize_secrets(entries, format)` | Serialize `Vec<SecretEntry>` back to JSON, YAML, or TOML bytes. |

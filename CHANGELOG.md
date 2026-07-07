@@ -40,6 +40,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   decrypt → merge discovered literals → re-encrypt (fresh salt + nonce) with
   the same password. The file on disk is never downgraded to plaintext, and
   the write-back fails closed (file untouched) on a wrong or missing password.
+- **Key derivation switched from PBKDF2 to Argon2id** (memory-hard: 19 MiB,
+  2 passes, 1 lane) for both the encrypted secrets-file key and the
+  deterministic-generator seed, giving one modern KDF everywhere and dropping
+  the `pbkdf2` dependency. Argon2id resists GPU/ASIC-accelerated offline
+  brute-force far better than an iterated PBKDF2.
+- **Encrypted secrets files carry a versioned header** (`SCOUR` magic +
+  1-byte version, then salt/nonce/ciphertext). Encrypted-vs-plaintext detection
+  is now exact instead of a content heuristic, so a plaintext file whose first
+  token is a bare key can no longer be misread as ciphertext. A future KDF or
+  parameter change bumps the version byte without changing the magic.
 
 ### Changed — BREAKING
 
@@ -62,6 +72,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - The structured-handoff write-back now preserves the secrets file's own
   plaintext format — a `.json` secrets file previously came back rewritten as
   YAML, and `.toml` write-back failed outright.
+- **Crypto format break (no migration).** The Argon2id switch and the new
+  versioned encrypted-file header mean secrets files encrypted by 0.15.x no
+  longer decrypt, and `--deterministic` output differs from earlier releases
+  even with the same seed salt. Re-encrypt secrets files with `scour-secrets
+  encrypt` and regenerate any shared deterministic datasets on 0.16.0+.
 
 ### Added
 

@@ -2,31 +2,33 @@
 //!
 //! This module provides **in-memory-only** decryption of user-supplied
 //! secrets files. Secrets are never written to disk in plaintext form;
-//! they are loaded from an AES-256-GCM encrypted `.enc` file, decrypted
+//! they are loaded from an Argon2id + AES-256-GCM encrypted `.enc` file, decrypted
 //! into memory, parsed, and converted directly into [`ScanPattern`]s
 //! for the streaming scanner.
 //!
 //! # Encryption Format
 //!
 //! ```text
-//! ┌────────────────────────────────┬──────────────┬─────────────────────────────┐
-//! │  Salt (32 B)                   │  Nonce (12 B)│  AES-256-GCM Ciphertext     │
-//! └────────────────────────────────┴──────────────┴─────────────────────────────┘
+//! ┌───────────┬───────────┬─────────────┬──────────────┬──────────────────────────┐
+//! │ Magic (5B)│ Ver (1 B) │ Salt (32 B) │ Nonce (12 B) │  AES-256-GCM Ciphertext  │
+//! └───────────┴───────────┴─────────────┴──────────────┴──────────────────────────┘
 //! ```
 //!
-//! - **Salt** (32 bytes): random, used for PBKDF2-derived key.
+//! - **Magic** (`SCOUR`) + **version** (`1`): identify the format exactly, so a
+//!   plaintext secrets file is never mistaken for ciphertext and vice versa.
+//! - **Salt** (32 bytes): random, used for the Argon2id-derived key.
 //! - **Nonce** (12 bytes): random, for AES-256-GCM.
 //! - **Ciphertext**: authenticated encryption of the plaintext secrets
 //!   file (JSON / YAML / TOML).
 //!
-//! The 256-bit AES key is derived from the user password using
-//! PBKDF2-HMAC-SHA256 with 600 000 iterations, which meets current
-//! OWASP recommendations.
+//! The 256-bit AES key is derived from the user password using Argon2id
+//! (memory-hard; 19 MiB / 2 passes / 1 lane), the current OWASP recommendation.
+//! There is no legacy headerless format — version 1 is the first release.
 //!
 //! # Key Derivation
 //!
 //! ```text
-//! key = PBKDF2-HMAC-SHA256(password, salt, iterations=600_000, dkLen=32)
+//! key = Argon2id(password, salt, m=19 MiB, t=2, p=1, dkLen=32)
 //! ```
 //!
 //! # Secrets File Schema
@@ -59,7 +61,8 @@
 //! # Security Considerations
 //!
 //! - AES-256-GCM provides both confidentiality and integrity (AEAD).
-//! - PBKDF2 with 600 000 iterations resists offline brute-force attacks.
+//! - Argon2id is memory-hard, resisting GPU/ASIC-accelerated offline
+//!   brute-force far better than an iterated PBKDF2.
 //! - Decrypted plaintext is held in [`Zeroizing<Vec<u8>>`] and zeroed
 //!   on drop.
 //! - The plaintext secrets file is never written to disk by this crate.
@@ -75,27 +78,44 @@ pub type PatternCompileResult = (Vec<ScanPattern>, Vec<(usize, SanitizeError)>);
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
-use hmac::Hmac;
+use argon2::{Algorithm, Argon2, Params, Version};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use zeroize::{Zeroize, Zeroizing};
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Salt length for PBKDF2 key derivation (bytes).
+/// File magic identifying a scour encrypted secrets blob. A plaintext
+/// secrets file (JSON / YAML / TOML) never begins with these bytes followed
+/// by a version byte, so the header is an exact discriminator — no content
+/// heuristic is needed.
+const MAGIC: &[u8; 5] = b"SCOUR";
+
+/// Encrypted-format version. Version 1 denotes Argon2id (see [`ARGON2_M_COST`]
+/// and siblings) plus AES-256-GCM. A future parameter or algorithm change bumps
+/// this byte without changing the magic.
+const FORMAT_VERSION: u8 = 1;
+
+/// Header length: magic + 1-byte version.
+const HEADER_LEN: usize = MAGIC.len() + 1;
+
+/// Salt length for key derivation (bytes).
 const SALT_LEN: usize = 32;
 
 /// AES-GCM nonce length (bytes). Must be 12 for AES-256-GCM.
 const NONCE_LEN: usize = 12;
 
-/// PBKDF2 iteration count — OWASP 2023+ recommendation.
-const PBKDF2_ITERATIONS: u32 = 600_000;
+/// Argon2id memory cost in KiB (19 MiB — OWASP 2023 baseline).
+const ARGON2_M_COST: u32 = 19 * 1024;
+/// Argon2id time cost (iterations).
+const ARGON2_T_COST: u32 = 2;
+/// Argon2id parallelism (lanes).
+const ARGON2_P_COST: u32 = 1;
 
-/// Minimum ciphertext size: salt + nonce + at least 16-byte AES-GCM tag.
-const MIN_ENCRYPTED_LEN: usize = SALT_LEN + NONCE_LEN + 16;
+/// Minimum blob size: header + salt + nonce + at least a 16-byte AES-GCM tag.
+const MIN_ENCRYPTED_LEN: usize = HEADER_LEN + SALT_LEN + NONCE_LEN + 16;
 
 /// Maximum size of a plaintext secrets file accepted by [`parse_secrets`].
 /// Prevents OOM from accidentally passing a large binary or log file as secrets.
@@ -341,12 +361,29 @@ struct TomlSecretsRef<'a> {
 // Key derivation
 // ---------------------------------------------------------------------------
 
-/// Derive a 256-bit AES key from a password and salt using PBKDF2.
-fn derive_key(password: &[u8], salt: &[u8]) -> Zeroizing<[u8; 32]> {
+/// Derive a 256-bit key from a password and salt using Argon2id.
+///
+/// Shared by the encrypted secrets-file key (this module) and the
+/// deterministic-generator seed (the CLI's `scanner_builder`), so both use one
+/// memory-hard KDF with identical parameters (19 MiB memory, 2 passes, 1 lane).
+///
+/// `salt` must be at least 8 bytes (an Argon2 requirement). Callers that accept
+/// arbitrary user-supplied salts (e.g. a deterministic seed salt) must normalize
+/// short input to a fixed-length salt before calling.
+///
+/// # Errors
+///
+/// Returns [`SanitizeError::SecretsCipherError`] if the parameters or salt are
+/// rejected by the Argon2 implementation.
+pub fn derive_key_argon2(password: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
+    let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, Some(32))
+        .map_err(|e| SanitizeError::SecretsCipherError(format!("argon2 params: {e}")))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = Zeroizing::new([0u8; 32]);
-    pbkdf2::pbkdf2::<Hmac<Sha256>>(password, salt, PBKDF2_ITERATIONS, key.as_mut())
-        .expect("PBKDF2 output length is valid");
-    key
+    argon2
+        .hash_password_into(password, salt, key.as_mut())
+        .map_err(|e| SanitizeError::SecretsCipherError(format!("argon2 kdf: {e}")))?;
+    Ok(key)
 }
 
 // ---------------------------------------------------------------------------
@@ -355,7 +392,8 @@ fn derive_key(password: &[u8], salt: &[u8]) -> Zeroizing<[u8; 32]> {
 
 /// Encrypt a plaintext secrets file.
 ///
-/// Returns the encrypted blob: `salt (32) || nonce (12) || ciphertext`.
+/// Returns the encrypted blob:
+/// `magic (5) || version (1) || salt (32) || nonce (12) || ciphertext`.
 ///
 /// # Arguments
 ///
@@ -365,12 +403,12 @@ fn derive_key(password: &[u8], salt: &[u8]) -> Zeroizing<[u8; 32]> {
 /// # Errors
 ///
 /// Returns [`SanitizeError::SecretsEmptyPassword`] if the password is empty, or
-/// [`SanitizeError::SecretsCipherError`] if encryption fails.
+/// [`SanitizeError::SecretsCipherError`] if key derivation or encryption fails.
 ///
 /// # Security
 ///
 /// - Salt and nonce are generated with CSPRNG.
-/// - Key is derived with PBKDF2 (600 000 iterations).
+/// - Key is derived with Argon2id (memory-hard; see [`derive_key_argon2`]).
 /// - AES-256-GCM provides authenticated encryption.
 pub fn encrypt_secrets(plaintext: &[u8], password: &str) -> Result<Vec<u8>> {
     if password.is_empty() {
@@ -388,7 +426,7 @@ pub fn encrypt_secrets(plaintext: &[u8], password: &str) -> Result<Vec<u8>> {
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     // Derive key.
-    let key = derive_key(password.as_bytes(), &salt);
+    let key = derive_key_argon2(password.as_bytes(), &salt)?;
     let cipher = Aes256Gcm::new_from_slice(key.as_ref())
         .map_err(|e| SanitizeError::SecretsCipherError(format!("cipher init: {}", e)))?;
 
@@ -397,8 +435,10 @@ pub fn encrypt_secrets(plaintext: &[u8], password: &str) -> Result<Vec<u8>> {
         .encrypt(nonce, plaintext)
         .map_err(|e| SanitizeError::SecretsCipherError(format!("encryption: {}", e)))?;
 
-    // Assemble: salt || nonce || ciphertext
-    let mut output = Vec::with_capacity(SALT_LEN + NONCE_LEN + ciphertext.len());
+    // Assemble: magic || version || salt || nonce || ciphertext
+    let mut output = Vec::with_capacity(HEADER_LEN + SALT_LEN + NONCE_LEN + ciphertext.len());
+    output.extend_from_slice(MAGIC);
+    output.push(FORMAT_VERSION);
     output.extend_from_slice(&salt);
     output.extend_from_slice(&nonce_bytes);
     output.extend_from_slice(&ciphertext);
@@ -416,25 +456,32 @@ pub fn encrypt_secrets(plaintext: &[u8], password: &str) -> Result<Vec<u8>> {
 ///
 /// # Arguments
 ///
-/// - `encrypted` — `salt (32) || nonce (12) || ciphertext`.
+/// - `encrypted` — `magic (5) || version (1) || salt (32) || nonce (12) || ciphertext`.
 /// - `password` — user-supplied password.
 ///
 /// # Errors
 ///
-/// - [`SanitizeError::SecretsTooShort`] if the blob is too short,
-///   [`SanitizeError::SecretsDecryptFailed`] if the password is wrong or the ciphertext has been tampered with.
+/// - [`SanitizeError::SecretsTooShort`] if the blob is too short.
+/// - [`SanitizeError::SecretsUnrecognizedFormat`] if the magic is absent or the
+///   version is unsupported (there is no legacy headerless format).
+/// - [`SanitizeError::SecretsDecryptFailed`] if the password is wrong or the
+///   ciphertext has been tampered with.
 pub fn decrypt_secrets(encrypted: &[u8], password: &str) -> Result<Zeroizing<Vec<u8>>> {
     if encrypted.len() < MIN_ENCRYPTED_LEN {
         return Err(SanitizeError::SecretsTooShort);
     }
+    if &encrypted[..MAGIC.len()] != MAGIC || encrypted[MAGIC.len()] != FORMAT_VERSION {
+        return Err(SanitizeError::SecretsUnrecognizedFormat);
+    }
 
-    let salt = &encrypted[..SALT_LEN];
-    let nonce_bytes = &encrypted[SALT_LEN..SALT_LEN + NONCE_LEN];
-    let ciphertext = &encrypted[SALT_LEN + NONCE_LEN..];
+    let body = &encrypted[HEADER_LEN..];
+    let salt = &body[..SALT_LEN];
+    let nonce_bytes = &body[SALT_LEN..SALT_LEN + NONCE_LEN];
+    let ciphertext = &body[SALT_LEN + NONCE_LEN..];
 
     let nonce = Nonce::from_slice(nonce_bytes);
 
-    let key = derive_key(password.as_bytes(), salt);
+    let key = derive_key_argon2(password.as_bytes(), salt)?;
     let cipher = Aes256Gcm::new_from_slice(key.as_ref())
         .map_err(|e| SanitizeError::SecretsCipherError(format!("cipher init: {}", e)))?;
 
@@ -803,63 +850,16 @@ pub fn load_plaintext_secrets(
     Ok((result, allow))
 }
 
-/// Detect whether raw file bytes look like an AES-256-GCM encrypted
-/// secrets blob (binary with salt+nonce header) or a plaintext secrets
-/// file (UTF-8 JSON / YAML / TOML).
+/// Detect whether raw file bytes are a scour encrypted secrets blob.
 ///
-/// Returns `true` if the content appears to be encrypted.
-///
-/// Heuristic:
-/// 1. Files shorter than the minimum encrypted length cannot be valid
-///    ciphertext — return `false`.
-/// 2. The **entire** content is checked for UTF-8 validity (not just the
-///    first few bytes). Only if the whole file is valid UTF-8 and begins
-///    with a recognisable plaintext marker (`[`, `{`, `-`, `#`) is it
-///    treated as plaintext — return `false`.
-/// 3. Binary content (not valid UTF-8) or UTF-8 without a plaintext
-///    marker is assumed to be encrypted — return `true`.
-///
-/// Note: a pathological plaintext file that is valid UTF-8 but lacks a
-/// leading plaintext marker (e.g. a TOML file whose first non-whitespace
-/// character is a letter) will be misclassified as encrypted and produce
-/// a `SecretsDecryptFailed` error. Use `force_plaintext: true` in
-/// [`load_secrets_auto`] to bypass the heuristic in that case.
+/// Returns `true` iff the content begins with the format header
+/// (`MAGIC || FORMAT_VERSION`). Because a plaintext secrets file
+/// (JSON / YAML / TOML) never starts with those bytes, this is an exact
+/// discriminator — unlike the pre-1.0 content heuristic it cannot misclassify
+/// a plaintext file whose first token happens to be a bare key.
+#[must_use]
 pub fn looks_encrypted(data: &[u8]) -> bool {
-    if data.len() < MIN_ENCRYPTED_LEN {
-        // Too short for a valid encrypted blob — might be a tiny
-        // plaintext file, but definitely not encrypted.
-        return false;
-    }
-    // If the file is valid UTF-8 and starts with a recognisable
-    // plaintext marker, treat it as plaintext.
-    if let Ok(text) = std::str::from_utf8(data) {
-        let trimmed = text.trim_start();
-        // Recognisable plaintext markers:
-        //   JSON  → '[' (array) or '{' (object)
-        //   YAML  → '-' (sequence item) or '---' (document start)
-        //   TOML  → '#' (comment) or '[' (table header)
-        //   TOML bare-key → any ASCII letter (e.g. `pattern = "foo"`)
-        //
-        // starts_with('[') already covers "[["; starts_with('-') covers "---".
-        // The ASCII-letter check handles TOML files whose first meaningful token
-        // is a bare key — without it those files were misclassified as encrypted
-        // and produced a confusing "decryption failed" error.
-        //
-        // A valid AES-256-GCM ciphertext starts with 32 bytes of random salt and
-        // 12 bytes of random nonce; the probability that those 44 bytes are entirely
-        // valid UTF-8 AND begin with an ASCII letter is negligible (< 2^-6).
-        let first_char = trimmed.chars().next();
-        let has_marker = trimmed.starts_with('[')
-            || trimmed.starts_with('{')
-            || trimmed.starts_with('-')
-            || trimmed.starts_with('#')
-            || first_char.is_some_and(|c| c.is_ascii_alphabetic());
-        if has_marker {
-            return false;
-        }
-    }
-    // Binary / non-UTF-8 → assume encrypted.
-    true
+    data.len() >= HEADER_LEN && &data[..MAGIC.len()] == MAGIC && data[MAGIC.len()] == FORMAT_VERSION
 }
 
 /// Unified loader: auto-detect encrypted vs plaintext and load
@@ -1122,6 +1122,62 @@ label = "openai_key"
     fn encrypt_empty_password_rejected() {
         let result = encrypt_secrets(b"hello", "");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn encrypt_emits_magic_and_version_header() {
+        let encrypted = encrypt_secrets(b"hello", "pw").unwrap();
+        assert_eq!(&encrypted[..MAGIC.len()], MAGIC, "magic prefix");
+        assert_eq!(encrypted[MAGIC.len()], FORMAT_VERSION, "version byte");
+    }
+
+    #[test]
+    fn decrypt_rejects_missing_magic() {
+        // A blob of the right length but without the header (e.g. the pre-1.0
+        // headerless format, or random bytes) must be rejected as unrecognized
+        // — never attempted as ciphertext with a legacy layout.
+        let blob = vec![0u8; MIN_ENCRYPTED_LEN + 4];
+        match decrypt_secrets(&blob, "pw") {
+            Err(SanitizeError::SecretsUnrecognizedFormat) => {}
+            other => panic!("expected SecretsUnrecognizedFormat, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decrypt_rejects_unsupported_version() {
+        let mut encrypted = encrypt_secrets(b"hello", "pw").unwrap();
+        encrypted[MAGIC.len()] = FORMAT_VERSION.wrapping_add(1);
+        match decrypt_secrets(&encrypted, "pw") {
+            Err(SanitizeError::SecretsUnrecognizedFormat) => {}
+            other => panic!("expected SecretsUnrecognizedFormat, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn looks_encrypted_requires_header() {
+        // Plaintext whose first token merely starts with "SCOUR" is not
+        // encrypted: byte 5 is not the version byte. The old content heuristic
+        // could misclassify such files; the header check cannot.
+        assert!(!looks_encrypted(b"SCOUR_KEY = \"value\"\n"));
+        assert!(!looks_encrypted(&[0u8; MIN_ENCRYPTED_LEN]));
+    }
+
+    #[test]
+    fn derive_key_argon2_is_deterministic_and_salt_sensitive() {
+        let salt_a = [7u8; SALT_LEN];
+        let salt_b = [9u8; SALT_LEN];
+        let k1 = derive_key_argon2(b"password", &salt_a).unwrap();
+        let k2 = derive_key_argon2(b"password", &salt_a).unwrap();
+        let k3 = derive_key_argon2(b"password", &salt_b).unwrap();
+        assert_eq!(*k1, *k2, "same password+salt must yield the same key");
+        assert_ne!(*k1, *k3, "different salt must yield a different key");
+    }
+
+    #[test]
+    fn derive_key_argon2_rejects_short_salt() {
+        // Argon2 requires a salt of at least 8 bytes; callers with arbitrary
+        // salts must normalize first (the seed path SHA-256s the salt).
+        assert!(derive_key_argon2(b"password", b"tiny").is_err());
     }
 
     // ---- Full pipeline: encrypt → decrypt → parse → patterns ----
