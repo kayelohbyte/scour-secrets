@@ -65,7 +65,13 @@
 //!   brute-force far better than an iterated PBKDF2.
 //! - Decrypted plaintext is held in [`Zeroizing<Vec<u8>>`] and zeroed
 //!   on drop.
-//! - The plaintext secrets file is never written to disk by this crate.
+//! - The library's encrypt/decrypt APIs never write plaintext secrets to
+//!   disk. The CLI's structured handoff *does* write to the secrets file by
+//!   design: values discovered by profile scans are appended so the second
+//!   (streaming) pass and future runs redact them everywhere. A plaintext
+//!   secrets file is updated in place with owner-only (0600) permissions; an
+//!   encrypted file is merged and re-encrypted, never downgraded to
+//!   plaintext. Opt out with `--no-structured-handoff`.
 //! - Nonce and salt are generated with OS CSPRNG (`rand`).
 
 use crate::category::Category;

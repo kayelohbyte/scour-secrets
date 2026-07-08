@@ -546,6 +546,12 @@ pub(crate) fn save_discovered_secrets(
         existing.iter().map(|e| e.pattern.as_str()).collect();
 
     new_entries.retain(|e| !existing_patterns.contains(e.pattern.as_str()));
+    // The store can hold the same value under several categories (e.g. a
+    // field rule and a scanner pattern both matched it). Keep one entry per
+    // pattern — duplicates would inflate the file on every run. Sort+dedup
+    // instead of a HashSet so no unzeroized copies of the values are made.
+    new_entries.sort_by(|a, b| a.pattern.cmp(&b.pattern).then(a.category.cmp(&b.category)));
+    new_entries.dedup_by(|a, b| a.pattern == b.pattern);
     let added = new_entries.len();
 
     if added == 0 {
@@ -668,6 +674,35 @@ mod tests {
         assert!(
             !path.exists(),
             "no file should be written when every value is too short"
+        );
+    }
+
+    #[test]
+    fn save_discovered_secrets_dedups_same_value_across_categories() {
+        // The same value can land in the store under two categories (e.g. an
+        // instance id matched by both a field rule and a scanner regex). Only
+        // one literal entry may be persisted, or the file grows duplicate
+        // patterns on every run.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.yaml");
+        let store = empty_store();
+        store
+            .get_or_insert(&scour_secrets::Category::AuthToken, "up7gpa36")
+            .unwrap();
+        store
+            .get_or_insert(
+                &scour_secrets::Category::Custom("instance_id".into()),
+                "up7gpa36",
+            )
+            .unwrap();
+
+        let n = save_discovered_secrets(&store, &path, None, false, None).unwrap();
+        assert_eq!(n, 1, "one entry per pattern regardless of category");
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            content.matches("up7gpa36").count(),
+            1,
+            "value must appear exactly once in the file"
         );
     }
 
