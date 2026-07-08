@@ -1,8 +1,8 @@
 # scour-secrets
 
 [![CI](https://github.com/kayelohbyte/scour-secrets/actions/workflows/ci.yml/badge.svg)](https://github.com/kayelohbyte/scour-secrets/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/scour-secrets.svg)](https://crates.io/crates/scour-secrets)
-[![docs.rs](https://docs.rs/scour-secrets/badge.svg)](https://docs.rs/scour-secrets)
+[![crates.io](https://img.shields.io/crates/v/scour-secrets)](https://crates.io/crates/scour-secrets)
+[![docs.rs](https://img.shields.io/docsrs/scour-secrets)](https://docs.rs/scour-secrets)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![MSRV](https://img.shields.io/badge/rust-1.86%2B-blue.svg)]()
 
