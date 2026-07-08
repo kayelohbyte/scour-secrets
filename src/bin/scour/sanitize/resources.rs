@@ -323,7 +323,13 @@ pub(super) fn load_run_resources(
     }
 
     if base_patterns.is_empty() && app_profiles.is_empty() {
-        warn!("no secrets file or --app provided; pass --secrets-file, --app, or --profile explicitly, or run without flags to auto-create the default secrets file");
+        if nothing_specified {
+            warn!("no secrets file or --app provided; pass --secrets-file, --app, or --profile explicitly, or run without flags to auto-create the default secrets file");
+        } else if cli.profile.is_none() && entropy_configs.is_empty() {
+            // -s / --app was given but yielded nothing the scanner can act on
+            // (e.g. a secrets file holding only allow entries).
+            warn!("the provided secrets file / app bundle produced no scan patterns, profiles, or entropy rules — nothing will be redacted");
+        }
     }
 
     let scanner = StreamScanner::new(
