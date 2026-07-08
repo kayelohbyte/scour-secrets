@@ -189,7 +189,7 @@ A profile file is a YAML or JSON array of profile entries. Each entry selects a 
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `processor` | Yes | — | Processor name: `"json"`, `"yaml"`, `"xml"`, `"csv"`, `"key_value"`, `"toml"`, `"env"`, `"ini"`, `"log"`, `"jsonl"`. |
+| `processor` | Yes | — | Processor name: `"json"`, `"yaml"`, `"xml"`, `"csv"`, `"key_value"`, `"toml"`, `"env"`, `"ini"`, `"log"`, `"jsonl"`, `"command_output"`. |
 | `extensions` | Yes | `[]` | File extensions this profile applies to (e.g. `[".json"]`). An empty list matches nothing. |
 | `include` | No | `[]` | If non-empty, only files whose name matches at least one glob are processed. |
 | `exclude` | No | `[]` | Files whose name matches any glob are excluded from structured processing. |
@@ -257,7 +257,7 @@ Each field rule specifies a key pattern to match and how to replace its value.
 | `"*password*"` | Any key containing `password` as a substring |
 | `"*"` | Every field |
 
-Patterns are matched against the full dot-separated key path (JSON/YAML), slash-separated path (XML), or literal key string (key-value files).
+Patterns are matched against the full dot-separated key path (JSON/YAML), slash-separated path (XML), literal key string (key-value files), or command string (command-output files).
 
 ### `min_length` — Avoiding false positives with broad patterns
 
@@ -275,7 +275,7 @@ fields:
 
 ### `sub_processor` — Nested structured content
 
-When a field value is itself a structured document (e.g. YAML embedded as a string inside a Ruby config file), use `sub_processor` to delegate it:
+When a field value is itself a structured document (e.g. YAML embedded as a string inside a Ruby config file, or a `printenv` block inside a command dump), use `sub_processor` to delegate it. Supported sub-processors: `yaml`, `json`, `toml`, `ini`, `env`, `log_line`.
 
 ```yaml
 - processor: key_value
@@ -478,6 +478,57 @@ password = __SANITIZED_a1b2__  ; NEVER commit this
 api_key = __SANITIZED_c3d4__
 token   = __SANITIZED_e5f6__
 ```
+
+### Command Output (`"command_output"`)
+
+Handles the `> command` + output-block shape that vendor support dumps use
+(Dataiku `diag.txt`, Elastic diagnostics, MongoDB `mdiag`, sosreport-style
+files). A line starting with the prompt prefix opens a block: the rest of that
+line is the *command string*, and the block runs until the next prompt line, a
+separator line (four or more dashes), or end of input. Prompt lines,
+separators, timestamps, and unmatched blocks are preserved byte-for-byte.
+
+**Pattern convention:** field patterns are glob-matched against the command
+string — `hostname*` matches `hostname --fqdn`.
+
+- A rule **with** `sub_processor` delegates the block content to that
+  processor with the rule's `sub_fields` — e.g. a `printenv` block to `env`.
+- A rule **without** `sub_processor` treats the trimmed block as a single
+  value and replaces it with the rule's category (fits single-line outputs
+  like `hostname --fqdn`); surrounding blank lines survive.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `prompt_prefix` | `"> "` | Line prefix that opens a command block. |
+
+```yaml
+- processor: command_output
+  extensions: [".txt"]
+  include: ["diag.txt"]
+  fields:
+    - pattern: "hostname*"
+      category: hostname
+    - pattern: "printenv"
+      sub_processor: env
+      sub_fields:
+        - pattern: "*PASSWORD*"
+          category: "custom:password"
+          min_length: 1
+```
+
+```
+> hostname --fqdn
+dss-prod-01.corp.example.com   →   ab12cd34ef56.corp.example.com
+
+> printenv
+DB_PASSWORD=hunter2            →   DB_PASSWORD=f3c9a1b8
+HOME=/home/dataiku                 HOME=/home/dataiku
+```
+
+Values discovered here are auto-seeded into the streaming scanner like any
+other profile discovery, so a hostname captured from `hostname --fqdn` is also
+scrubbed where it appears bare in sibling files (`uname -a` lines, logs,
+sysctl output).
 
 ---
 

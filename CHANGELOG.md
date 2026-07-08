@@ -83,6 +83,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`command_output` processor** for `> command` + output-block support dumps
+  (Dataiku `diag.txt`, Elastic diagnostics, `mdiag`, sosreport-style files).
+  Field rules glob-match the *command string* (`hostname*` matches
+  `hostname --fqdn`); a rule with `sub_processor` delegates the block content
+  (e.g. a `printenv` block to the `env` processor), a rule without one
+  replaces the trimmed block as a single value. Prompt lines, separators, and
+  unmatched blocks are preserved byte-for-byte. The `prompt_prefix` option
+  (default `"> "`) adapts it to other dump styles. The sub-processor dispatch
+  used by `key_value` heredocs is now shared in `processor::mod`.
+- **The dataiku app captures the machine hostname and environment** from
+  `diag.txt` (`hostname --fqdn` output; `printenv` delegated to the env
+  processor for proxy/password/secret/token/key variables), catches the live
+  `accessToken`/`identityToken` in `run/user-sessions.json`, and redacts
+  whole-line base64 blobs (`run/shared-secret.txt`). Discovered values are
+  seeded so bare occurrences in `uname` output, `sysctl.txt`, and logs are
+  scrubbed too.
+- **Entropy detection now runs on archive inner entries.** `kind: entropy`
+  secrets entries and `--entropy-threshold` previously did nothing for files
+  inside zip/tar archives (the pass lived in the CLI dispatch layer). The
+  detection core moved into the library (`entropy` module, re-exported at the
+  root) and `ArchiveProcessor` gained `with_entropy_configs`.
 - `tracing` warning when an unknown bare category string (e.g. a typo like
   `emial`) silently maps to a custom category; use the `custom:` prefix to
   silence it. Category parsing is now consolidated in one place
@@ -110,6 +131,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Seeded name-category literals now require word boundaries.** A discovered
+  login like `admin` was replaced as a raw substring, rewriting
+  `administrators` (silently defeating its own allowlist entry), JSON keys
+  like `adminProperties`, and path segments like `dssadmin`. Tokens and
+  passwords stay substring-matched.
+- **IPv4 replacements are always valid addresses** (each octet keeps its digit
+  count but is drawn from 0–255; no more `794.55.0.9`), and **URL replacements
+  keep the scheme** (`https://` no longer becomes hex).
+- **The structured-handoff write-back deduplicates within a batch** — the same
+  value discovered under two categories was written to the secrets file twice.
+- **`--app` bundle copies land in the documented config directory**
+  (`~/.config/scour-secrets/apps`, honoring `XDG_CONFIG_HOME`; previously
+  `~/.config/scour/apps`), and `show-config` now lists the directory, the
+  provisioned apps, and the write-back behavior. The auto-created default
+  secrets template is written owner-only (0600).
+- **The "no secrets file or --app provided" warning no longer fires when one
+  was given.** A provided config that yields no patterns, profiles, or entropy
+  rules gets its own accurate message instead.
 - **The structured-handoff write-back no longer persists trivially short
   discovered values.** A structured field that held a 1–3 character value
   (e.g. `v`, `id`) was written to the secrets file as a global `kind: literal`

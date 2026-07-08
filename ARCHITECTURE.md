@@ -82,7 +82,7 @@ The two-pass design ensures cross-file consistency: a password extracted from `c
 
 1. Detect format from extension (`.tar`, `.tar.gz`, `.zip`).
 2. `ArchiveProcessor` iterates entries; for each regular file:
-   - Try a structured processor match (JSON, YAML, TOML, JSONL, XML, CSV, key-value, INI, env, log) via `ProcessorRegistry::find_processor`.
+   - Try a structured processor match (JSON, YAML, TOML, JSONL, XML, CSV, key-value, INI, env, log, command-output) via `ProcessorRegistry::find_processor`.
    - If matched and within `MAX_STRUCTURED_ENTRY_SIZE`, redact field values **at their exact source byte spans** (`Processor::process_to_edits`), preserving comments/formatting, then run the format-preserving scanner over the result for cross-references. Processors without span editing fall back to re-serialization.
    - Otherwise fall back to `StreamScanner::scan_reader` for byte-level replacement.
 3. Rebuild the archive with sanitized content and preserved metadata.
@@ -217,7 +217,7 @@ giving library users access to identical output without duplicating the logic.
 | `strategy` | **Extensibility layer:** `Strategy` trait + `StrategyGenerator` adapter + 5 built-in strategies (`RandomString`, `FakeIp`, etc.). Public API for library users to implement custom replacement logic. |
 | `category` | `Category` enum. Drives domain separation in HMAC and replacement format selection. |
 | `secrets` | AES-256-GCM encrypted secrets file format. Argon2id key derivation. Zeroizes plaintext on drop. |
-| `processor::*` | Format-aware processors: JSON, YAML, TOML, JSONL, XML, CSV, key-value, INI, env, log-line. Each implements the `Processor` trait; the structured editors also implement `process_to_edits` for byte-exact, format-preserving span editing. |
+| `processor::*` | Format-aware processors: JSON, YAML, TOML, JSONL, XML, CSV, key-value, INI, env, log-line, command-output (`> cmd` support-dump blocks). Each implements the `Processor` trait; the structured editors also implement `process_to_edits` for byte-exact, format-preserving span editing. |
 | `processor::archive` | Tar / tar.gz / zip processing. Per-entry structured-or-scanner routing. |
 | `processor::registry` | `ProcessorRegistry` — maps processor names to `Arc<dyn Processor>`. |
 | `processor::profile` | `FileTypeProfile` + `FieldRule` — user-supplied rules for structured processing. |
