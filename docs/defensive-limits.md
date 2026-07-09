@@ -62,6 +62,8 @@ For 20–100 GB plain-text files, the streaming scanner maintains constant memor
 
 ## Defensive Limits
 
+Structured-processor limits are centralized in `src/processor/limits.rs`; scanner limits live in `src/scanner.rs`.
+
 | Limit | Default Value | Configurable | Notes |
 |-------|---------------|--------------|-------|
 | Max structured file size | 256 MiB | `--max-structured-size` | Applies to standalone JSON, YAML, XML, CSV files and archive entries routed to structured processors. Oversized inputs fall back to the streaming scanner. Real config files never approach this limit; the fallback is only relevant for large data dumps and log files. |
@@ -69,13 +71,13 @@ For 20–100 GB plain-text files, the streaming scanner maintains constant memor
 | Max mapping store entries | 10 000 000 | `--max-mappings` | Prevents unbounded heap growth. |
 | Regex automaton size | 1 MiB | Compile-time (`REGEX_SIZE_LIMIT`) | Per-pattern limit. |
 | Regex DFA cache size | 1 MiB | Compile-time (`REGEX_DFA_SIZE_LIMIT`) | Per-pattern limit. |
-| YAML input size | 64 MiB | Compile-time (`MAX_YAML_INPUT_SIZE`) | Pre-parse rejection. |
-| YAML node count | 10 000 000 | Compile-time (`MAX_YAML_NODE_COUNT`) | Post-expansion alias bomb defence. |
-| YAML recursion depth | 128 | Compile-time (`MAX_YAML_DEPTH`) | Stack overflow prevention. |
-| JSON input size | 256 MiB | Compile-time (`MAX_JSON_INPUT_SIZE`) | Pre-parse rejection. |
-| JSON recursion depth | 128 | Compile-time (`MAX_JSON_DEPTH`) | Stack overflow prevention. |
-| XML input size | 256 MiB | Compile-time (`MAX_XML_INPUT_SIZE`) | Pre-parse rejection. |
-| XML element depth | 256 | Compile-time (`MAX_XML_DEPTH`) | Stack overflow prevention. |
-| CSV input size | 256 MiB | Compile-time (`MAX_CSV_INPUT_SIZE`) | Pre-parse rejection. |
-| Key-value input size | 256 MiB | Compile-time (`MAX_KV_INPUT_SIZE`) | Pre-parse rejection. |
+| YAML input size | 64 MiB | Compile-time (`YAML_INPUT_SIZE`) | Pre-parse rejection. Smaller than the shared default because alias/anchor expansion can balloon a small file. |
+| YAML node count | 10 000 000 | Compile-time (`YAML_NODE_COUNT`) | Post-expansion alias bomb defence. |
+| YAML recursion depth | 128 | Compile-time (`DEFAULT_DEPTH`) | Stack overflow prevention. Shared by the JSON, YAML, and TOML tree-walking processors. |
+| JSON input size | 256 MiB | Compile-time (`DEFAULT_INPUT_SIZE`) | Pre-parse rejection. Shared by the JSON, XML, CSV, and key-value processors. |
+| JSON recursion depth | 128 | Compile-time (`DEFAULT_DEPTH`) | Stack overflow prevention (shared, see above). |
+| XML input size | 256 MiB | Compile-time (`DEFAULT_INPUT_SIZE`) | Pre-parse rejection (shared, see above). |
+| XML element depth | 256 | Compile-time (`XML_DEPTH`) | Stack overflow prevention. Higher than the shared depth default because deeply nested XML is common and the processor is iterative. |
+| CSV input size | 256 MiB | Compile-time (`DEFAULT_INPUT_SIZE`) | Pre-parse rejection (shared, see above). |
+| Key-value input size | 256 MiB | Compile-time (`DEFAULT_INPUT_SIZE`) | Pre-parse rejection (shared, see above). |
 | Max archive nesting depth | 5 | `--max-archive-depth` (max 10) | Prevents archive bombs and unbounded recursion. Each nesting level may buffer up to 256 MiB. |

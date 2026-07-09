@@ -55,7 +55,31 @@ For **VS Code**: there is no built-in path deny mechanism. `.copilotignore` prev
 
 For **ChatGPT and Gemini**: no ambient filesystem access — control what you explicitly upload.
 
-Two controls work against **every** agent regardless of its built-in deny mechanism, because they are enforced by the OS rather than the tool: file-system permissions with a dedicated service user (next section), and running the agent inside a container with the daemon on the host ([Containerized Agent, Host-Side Daemon](#containerized-agent-host-side-daemon-mount-namespace-isolation)).
+Two controls work against **every** agent regardless of its built-in deny mechanism, because they are enforced by the OS rather than the tool: file-system permissions with a dedicated service user (next section), and running the agent inside a container with the daemon on the host ([Containerized Agent, Host-Side Daemon](#containerized-agent-host-side-daemon-mount-namespace-isolation)). A third control is enforced by the MCP server itself and limits what the *daemon* will touch, whatever the agent asks for: the [server-side path guards](#server-side-path-guards-files-denylist) below.
+
+### Server-Side Path Guards (`files` Denylist)
+
+Everything above restricts what the **agent** can read. The MCP server additionally restricts what **it** will process — a prompt-injected or misbehaving agent that asks the `sanitize` or `scan` tool for a protected path gets an error instead of sanitized output.
+
+Two guards are always on:
+
+- **The secrets store is off-limits.** When `SCOUR_SECRETS_SECRETS_DIR` is set, any `files` path that resolves inside it is rejected. Agents can *use* namespaces; they cannot request a (sanitized or otherwise) copy of the pattern files that define them.
+- **`.password` files are never processed**, anywhere on disk.
+
+The third guard is operator-configured. Set `SCOUR_SECRETS_MCP_FILES_DENYLIST` to a comma-separated list of glob patterns, and any `files` path matching one of them is rejected:
+
+```bash
+SCOUR_SECRETS_MCP_FILES_DENYLIST="secrets/**,*.key,*.pem,**/id_rsa*"
+```
+
+Matching semantics:
+
+- Globs support `*`, `**` (crosses `/`), and extended patterns (`{a,b}`, `?`).
+- A pattern without `/` (like `*.pem`) matches the **basename**, wherever the file lives.
+- A pattern with `/` (like `secrets/**`) matches against every trailing path suffix, so it applies to `/home/user/project/secrets/db.yaml` without needing the absolute prefix spelled out.
+- All three guards test the **canonical, symlink-resolved** path as well as the path as given — a symlink from an allowed directory into a protected one is rejected.
+
+Why use this when sanitization is the whole point? Because sanitized is not the same as harmless: pattern gaps happen, and some files (private keys, keystores, password stores) have no legitimate reason to flow through the pipeline at all. The denylist is the daemon's own back-stop, and it composes with everything above — agent-side deny rules govern direct reads, the service user and container boundary govern OS access, and the denylist governs what the daemon will accept even from a fully compromised agent context. In the [persistent daemon](#running-as-a-persistent-daemon) setup, set it in the service's environment file alongside the other variables.
 
 ### File System Permissions (All Tools)
 
@@ -714,6 +738,7 @@ require("avante").setup({
 | `SCOUR_SECRETS_MCP_TIMEOUT_MS` | `60000` (60 s) | Subprocess timeout — kills the CLI and returns an error if exceeded. |
 | `SCOUR_SECRETS_MCP_THREADS` | _(unset = CLI default = logical CPUs)_ | Worker thread cap for every invocation — useful on shared hosts. |
 | `SCOUR_SECRETS_MCP_MAX_ARCHIVE_DEPTH` | `5` | Default max archive nesting depth (matches CLI default). |
+| `SCOUR_SECRETS_MCP_FILES_DENYLIST` | _(unset)_ | Comma-separated glob patterns that `files` paths must never match (e.g. `secrets/**,*.key,*.pem`). Checked against the symlink-resolved path; patterns without `/` also match the basename. See [Server-Side Path Guards](#server-side-path-guards-files-denylist). |
 | `SCOUR_SECRETS_SECRETS_DIR` | _(unset)_ | Root directory for per-namespace secrets. Each subdirectory is a namespace and may contain `secrets.yaml[.enc]`, `profile.yaml`, `settings.yaml` (behavior defaults), and an optional `.password` file (`0600`/`0400` permissions enforced). |
 
 ---

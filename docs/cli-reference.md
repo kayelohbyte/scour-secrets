@@ -474,6 +474,28 @@ Created by `scour-secrets init-hook`. Provides persistent defaults for CLI flags
 | `log_format` | string | `"human"` | Log output format: `"human"` or `"json"` for SIEM ingestion. Equivalent to `--log-format`. |
 | `log_level` | string | `"warn"` | Log verbosity: `"off"`, `"error"`, `"warn"`, `"info"`, `"debug"`, or `"trace"`. Overridden by the `SCOUR_SECRETS_LOG` env var. Equivalent to `--log-level`. |
 | `no_progress` | bool | `false` | Disable progress output. Equivalent to `--no-progress`. |
+| `secrets_file` | string | _(none)_ | Secrets file to load on every run. Equivalent to `-s`/`--secrets-file`. |
+| `encrypted_secrets` | bool | `false` | Treat `secrets_file` as AES-256-GCM encrypted. Equivalent to `--encrypted-secrets`. |
+| `profile` | string | _(none)_ | File-type profile to load on every run. Equivalent to `--profile`. |
+| `exclude_path` | list of strings | `[]` | Glob patterns excluded from directory walks. Equivalent to `--exclude-path`. |
+| `include_path` | list of strings | `[]` | Glob patterns that restrict directory walks. Equivalent to `--include-path`. |
+| `force_text` | bool | `false` | Bypass structured processors, streaming scanner only. Equivalent to `--force-text`. |
+| `include_binary` | bool | `false` | Process binary-looking entries instead of skipping. Equivalent to `--include-binary`. |
+| `hidden` | bool | `false` | Walk hidden files and directories. Equivalent to `--hidden`. |
+| `extract_context` | bool | `false` | Capture error/warning context in the report. Equivalent to `--extract-context`. |
+| `context_lines` | integer | `10` | Context lines around each keyword match. Equivalent to `--context-lines`. |
+| `context_keywords` | list of strings | `[]` | Extra context keywords, merged with the built-ins. Equivalent to `--context-keywords`. |
+| `context_keywords_replace` | bool | `false` | Replace the built-in keyword list instead of merging. Equivalent to `--context-keywords-replace`. |
+| `context_case_sensitive` | bool | `false` | Case-sensitive keyword matching. Equivalent to `--context-case-sensitive`. |
+| `max_context_matches` | integer | `50` | Keyword-match cap per file for context extraction. Equivalent to `--max-context-matches`. |
+| `max_match_locations` | integer | `500` | Match locations recorded per file in the report; `0` disables. Equivalent to `--max-match-locations`. |
+| `entropy_threshold` | float | _(off)_ | Shannon entropy detection threshold in bits/char. Equivalent to `--entropy-threshold`. |
+| `chunk_size` | integer | `1048576` | Streaming scanner chunk size in bytes. Equivalent to `--chunk-size`. |
+| `max_mappings` | integer | `10000000` | Mapping store entry cap. Equivalent to `--max-mappings`. |
+| `max_structured_size` | integer | `268435456` | Structured processor size cap in bytes. Equivalent to `--max-structured-size`. |
+| `max_archive_depth` | integer | `5` | Archive nesting depth limit (max `10`). Equivalent to `--max-archive-depth`. |
+| `progress_interval_ms` | integer | `200` | Progress update interval. Equivalent to `--progress-interval-ms`. |
+| `quiet` | bool | `false` | Suppress the redaction summary and decorative stderr output. Equivalent to `--quiet`. |
 
 ```yaml
 # ~/.config/scour-secrets/settings.yaml
@@ -516,6 +538,8 @@ Created by `scour-secrets init-hook`. Provides persistent defaults for CLI flags
 # Disable progress output (--no-progress).
 # no_progress: false
 ```
+
+The example shows the most commonly used fields; the table above is the complete list of supported keys.
 
 Set `SCOUR_SECRETS_NO_SETTINGS=1` to skip loading the settings file entirely — useful in CI where you want fully explicit, reproducible behaviour.
 
@@ -690,6 +714,7 @@ When neither `-s`/`--secrets-file` nor `--app` is provided, the built-in pattern
 | `-n, --dry-run` | `-n` | Scan and report matches without writing output. |
 | `--fail-on-match` | | Exit with code 2 if any matches are found. |
 | `-r, --report [PATH]` | `-r` | Write a JSON report to `PATH` (or stderr if no path given). Use `--report -` to write the report to stdout. The report includes: `metadata` (tool version, flags), `summary` (totals, `duration_ms`, `pattern_counts`), and a `files` array with per-file `matches`, `replacements`, byte counts, `pattern_counts`, and `method`. `pattern_counts` maps each pattern `label` to its scanner hit count; it is empty (`{}`) when all matches came from the structured-processor pass or when patterns have no label. |
+| `--max-match-locations <N>` | | Maximum number of match locations recorded per file in the `--report` output (default: `500`; `0` disables location recording). Each location holds the 1-based line number, 0-based byte offset, and pattern label of a scanner match — positions refer to the input file, never the matched value itself. When the cap is hit, `truncated: true` is set on the file's `match_locations` object. Lower it to keep reports small on very noisy files. |
 | `--strict` | | Abort on the first error instead of skipping and continuing. |
 | `-d, --deterministic` | `-d` | Use HMAC-deterministic replacements (reproducible across runs with the same password **and** seed salt). Requires a password via `SCOUR_SECRETS_PASSWORD`, `--password-file`, or `-p`. The seed salt is unique per install by default (generated at `<config_dir>/seed-salt`, mode `0600`); see `--seed-salt-file`. |
 | `--seed-salt-file <PATH>` | | File whose contents (any length; SHA-256-normalized) are used as the deterministic seed salt. Overrides the per-install salt and the `SCOUR_SECRETS_SEED_SALT` env var. Share this file (or the env var) across machines to reproduce identical deterministic output for a team. Note: 0.16.0 switched the seed KDF to Argon2id, so output is not comparable to pre-0.16.0 runs even with the same salt. |
@@ -700,6 +725,7 @@ When neither `-s`/`--secrets-file` nor `--app` is provided, the built-in pattern
 | `--max-archive-depth <N>` | | Maximum nesting depth for recursive archive processing (default: `5`, max: `10`). Each nesting level may buffer up to 256 MiB. Advanced flag — hidden from `--help` but works at runtime. |
 | `--profile <FILE>` | | Path to a file-type profile (JSON or YAML). Enables structured field-level sanitization for matched files. **Requires `--secrets-file`** — without one, discovered field values have nowhere to go and Phase 2 runs blind, producing incomplete sanitization. The secrets file may be empty on the first run; discovered literals are appended to it automatically (see `--no-structured-handoff`) so subsequent runs catch those values everywhere. See [Structured Processing](structured-processing.md). |
 | `--app <APPS>` | | Load built-in secrets patterns and structured field profiles for one or more applications. Comma-separated app names (e.g. `--app gitlab` or `--app gitlab,nginx`). Additive with `--secrets-file` and `--profile`. Run `scour-secrets apps` to list available app names. |
+| `--no-baseline` | | Skip the built-in baseline detectors (emails, IPs, UUIDs, home paths, common token formats, and their companion allow-patterns). The baseline loads for plain runs (no `-s`, `--app`, or `--profile`) and is layered under **every** `--app` run as a floor beneath the bundle's patterns; an explicit `-s` without `--app` already runs without it. Pass this for app-only precision when the bundle's patterns alone should decide what is replaced. |
 | `--allow <PATTERN>` | | Allow a specific value through unchanged (repeatable). Matched values are not replaced and not recorded in the mapping store — they will pass through in every file processed in the same run. Supports exact strings and `*` glob patterns. Matching is **case-insensitive** by default (patterns and values are lowercased before comparison). Examples: `--allow localhost`, `--allow "*.internal"`, `--allow "192.168.1.*"`. Allowlist entries can also be placed in the secrets file as `kind: allow` entries. |
 | `--quick <PATTERN>` | | Add one-off literal or regex patterns for the current run without touching any secrets file. Comma-separated; prefix individual values with `regex:` to enable regex matching (bare values are treated as literals). Repeatable — `--quick a --quick b` accumulates. Example: `--quick "tok-abc123,regex:sk-[A-Za-z0-9]{40}"`. Replacements use the `auth_token` shape regardless of value type. |
 | `--only <PATTERN>` | | Keep only archive entries whose full path matches `PATTERN`. Must follow the archive path it applies to. Multiple `--only` flags accumulate. Combined with `--exclude`: `--only` narrows first, then `--exclude` removes. Only affects archive inputs; ignored for plain files. |
