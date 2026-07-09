@@ -120,12 +120,11 @@ impl Processor for CommandOutputProcessor {
         profile: &FileTypeProfile,
         store: &MappingStore,
     ) -> Result<Vec<u8>> {
-        let text = std::str::from_utf8(content).map_err(|e| {
-            crate::error::SanitizeError::ParseError {
+        let text =
+            std::str::from_utf8(content).map_err(|e| crate::error::SanitizeError::ParseError {
                 format: "command_output".into(),
                 message: format!("requires UTF-8 input: {e}"),
-            }
-        })?;
+            })?;
         let prompt = profile
             .options
             .get("prompt_prefix")
@@ -238,8 +237,9 @@ mod tests {
     #[test]
     fn unmatched_input_is_byte_identical() {
         let store = store();
-        let profile = profile(vec![FieldRule::new("nomatch*")
-            .with_category(Category::Hostname)]);
+        let profile = profile(vec![
+            FieldRule::new("nomatch*").with_category(Category::Hostname)
+        ]);
         let out = CommandOutputProcessor
             .process(DUMP.as_bytes(), &profile, &store)
             .unwrap();
@@ -260,18 +260,25 @@ mod tests {
             .unwrap();
         let out = String::from_utf8(out).unwrap();
 
-        assert!(!out.contains("hunter2secret"), "env credential replaced: {out}");
-        assert!(out.contains("HOME=/home/dataiku\n"), "other vars preserved: {out}");
-        assert!(out.contains("> id\nuid=1000\n"), "next block preserved: {out}");
+        assert!(
+            !out.contains("hunter2secret"),
+            "env credential replaced: {out}"
+        );
+        assert!(
+            out.contains("HOME=/home/dataiku\n"),
+            "other vars preserved: {out}"
+        );
+        assert!(
+            out.contains("> id\nuid=1000\n"),
+            "next block preserved: {out}"
+        );
     }
 
     #[test]
     fn custom_prompt_prefix_option() {
         let store = store();
         let mut profile = profile(vec![hostname_rule()]);
-        profile
-            .options
-            .insert("prompt_prefix".into(), "$ ".into());
+        profile.options.insert("prompt_prefix".into(), "$ ".into());
         let dump = "$ hostname\nweb-42.internal\n";
         assert!(CommandOutputProcessor.can_handle(dump.as_bytes(), &profile));
         let out = CommandOutputProcessor

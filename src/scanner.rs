@@ -1639,7 +1639,10 @@ mod tests {
         let out = String::from_utf8(out).unwrap();
 
         assert_eq!(stats.matches_found, 2, "standalone occurrences only: {out}");
-        assert!(!out.contains("user=admin"), "standalone value replaced: {out}");
+        assert!(
+            !out.contains("user=admin"),
+            "standalone value replaced: {out}"
+        );
         assert!(
             out.contains("administrators") && out.contains("adminProperties"),
             "larger words must survive: {out}"
@@ -1652,8 +1655,7 @@ mod tests {
     fn token_literal_still_matches_inside_larger_strings() {
         // Word boundaries are a name-category rule only — a real secret
         // embedded in a URL or a longer token must still be caught.
-        let pat =
-            ScanPattern::from_literal("sekrit12345", Category::AuthToken, "token").unwrap();
+        let pat = ScanPattern::from_literal("sekrit12345", Category::AuthToken, "token").unwrap();
         let scanner = test_scanner(vec![pat]);
         let (out, stats) = scanner
             .scan_bytes(b"https://api.example.com/?key=Xsekrit12345Y")

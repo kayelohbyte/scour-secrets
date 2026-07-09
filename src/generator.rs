@@ -957,10 +957,7 @@ mod tests {
         assert_eq!(parts.len(), 4);
         assert_eq!(out.len(), orig.len(), "ipv4 must preserve length");
         for p in parts {
-            assert!(
-                p.parse::<u8>().is_ok(),
-                "octet {p} out of range in {out}"
-            );
+            assert!(p.parse::<u8>().is_ok(), "octet {p} out of range in {out}");
         }
     }
 
