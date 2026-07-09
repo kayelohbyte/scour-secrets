@@ -39,8 +39,8 @@
 
 #[cfg(feature = "archive")]
 pub mod archive;
-#[cfg(feature = "structured")]
 pub mod command_output;
+#[cfg(feature = "structured")]
 pub mod csv_proc;
 pub mod env_proc;
 pub mod ini_proc;
