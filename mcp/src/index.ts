@@ -190,6 +190,16 @@ async function runSanitize(
   }
 }
 
+/** Move a file, falling back to copy+remove when rename crosses filesystems. */
+async function moveFile(from: string, to: string): Promise<void> {
+  try {
+    await Deno.rename(from, to);
+  } catch {
+    await Deno.copyFile(from, to);
+    await Deno.remove(from);
+  }
+}
+
 /** Write `data` to a temp file with mode 0o600 inside `dir`. */
 async function writeTempFile(
   dir: string,
@@ -637,6 +647,7 @@ async function toolSanitize(params: {
   report?: boolean;
   report_format?: "json" | "sarif" | "html";
   strict?: boolean;
+  no_structured_handoff?: boolean;
 }): Promise<SanitizeResult> {
   const hasContent = params.content !== undefined;
   const hasFiles = params.files !== undefined && params.files.length > 0;
@@ -695,8 +706,20 @@ async function toolSanitize(params: {
   const tmpDir = await Deno.makeTempDir({ prefix: TEMP_PREFIX });
   try {
     const env: Record<string, string> = {};
-    // --no-structured-handoff: suppress writing scour-secrets-discovered.yaml to cwd.
-    const commonArgs: string[] = [NO_STRUCTURED_HANDOFF_ARG];
+    // Structured handoff (write-back of discovered literals into the secrets
+    // file or materialized app copy) follows CLI defaults. It is suppressed
+    // when the caller asks via `no_structured_handoff`, and automatically when
+    // a profile is used without anywhere to write back into — the CLI
+    // hard-errors on that combination, and a profile pass without persistence
+    // is the useful semantics for a one-shot tool call.
+    const hasWriteBackTarget = Boolean(
+      params.secrets_file || params.namespace ||
+        params.app?.length === 1 || params.patterns?.length,
+    );
+    const commonArgs: string[] = [];
+    if (params.no_structured_handoff || (params.profile && !hasWriteBackTarget)) {
+      commonArgs.push(NO_STRUCTURED_HANDOFF_ARG);
+    }
 
     if (params.format) commonArgs.push("--format", params.format);
 
@@ -854,6 +877,15 @@ async function toolSanitize(params: {
       if (filter?.exclude?.length) inputArgs.push("--exclude", ...filter.exclude);
     }
 
+    // llm_template file-mode writes sanitized files to disk and returns a
+    // prompt that references them by path. Without a caller-supplied target
+    // those paths would point into the server's temp dir, which is deleted
+    // when the call returns — so default to the first input's directory,
+    // mirroring the CLI writing next to its inputs.
+    if (params.llm_template && hasFiles && !params.output_file && !params.output_dir) {
+      params.output_dir = dirname(resolve(params.files![0]));
+    }
+
     // ── write-to-disk mode (output_file / output_dir) ───────────────────────
     // Output goes directly to the caller's path; content is never returned.
     const diskOutputTarget = params.output_file ?? params.output_dir;
@@ -909,10 +941,26 @@ async function toolSanitize(params: {
     for (const [inputPath, outputName] of inputToOutput) {
       const outPath = join(outputDir, outputName);
       if (isArchivePath(inputPath)) {
-        // Archives are returned as binary indicators — an LLM can't use a raw
-        // archive blob. Caller can re-process individual entries via files[].
-        const stat = await Deno.stat(outPath);
-        fileResults.push({ input: inputPath, file: outputName, binary: true, size: stat.size });
+        // An LLM can't use a raw archive blob inline, and the temp dir is
+        // deleted when this call returns — persist the sanitized archive next
+        // to its input (the CLI's default output location) and report the path.
+        if (!(await Deno.stat(outPath).catch(() => null))) {
+          // e.g. a .bz2/.xz/.zst the CLI skips as binary without include_binary.
+          throw new Error(
+            `no sanitized output was produced for '${inputPath}' — the CLI skipped it: ${safeStderr(result) || "(no reason reported)"}`,
+          );
+        }
+        const finalPath = join(dirname(resolve(inputPath)), outputName);
+        await moveFile(outPath, finalPath);
+        const stat = await Deno.stat(finalPath);
+        fileResults.push({
+          input: inputPath,
+          file: outputName,
+          output: finalPath,
+          written: true,
+          binary: true,
+          size: stat.size,
+        });
       } else {
         fileResults.push({ input: inputPath, file: outputName, content: await Deno.readTextFile(outPath) });
       }
@@ -1403,7 +1451,7 @@ const SanitizeSchema = {
     "Inline text content to sanitize. Only use this when you already have the text in your context and there is no file path available. If you have a file path, use `files` instead — it is safer, handles binary and archive formats correctly, and avoids loading raw bytes into the LLM context. Mutually exclusive with `files`. Either this or `files` must be provided.",
   ),
   files: z.array(z.string()).optional().describe(
-    "PREFERRED: one or more file paths to sanitize (absolute or relative). Use this whenever a file path is available instead of reading the file and passing its content inline. Accepts plain files, archives (.zip, .tar.gz, etc.), or a mix. Archives are extracted and sanitized recursively. Use `archive_filters` to restrict which entries inside an archive are processed. Mutually exclusive with `content`. Raw file content never enters the LLM context — the sanitize engine processes files directly.",
+    "PREFERRED: one or more file paths to sanitize (absolute or relative). Use this whenever a file path is available instead of reading the file and passing its content inline. Accepts plain files, archives (.zip, .tar.gz, etc.), or a mix. Archives are extracted and sanitized recursively; the sanitized archive is written next to its input (or into `output_dir` when given) and its path is reported in the result. Use `archive_filters` to restrict which entries inside an archive are processed. Mutually exclusive with `content`. Raw file content never enters the LLM context — the sanitize engine processes files directly.",
   ),
   output_file: z.string().optional().describe(
     "Write the sanitized output directly to this file path. The sanitized content is NOT returned in the response — only the output path and byte size are reported. Mirrors `scour-secrets <input> -o <file>`. Valid for a single `files` entry or `content` input. Mutually exclusive with `output_dir`.",
@@ -1490,7 +1538,7 @@ const SanitizeSchema = {
     .string()
     .optional()
     .describe(
-      "Format the sanitized output as an LLM-ready prompt and return it instead of raw sanitized bytes. Built-in templates: 'troubleshoot' (incident triage), 'review-config' (configuration audit), 'review-security' (security posture review). Pass a filesystem path for a custom template file. Combine with extract_context to include notable log events in the prompt.",
+      "Format the sanitized output as an LLM-ready prompt and return it instead of raw sanitized bytes. Built-in templates: 'troubleshoot' (incident triage), 'review-config' (configuration audit), 'review-security' (security posture review). Pass a filesystem path for a custom template file. Combine with extract_context to include notable log events in the prompt. With `files` input the prompt references sanitized files on disk; they are written to `output_dir` when given, otherwise next to the first input file.",
     ),
   force_text: z
     .boolean()
@@ -1556,6 +1604,12 @@ const SanitizeSchema = {
     .optional()
     .describe(
       "Abort on the first processing error instead of skipping and continuing. Useful in CI pipelines where a partial result is worse than a failure.",
+    ),
+  no_structured_handoff: z
+    .boolean()
+    .optional()
+    .describe(
+      "Disable structured handoff: literals discovered by the structured/profile pass are NOT written back into the secrets file (or materialized app copy) for future runs. By default handoff follows CLI behavior — discoveries persist into the write-back target when one exists (secrets_file, namespace, or a single app). Set true for a read-only call that must not mutate any pattern file.",
     ),
 };
 

@@ -5,7 +5,7 @@
 
 /**
  * Replicates the CLI's output naming logic:
- *   - Archives (.zip, .tar, .tar.gz, .tgz): default_archive_output →
+ *   - Archives (.zip, .tar, .tar.gz, .tgz, standalone .gz): default_archive_output →
  *     "{stem}.sanitized.{full-ext}" where stem has any trailing ".tar" stripped.
  *     .tgz is normalised to .tar.gz in the output, matching the CLI.
  *   - Plain files: default_plain_output →
@@ -25,6 +25,10 @@ export function predictOutputName(inputPath: string): string {
   }
   if (lower.endsWith(".zip")) {
     return `${base.slice(0, base.length - ".zip".length)}.sanitized.zip`;
+  }
+  if (lower.endsWith(".gz") && base.length > ".gz".length) {
+    // Standalone single-file gzip: "config.json.gz" → "config.json.sanitized.gz".
+    return `${base.slice(0, base.length - ".gz".length)}.sanitized.gz`;
   }
   const dot = base.lastIndexOf(".");
   if (dot <= 0) return `${base}-sanitized`;

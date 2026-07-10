@@ -27,8 +27,18 @@ const SCOUR_SECRETS_BIN = resolve(
 // JSON-RPC session — stdio client lives in ./mcp_client.ts (shared with probe.ts)
 // ---------------------------------------------------------------------------
 
+// Every server this suite spawns gets a throwaway apps dir so app
+// materialization and structured-handoff write-back never touch the
+// developer's real ~/.config/scour-secrets/apps.
+const APPS_DIR = await Deno.makeTempDir({ prefix: "scour-mcp-test-apps-" });
+
 function startSession(extraEnv: Record<string, string> = {}, cwd?: string): Promise<McpSession> {
-  return startStdioSession({ serverPath: MCP_SCRIPT, sanitizeBin: SCOUR_SECRETS_BIN, env: extraEnv, cwd });
+  return startStdioSession({
+    serverPath: MCP_SCRIPT,
+    sanitizeBin: SCOUR_SECRETS_BIN,
+    env: { SCOUR_SECRETS_APPS_DIR: APPS_DIR, ...extraEnv },
+    cwd,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -50,7 +60,13 @@ async function startHttpDaemon(port: number, token: string): Promise<Deno.ChildP
       MCP_SCRIPT, "--http", String(port),
     ],
     stdin: "null", stdout: "null", stderr: "null",
-    env: { ...Deno.env.toObject(), SCOUR_SECRETS_BIN, SCOUR_SECRETS_LOG: "error", SCOUR_SECRETS_MCP_HTTP_TOKEN: token },
+    env: {
+      ...Deno.env.toObject(),
+      SCOUR_SECRETS_BIN,
+      SCOUR_SECRETS_LOG: "error",
+      SCOUR_SECRETS_MCP_HTTP_TOKEN: token,
+      SCOUR_SECRETS_APPS_DIR: APPS_DIR,
+    },
   }).spawn();
 
   const deadline = Date.now() + 5_000;
@@ -221,6 +237,8 @@ function test(group: string, name: string, fn: Fn) {
   eq(predictOutputName("archive.TAR"),           "archive.sanitized.tar",     ".TAR (case insensitive)");
   eq(predictOutputName("archive.zip"),           "archive.sanitized.zip",     ".zip");
   eq(predictOutputName("archive.ZIP"),           "archive.sanitized.zip",     ".ZIP (case insensitive)");
+  eq(predictOutputName("config.json.gz"),        "config.json.sanitized.gz",  "standalone .gz keeps inner extension");
+  eq(predictOutputName("app.log.1.GZ"),          "app.log.1.sanitized.gz",    ".GZ (case insensitive)");
 
   // Compound stem stripping: "data.tar.gz" → stem "data", not "data.tar".
   eq(predictOutputName("data.tar.gz"),           "data.sanitized.tar.gz",     "compound stem stripped correctly");
@@ -1675,6 +1693,157 @@ test("output_file", "output_dir writes multiple files to directory", async (s) =
   }
 });
 
+test("output_file", "archive without output target persists next to input", async (s) => {
+  const dir = await Deno.makeTempDir({ prefix: "scour-arch-" });
+  try {
+    await Deno.writeTextFile(join(dir, "log.txt"), "token: hunter2-in-archive\n");
+    const tar = await new Deno.Command("tar", {
+      args: ["czf", "bundle.tar.gz", "log.txt"],
+      cwd: dir,
+    }).output();
+    ok(tar.code === 0, "tar fixture creation failed");
+    const r = toolText(await s.send("tools/call", {
+      name: "sanitize",
+      arguments: {
+        files: [join(dir, "bundle.tar.gz")],
+        patterns: [{ name: "pw", pattern: "hunter2-in-archive", category: "auth_token", kind: "literal" }],
+      },
+    }));
+    const result = JSON.parse(r).results[0];
+    ok(result.binary === true && result.written === true, "archive result must be binary + written");
+    ok(typeof result.output === "string" && result.output.startsWith(dir),
+      `sanitized archive must land next to its input, got: ${result.output}`);
+    const stat = await Deno.stat(result.output);
+    ok(stat.size > 0, "sanitized archive must exist on disk after the call returns");
+  } finally { await Deno.remove(dir, { recursive: true }).catch(() => {}); }
+});
+
+test("output_file", "standalone .gz is sanitized under its inner name and persisted", async (s) => {
+  const dir = await Deno.makeTempDir({ prefix: "scour-gz-" });
+  try {
+    const raw = new TextEncoder().encode('{"password":"hunter2-in-gzip","note":"keep"}');
+    const gz = new Response(
+      new Blob([raw]).stream().pipeThrough(new CompressionStream("gzip")),
+    );
+    await Deno.writeFile(join(dir, "config.json.gz"), new Uint8Array(await gz.arrayBuffer()));
+    const r = toolText(await s.send("tools/call", {
+      name: "sanitize",
+      arguments: {
+        files: [join(dir, "config.json.gz")],
+        patterns: [{ name: "pw", pattern: "hunter2-in-gzip", category: "auth_token", kind: "literal" }],
+      },
+    }));
+    const result = JSON.parse(r).results[0];
+    ok(result.file === "config.json.sanitized.gz", `inner-extension naming expected, got: ${result.file}`);
+    ok(result.written === true && typeof result.output === "string", "gz result must be persisted");
+    // The output must be valid gzip whose decompressed content is sanitized JSON.
+    const compressed = await Deno.readFile(result.output);
+    const decompressed = await new Response(
+      new Blob([compressed]).stream().pipeThrough(new DecompressionStream("gzip")),
+    ).text();
+    ok(!decompressed.includes("hunter2-in-gzip"), `secret must be gone: ${decompressed}`);
+    ok(decompressed.includes('"note"'), `structure must be preserved: ${decompressed}`);
+  } finally { await Deno.remove(dir, { recursive: true }).catch(() => {}); }
+});
+
+test("output_file", "llm_template files-mode defaults output next to input", async (s) => {
+  const dir = await Deno.makeTempDir({ prefix: "scour-llm-" });
+  try {
+    await Deno.writeTextFile(join(dir, "app.log"), "error: token hunter2-in-log rejected\n");
+    const r = toolText(await s.send("tools/call", {
+      name: "sanitize",
+      arguments: {
+        files: [join(dir, "app.log")],
+        llm_template: "troubleshoot",
+        patterns: [{ name: "pw", pattern: "hunter2-in-log", category: "auth_token", kind: "literal" }],
+      },
+    }));
+    // The prompt references sanitized files by path; without a caller-supplied
+    // output target they must survive the call in the input's directory.
+    has(r, "app-sanitized.log");
+    const disk = await Deno.readTextFile(join(dir, "app-sanitized.log"));
+    ok(!disk.includes("hunter2-in-log"), "referenced sanitized file must exist and be sanitized");
+  } finally { await Deno.remove(dir, { recursive: true }).catch(() => {}); }
+});
+
+// ===========================================================================
+// structured handoff (write-back of discovered literals)
+// ===========================================================================
+
+const HANDOFF_PROFILE = `- processor: json
+  extensions: [".json"]
+  fields:
+    - pattern: "password"
+      category: custom:password
+      label: test_password
+`;
+
+/** Workspace with a structured input, a profile, and an empty secrets file.
+ * The session's cwd is the workspace so relative secrets_file/profile resolve there. */
+async function handoffWorkspace(): Promise<{ dir: string; session: McpSession }> {
+  const dir = await Deno.makeTempDir({ prefix: "scour-handoff-" });
+  await Deno.writeTextFile(join(dir, "config.json"), '{"password":"hunter2-discovered-literal"}');
+  await Deno.writeTextFile(join(dir, "profile.yaml"), HANDOFF_PROFILE);
+  await Deno.writeTextFile(join(dir, "secrets.yaml"), "");
+  const session = await startSession({}, dir);
+  return { dir, session };
+}
+
+test("structured handoff", "discovered literals persist to secrets_file by default", async () => {
+  const { dir, session } = await handoffWorkspace();
+  try {
+    const r = await session.send("tools/call", {
+      name: "sanitize",
+      arguments: { files: [join(dir, "config.json")], secrets_file: "secrets.yaml", profile: "profile.yaml" },
+    });
+    ok(!toolIsError(r), `call failed: ${toolText(r)}`);
+    const secrets = await Deno.readTextFile(join(dir, "secrets.yaml"));
+    has(secrets, "hunter2-discovered-literal");
+  } finally {
+    await session.close();
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+test("structured handoff", "no_structured_handoff:true suppresses write-back", async () => {
+  const { dir, session } = await handoffWorkspace();
+  try {
+    const r = await session.send("tools/call", {
+      name: "sanitize",
+      arguments: {
+        files: [join(dir, "config.json")],
+        secrets_file: "secrets.yaml",
+        profile: "profile.yaml",
+        no_structured_handoff: true,
+      },
+    });
+    ok(!toolIsError(r), `call failed: ${toolText(r)}`);
+    const secrets = await Deno.readTextFile(join(dir, "secrets.yaml"));
+    ok(secrets.trim() === "", `secrets file must stay empty, got: ${secrets}`);
+  } finally {
+    await session.close();
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
+test("structured handoff", "profile without a write-back target succeeds (auto-suppressed)", async () => {
+  const { dir, session } = await handoffWorkspace();
+  try {
+    // The CLI hard-errors on --profile without a secrets file when handoff is
+    // active; the server must auto-suppress instead of surfacing that error.
+    const r = await session.send("tools/call", {
+      name: "sanitize",
+      arguments: { files: [join(dir, "config.json")], profile: "profile.yaml" },
+    });
+    ok(!toolIsError(r), `call failed: ${toolText(r)}`);
+    const text = toolText(r);
+    ok(!text.includes("hunter2-discovered-literal"), "password field must still be sanitized");
+  } finally {
+    await session.close();
+    await Deno.remove(dir, { recursive: true }).catch(() => {});
+  }
+});
+
 test("output_file", "error: output_file and output_dir are mutually exclusive", async (s) => {
   const r = await s.send("tools/call", {
     name: "sanitize",
@@ -1764,7 +1933,13 @@ await session.close();
       args: ["run", "--allow-run", "--allow-env", "--allow-read", "--allow-write", "--allow-net",
         MCP_SCRIPT, "--http"],
       stdin: "null", stdout: "null", stderr: "piped",
-      env: { ...Deno.env.toObject(), SCOUR_SECRETS_BIN, SCOUR_SECRETS_LOG: "error", SCOUR_SECRETS_MCP_HTTP_TOKEN: token },
+      env: {
+      ...Deno.env.toObject(),
+      SCOUR_SECRETS_BIN,
+      SCOUR_SECRETS_LOG: "error",
+      SCOUR_SECRETS_MCP_HTTP_TOKEN: token,
+      SCOUR_SECRETS_APPS_DIR: APPS_DIR,
+    },
     }).spawn();
     const stderr = await readStreamFor(proc.stderr, 4_000, "ready");
     try { proc.kill("SIGTERM"); } catch { /* may already have failed to bind */ }
@@ -1779,7 +1954,13 @@ await session.close();
         args: ["run", "--allow-run", "--allow-env", "--allow-read", "--allow-write", "--allow-net",
           MCP_SCRIPT, "--http", badPort],
         stdin: "null", stdout: "null", stderr: "null",
-        env: { ...Deno.env.toObject(), SCOUR_SECRETS_BIN, SCOUR_SECRETS_LOG: "error", SCOUR_SECRETS_MCP_HTTP_TOKEN: token },
+        env: {
+      ...Deno.env.toObject(),
+      SCOUR_SECRETS_BIN,
+      SCOUR_SECRETS_LOG: "error",
+      SCOUR_SECRETS_MCP_HTTP_TOKEN: token,
+      SCOUR_SECRETS_APPS_DIR: APPS_DIR,
+    },
       }).output();
       ok(result.code !== 0, `expected non-zero exit for port "${badPort}", got ${result.code}`);
     }
@@ -1794,7 +1975,13 @@ await session.close();
         MCP_SCRIPT, "--http", String(listenPort),
       ],
       stdin: "null", stdout: "piped", stderr: "piped",
-      env: { ...Deno.env.toObject(), SCOUR_SECRETS_BIN, SCOUR_SECRETS_LOG: "error", SCOUR_SECRETS_MCP_HTTP_TOKEN: token },
+      env: {
+      ...Deno.env.toObject(),
+      SCOUR_SECRETS_BIN,
+      SCOUR_SECRETS_LOG: "error",
+      SCOUR_SECRETS_MCP_HTTP_TOKEN: token,
+      SCOUR_SECRETS_APPS_DIR: APPS_DIR,
+    },
     }).spawn();
 
     const stderr = await readStreamFor(proc.stderr, 4_000, "ready");
