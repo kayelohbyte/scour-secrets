@@ -48,7 +48,10 @@
 //! - **Zip**: modification time, compression method, and unix
 //!   permissions are preserved.
 //! - Symlinks, directories, and other non-regular entries are passed
-//!   through unchanged.
+//!   through with their content unchanged; entry names are sanitized
+//!   against path traversal like file entries, and names/link targets
+//!   longer than the 100-byte ustar field are preserved via GNU
+//!   long-name extensions.
 
 use crate::error::{Result, SanitizeError};
 use crate::processor::profile::FileTypeProfile;
@@ -101,7 +104,42 @@ use glob::MatchOptions;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::io::{self, Read, Seek, Write};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
+
+/// Append one entry to a tar builder, preserving names longer than the
+/// 100-byte ustar header field.
+///
+/// `Header::set_path` fails (or a cloned header silently keeps a truncated
+/// name) for long paths; `append_data`/`append_link` emit GNU long-name
+/// extension records instead. The entry path is sanitized against traversal;
+/// a trailing `/` (directory convention) is preserved.
+fn append_tar_entry<W: Write>(
+    builder: &mut tar::Builder<W>,
+    mut header: tar::Header,
+    path: &str,
+    link_target: Option<&Path>,
+    data: &[u8],
+) -> Result<()> {
+    let mut safe_path = sanitize_tar_entry_name(path);
+    if path.ends_with('/') && !safe_path.ends_with('/') {
+        safe_path.push('/');
+    }
+    let entry_type = header.entry_type();
+    if entry_type.is_symlink() || entry_type.is_hard_link() {
+        if let Some(target) = link_target {
+            return builder
+                .append_link(&mut header, &safe_path, target)
+                .map_err(|e| {
+                    SanitizeError::ArchiveError(format!("append link '{safe_path}': {e}"))
+                });
+        }
+    }
+    header.set_size(data.len() as u64);
+    builder
+        .append_data(&mut header, &safe_path, data)
+        .map_err(|e| SanitizeError::ArchiveError(format!("append '{safe_path}': {e}")))
+}
 
 use crate::entropy::{entropy_scan_bytes, merge_entropy_counts, EntropyConfig};
 use crate::processor::limits::{
@@ -1022,6 +1060,7 @@ impl ArchiveProcessor {
         struct TarEntry {
             header: tar::Header,
             path: String,
+            link_name: Option<PathBuf>,
             is_file: bool,
             passes_filter: bool,
             data: Vec<u8>,
@@ -1053,6 +1092,7 @@ impl ArchiveProcessor {
                 .map_err(|e| SanitizeError::ArchiveError(format!("entry path: {e}")))?
                 .to_string_lossy()
                 .into_owned();
+            let link_name = entry.link_name().ok().flatten().map(|c| c.into_owned());
             let is_file = header.entry_type().is_file();
             let passes_filter = !is_file || self.filter.passes(&path);
 
@@ -1070,6 +1110,7 @@ impl ArchiveProcessor {
             buffered.push(TarEntry {
                 header,
                 path,
+                link_name,
                 is_file,
                 passes_filter,
                 data,
@@ -1115,11 +1156,13 @@ impl ArchiveProcessor {
 
             for (i, entry) in buffered.iter().enumerate() {
                 if !entry.is_file {
-                    builder
-                        .append(&entry.header, entry.data.as_slice())
-                        .map_err(|e| {
-                            SanitizeError::ArchiveError(format!("append '{}': {e}", entry.path))
-                        })?;
+                    append_tar_entry(
+                        &mut builder,
+                        entry.header.clone(),
+                        &entry.path,
+                        entry.link_name.as_deref(),
+                        &entry.data,
+                    )?;
                     stats.entries_skipped += 1;
                     self.emit_progress(&stats, None, &entry.path);
                     continue;
@@ -1135,18 +1178,13 @@ impl ArchiveProcessor {
                 stats.merge(&entry_stats);
                 self.emit_entry_bytes(&entry.path, &sanitized_buf);
 
-                let mut new_header = entry.header.clone();
-                let safe_path = sanitize_tar_entry_name(&entry.path);
-                new_header.set_path(&safe_path).map_err(|e| {
-                    SanitizeError::ArchiveError(format!("set path '{safe_path}': {e}"))
-                })?;
-                new_header.set_size(sanitized_buf.len() as u64);
-                new_header.set_cksum();
-                builder
-                    .append(&new_header, sanitized_buf.as_slice())
-                    .map_err(|e| {
-                        SanitizeError::ArchiveError(format!("append '{safe_path}': {e}"))
-                    })?;
+                append_tar_entry(
+                    &mut builder,
+                    entry.header.clone(),
+                    &entry.path,
+                    None,
+                    &sanitized_buf,
+                )?;
                 stats.files_processed += 1;
                 self.emit_progress(&stats, None, &entry.path);
             }
@@ -1161,11 +1199,13 @@ impl ArchiveProcessor {
                                   processor: &ArchiveProcessor|
              -> Result<()> {
                 if !entry.is_file {
-                    builder
-                        .append(&entry.header, entry.data.as_slice())
-                        .map_err(|e| {
-                            SanitizeError::ArchiveError(format!("append '{}': {e}", entry.path))
-                        })?;
+                    append_tar_entry(
+                        builder,
+                        entry.header.clone(),
+                        &entry.path,
+                        entry.link_name.as_deref(),
+                        &entry.data,
+                    )?;
                     stats.entries_skipped += 1;
                     processor.emit_progress(stats, None, &entry.path);
                     return Ok(());
@@ -1180,18 +1220,13 @@ impl ArchiveProcessor {
                     processor.sanitize_entry_bytes(&entry.path, &entry.data, size_hint, depth)?;
                 stats.merge(&entry_stats);
                 processor.emit_entry_bytes(&entry.path, &sanitized_buf);
-                let mut new_header = entry.header.clone();
-                let safe_path = sanitize_tar_entry_name(&entry.path);
-                new_header.set_path(&safe_path).map_err(|e| {
-                    SanitizeError::ArchiveError(format!("set path '{safe_path}': {e}"))
-                })?;
-                new_header.set_size(sanitized_buf.len() as u64);
-                new_header.set_cksum();
-                builder
-                    .append(&new_header, sanitized_buf.as_slice())
-                    .map_err(|e| {
-                        SanitizeError::ArchiveError(format!("append '{safe_path}': {e}"))
-                    })?;
+                append_tar_entry(
+                    builder,
+                    entry.header.clone(),
+                    &entry.path,
+                    None,
+                    &sanitized_buf,
+                )?;
                 stats.files_processed += 1;
                 processor.emit_progress(stats, None, &entry.path);
                 Ok(())
@@ -1217,14 +1252,13 @@ impl ArchiveProcessor {
                     let is_file = header.entry_type().is_file();
 
                     if !is_file {
+                        let link_name = entry.link_name().ok().flatten().map(|c| c.into_owned());
                         let mut data = Vec::new();
                         entry.read_to_end(&mut data).map_err(|e| {
                             SanitizeError::ArchiveError(format!("read '{path}': {e}"))
                         })?;
                         drop(entry);
-                        builder.append(&header, data.as_slice()).map_err(|e| {
-                            SanitizeError::ArchiveError(format!("append '{path}': {e}"))
-                        })?;
+                        append_tar_entry(&mut builder, header, &path, link_name.as_deref(), &data)?;
                         stats.entries_skipped += 1;
                         self.emit_progress(&stats, None, &path);
                         continue;
@@ -1249,18 +1283,7 @@ impl ArchiveProcessor {
                     drop(entry);
                     self.emit_entry_bytes(&path, &sanitized_buf);
 
-                    let mut new_header = header.clone();
-                    let safe_path = sanitize_tar_entry_name(&path);
-                    new_header.set_path(&safe_path).map_err(|e| {
-                        SanitizeError::ArchiveError(format!("set path '{safe_path}': {e}"))
-                    })?;
-                    new_header.set_size(sanitized_buf.len() as u64);
-                    new_header.set_cksum();
-                    builder
-                        .append(&new_header, sanitized_buf.as_slice())
-                        .map_err(|e| {
-                            SanitizeError::ArchiveError(format!("append '{safe_path}': {e}"))
-                        })?;
+                    append_tar_entry(&mut builder, header, &path, None, &sanitized_buf)?;
 
                     stats.merge(&entry_stats);
                     stats.files_processed += 1;
@@ -1996,6 +2019,92 @@ mod tests {
 
         assert_eq!(stats.entries_skipped, 1);
         assert_eq!(stats.files_processed, 1);
+    }
+
+    #[test]
+    fn tar_preserves_file_paths_longer_than_ustar_limit() {
+        // Regression: GitLab SOS bundles nest files under a >100-byte
+        // top-level directory; Header::set_path fails on such names.
+        let long_dir = format!(
+            "gitlabsos.sr-env-01b6d583-omnibus_20260626-144506_{}",
+            "gitaly-nginx-prometheus-psql-puma-redis-sidekiq"
+        );
+        let long_path = format!("{long_dir}/mpstat");
+        assert!(long_path.len() > 100);
+
+        let proc = make_archive_processor();
+        let input = build_test_tar(&[(long_path.as_str(), b"cpu stats here".as_slice())]);
+
+        let mut output = Vec::new();
+        let stats = proc.process_tar(&input[..], &mut output).unwrap();
+        assert_eq!(stats.files_processed, 1);
+
+        let mut archive = tar::Archive::new(&output[..]);
+        let paths: Vec<String> = archive
+            .entries()
+            .unwrap()
+            .map(|e| e.unwrap().path().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(paths, vec![long_path]);
+    }
+
+    #[test]
+    fn tar_preserves_long_directory_and_symlink_entries() {
+        let long_dir = format!("{}/", "d".repeat(120));
+        let link_path = format!("{}/current-log", "l".repeat(120));
+        let link_target = format!("{}/log.2026-06-26", "t".repeat(120));
+
+        let mut buf = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut buf);
+
+            let mut dir_header = tar::Header::new_gnu();
+            dir_header.set_entry_type(tar::EntryType::Directory);
+            dir_header.set_size(0);
+            dir_header.set_mode(0o755);
+            dir_header.set_cksum();
+            builder
+                .append_data(&mut dir_header, long_dir.as_str(), &b""[..])
+                .unwrap();
+
+            let mut link_header = tar::Header::new_gnu();
+            link_header.set_entry_type(tar::EntryType::Symlink);
+            link_header.set_size(0);
+            link_header.set_cksum();
+            builder
+                .append_link(&mut link_header, link_path.as_str(), link_target.as_str())
+                .unwrap();
+
+            builder.finish().unwrap();
+        }
+
+        let proc = make_archive_processor();
+        let mut output = Vec::new();
+        let stats = proc.process_tar(&buf[..], &mut output).unwrap();
+        assert_eq!(stats.entries_skipped, 2);
+
+        let mut archive = tar::Archive::new(&output[..]);
+        let mut entries = archive.entries().unwrap();
+
+        let dir_entry = entries.next().unwrap().unwrap();
+        assert_eq!(
+            dir_entry
+                .path()
+                .unwrap()
+                .to_string_lossy()
+                .trim_end_matches('/'),
+            long_dir.trim_end_matches('/')
+        );
+
+        let link_entry = entries.next().unwrap().unwrap();
+        assert_eq!(
+            link_entry.path().unwrap().to_string_lossy(),
+            link_path.as_str()
+        );
+        assert_eq!(
+            link_entry.link_name().unwrap().unwrap().to_string_lossy(),
+            link_target.as_str()
+        );
     }
 
     // -- Tar.gz tests -------------------------------------------------------
