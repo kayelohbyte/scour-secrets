@@ -50,6 +50,24 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use zeroize::Zeroize;
 
+/// Whether `value` is a redaction mask rather than a secret: three or more
+/// repetitions of a single masking character (`******`, `••••••`, `######`),
+/// as produced by upstream tools that scrub their own output (GitLab logs
+/// mask passwords as `******`). Such a value carries no information — but
+/// replaced with a realistic token it *looks* like a leaked secret, and
+/// recorded in the store it becomes a literal that rewrites every future
+/// mask. Two-character runs are left alone (`**` is a common glob/emphasis).
+fn is_redaction_mask(value: &str) -> bool {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !matches!(first, '*' | '•' | '#') {
+        return false;
+    }
+    value.chars().count() >= 3 && chars.all(|c| c == first)
+}
+
 /// An opaque cursor into the [`MappingStore`] insertion sequence.
 ///
 /// Obtained from [`MappingStore::snapshot`] and passed to
@@ -215,6 +233,15 @@ impl MappingStore {
     /// Returns [`SanitizeError::CapacityExceeded`] if the store has
     /// reached its configured capacity limit.
     pub fn get_or_insert(&self, category: &Category, original: &str) -> Result<CompactString> {
+        // A value that is already a redaction mask (`******`, `••••`) carries
+        // no information: replacing it with a realistic-looking token makes
+        // upstream masking look like a leaked secret, and recording it would
+        // persist the mask as a literal that poisons every future run. Pass
+        // it through unrecorded, like an allowlisted value.
+        if is_redaction_mask(original) {
+            return Ok(CompactString::new(original));
+        }
+
         // Allowlist check: return the original value unchanged without recording it.
         if let Some(al) = &self.allowlist {
             if al.is_allowed(original) {
@@ -507,6 +534,35 @@ mod tests {
     fn random_store() -> MappingStore {
         let gen = Arc::new(RandomGenerator::new());
         MappingStore::new(gen, None)
+    }
+
+    // --- Redaction-mask passthrough ---
+
+    #[test]
+    fn redaction_masks_pass_through_unrecorded() {
+        // Regression (GitLab SOS eval): a log line `password: ******` matched
+        // by a kv pattern must keep its mask — replacing it fakes a leak, and
+        // recording it poisons future runs via the secrets-file write-back.
+        let store = hmac_store(None);
+        for mask in ["***", "******", "••••••", "######"] {
+            let out = store
+                .get_or_insert(&Category::Custom("password".into()), mask)
+                .unwrap();
+            assert_eq!(out.as_str(), mask, "mask must pass through unchanged");
+        }
+        assert_eq!(store.len(), 0, "masks must not be recorded");
+    }
+
+    #[test]
+    fn near_masks_are_still_replaced() {
+        // Mixed or short runs are not masks: real values must still map.
+        let store = hmac_store(None);
+        for value in ["**", "*secret*", "#x#x#x", "a*****"] {
+            let out = store
+                .get_or_insert(&Category::Custom("password".into()), value)
+                .unwrap();
+            assert_ne!(out.as_str(), value, "'{value}' must be replaced");
+        }
     }
 
     // --- Basic operations ---
