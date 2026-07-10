@@ -471,7 +471,11 @@ pub(crate) fn build_augmented_scanner(
     let mut discovered = 0usize;
     for (category, original, _replacement) in store.iter() {
         let s = original.as_str();
-        if s.is_empty() {
+        // Same triviality gate as the write-back and per-file structured
+        // passes: a 1–3 char discovered value ("2", "/", "id") as a global
+        // literal rewrites unrelated timestamps, paths, and protocol strings
+        // across the whole run.
+        if s.len() < crate::dispatch::MIN_DISCOVERED_LITERAL_LEN {
             continue;
         }
         // Label by category, never the value — labels surface in the report,
@@ -520,6 +524,40 @@ pub(crate) fn build_scan_config(chunk_size: usize) -> Result<ScanConfig, String>
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn augmented_scanner_skips_trivial_discovered_values() {
+        // Regression (GitLab SOS eval): phase-1 discovery of trivial values
+        // ("2", "/", "ok") must not turn them into global scan literals — as
+        // literals they rewrite every digit, path separator, and timestamp in
+        // the run. Long discovered values must still be included.
+        use scour_secrets::{Category, HmacGenerator, MappingStore, ScanConfig};
+        use std::sync::Arc;
+
+        let store = Arc::new(MappingStore::new(
+            Arc::new(HmacGenerator::new([7u8; 32])),
+            None,
+        ));
+        store.get_or_insert(&Category::AuthToken, "2").unwrap();
+        store.get_or_insert(&Category::AuthToken, "/").unwrap();
+        store
+            .get_or_insert(&Category::AuthToken, "long-discovered-value")
+            .unwrap();
+
+        let scanner = build_augmented_scanner(&[], &store, ScanConfig::default()).unwrap();
+
+        let input = b"2026/07/10 12:22:02 long-discovered-value done";
+        let (out, _) = scanner.scan_bytes(input).unwrap();
+        let out = String::from_utf8_lossy(&out).to_string();
+        assert!(
+            out.starts_with("2026/07/10 12:22:02 "),
+            "timestamp must survive trivial literals: {out}"
+        );
+        assert!(
+            !out.contains("long-discovered-value"),
+            "long discovered value must still be redacted: {out}"
+        );
+    }
 
     #[test]
     fn seed_salt_file_used_verbatim() {

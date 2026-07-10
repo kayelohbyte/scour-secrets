@@ -164,7 +164,7 @@ pub use report::{
 };
 pub use scanner::{
     MatchLocation, ScanConfig, ScanPattern, ScanProgress, ScanStats, SecretsLoadResult,
-    StreamScanner,
+    StreamScanner, MIN_DISCOVERED_LITERAL_LEN,
 };
 pub use secrets::{
     decrypt_secrets, encrypt_secrets, entries_to_patterns, extract_allow_patterns,

@@ -121,6 +121,18 @@ const OVERLONG_LABEL: &str = "overlong-redacted";
 /// duplicate replacements on the surrounding syntax.
 pub const KV_LABEL_SUFFIX: &str = "_kv";
 
+/// Minimum length for a structured-field-discovered value to be reused as a
+/// scanner literal — both for in-run propagation (the augmented scanner and
+/// per-entry structured passes) and for persistence to a secrets file.
+///
+/// Values shorter than this (e.g. a `v`, `id`, or a bare digit from a job-args
+/// field) match too much unrelated text: as a scanner literal they corrupt the
+/// current run (timestamps, paths, protocol strings), and once written to the
+/// secrets file they poison *every* future run. Every path that turns store
+/// entries into literal patterns must share this threshold so a value is never
+/// persisted that the scanner itself would reject.
+pub const MIN_DISCOVERED_LITERAL_LEN: usize = 4;
+
 /// Configuration for the streaming scanner.
 ///
 /// # Tuning Guide
