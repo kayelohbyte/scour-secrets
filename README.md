@@ -262,7 +262,18 @@ Same seed + same input produces identical replacements across runs and machines 
 scour-secrets data.csv -s patterns.yaml -d
 ```
 
-For a whole team, commit `deterministic: true` and a shared `seed_salt_file:` in the project's `.scour-secrets.yaml` so nobody has to remember the flags — see [Team setup](docs/cli-reference.md#team-setup).
+For a whole team, commit the flags to the project's `.scour-secrets.yaml` so nobody has to remember them — every member gets byte-identical output from the same input, and the shared rules file stays immutable:
+
+```yaml
+# .scour-secrets.yaml (committed to the repo)
+profile: sanitize.profile.yaml            # committed field rules
+secrets_file: patterns.yaml               # committed detection rules — never modified
+handoff_file: .scour-secrets.local.yaml   # gitignored per-user overlay for discoveries
+deterministic: true
+seed_salt_file: .seed-salt                # committed; password is shared out-of-band
+```
+
+See [Team setup](docs/cli-reference.md#team-setup) for the full layout and caveats.
 
 ### Shannon entropy detection
 
@@ -405,7 +416,7 @@ See [SECURITY.md](SECURITY.md) for the full threat model and mitigations.
 ## Limitations
 
 - **No restore.** Replacements are one-way by design. No undo, decrypt-output, or reverse-mapping capability.
-- **Structured-to-scanner handoff.** When `--profile` is active, discovered values are appended to your secrets file as `kind: literal` entries so the scanner can find them in other files and future runs. The file is written 0600 and re-encrypted when it was encrypted; it holds originals only (no mapping to replacements). Use `--no-structured-handoff` to suppress the write if needed.
+- **Structured-to-scanner handoff.** When `--profile` is active, discovered values are appended to your secrets file as `kind: literal` entries so the scanner can find them in other files and future runs. The file is written 0600 and re-encrypted when it was encrypted; it holds originals only (no mapping to replacements). Use `--handoff-file` to redirect the write to a local overlay instead — keeping a shared, committed secrets file immutable — or `--no-structured-handoff` to suppress it entirely.
 - **Structured processor size limit.** Files over 256 MiB (or `--max-structured-size`) fall back to the streaming scanner, which replaces raw bytes without document awareness. In practice this only affects large serialized data dumps, not real config files.
 - **Deterministic mode caveats.** Identical output requires the same secrets file and the same seed. Changing either produces completely different replacements.
 - **Zeroization scope.** Covers secrets, HMAC keys, and mapping-store keys. Incidental copies the Rust compiler creates during optimization passes are not covered — an inherent limitation of safe Rust zeroization.

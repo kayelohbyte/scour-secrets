@@ -420,15 +420,18 @@ Created by `scour-secrets init-hook`. Provides persistent defaults for CLI flags
 | `allow` | list of strings | `[]` | Values to pass through unchanged. Supports exact strings, `*` glob wildcards, and `regex:<pattern>`. Merged with `--allow` on the CLI. |
 | `fail_on_match` | bool | `false` | Exit with code 2 when any match is found. Equivalent to `--fail-on-match`. |
 | `strict` | bool | `false` | Abort on the first error instead of skipping and continuing. Equivalent to `--strict`. |
+| `deterministic` | bool | `false` | HMAC-deterministic replacements on every run. Equivalent to `--deterministic`; still requires a password at run time (`SCOUR_SECRETS_PASSWORD`, `--password-file`, or `-p`). |
 | `no_structured_handoff` | bool | `false` | Suppress the Phase 1 → Phase 2 value handoff (discovered field values are not seeded into the scanner). Equivalent to `--no-structured-handoff`. |
 | `no_field_signal` | bool | `false` | Disable the field-name entropy heuristic. When active, key names matching sensitive keywords (`password`, `secret`, `token`, …) are flagged by their value's Shannon entropy even without an explicit `FieldRule`. Default thresholds: 3.0 bits/char for strong keywords, 3.5 for ambiguous ones. Equivalent to `--no-field-signal`. |
 | `threads` | integer | auto | Worker thread count. Omit or set to `null` for auto-detect. Equivalent to `--threads`. |
 | `log_format` | string | `"human"` | Log output format: `"human"` or `"json"` for SIEM ingestion. Equivalent to `--log-format`. |
 | `log_level` | string | `"warn"` | Log verbosity: `"off"`, `"error"`, `"warn"`, `"info"`, `"debug"`, or `"trace"`. Overridden by the `SCOUR_SECRETS_LOG` env var. Equivalent to `--log-level`. |
 | `no_progress` | bool | `false` | Disable progress output. Equivalent to `--no-progress`. |
-| `secrets_file` | string | _(none)_ | Secrets file to load on every run. Equivalent to `-s`/`--secrets-file`. |
-| `encrypted_secrets` | bool | `false` | Treat `secrets_file` as AES-256-GCM encrypted. Equivalent to `--encrypted-secrets`. |
-| `profile` | string | _(none)_ | File-type profile to load on every run. Equivalent to `--profile`. |
+| `secrets_file` | string | _(none)_ | **Project config only** — ignored in `settings.yaml`. Secrets file path, relative to the config file. Equivalent to `-s`/`--secrets-file`. |
+| `encrypted_secrets` | bool | `false` | **Project config only** — ignored in `settings.yaml`. Treat `secrets_file` as AES-256-GCM encrypted. Equivalent to `--encrypted-secrets`. |
+| `profile` | string | _(none)_ | **Project config only** — ignored in `settings.yaml`. File-type profile path, relative to the config file. Equivalent to `--profile`. |
+| `seed_salt_file` | string | _(none)_ | **Project config only** — ignored in `settings.yaml`. Deterministic seed-salt file, relative to the config file. Equivalent to `--seed-salt-file`. |
+| `handoff_file` | string | _(none)_ | **Project config only** — ignored in `settings.yaml`. Plaintext overlay receiving discovered-value write-back instead of the secrets file, relative to the config file. Equivalent to `--handoff-file`. |
 | `exclude_path` | list of strings | `[]` | Glob patterns excluded from directory walks. Equivalent to `--exclude-path`. |
 | `include_path` | list of strings | `[]` | Glob patterns that restrict directory walks. Equivalent to `--include-path`. |
 | `force_text` | bool | `false` | Bypass structured processors, streaming scanner only. Equivalent to `--force-text`. |
@@ -1384,6 +1387,37 @@ SCOUR_SECRETS_PASSWORD=secret scour-secrets config.yaml \
 # the same replacement as in the first run
 SCOUR_SECRETS_PASSWORD=secret scour-secrets server.log \
   --deterministic --secrets-file patterns.yaml
+```
+
+**Team-shared config (identical output for every member, shared file immutable):**
+
+```bash
+# Committed to the repo — see the Team setup section for the full layout:
+#   .scour-secrets.yaml   profile, secrets_file, handoff_file,
+#                         deterministic: true, seed_salt_file: .seed-salt
+#   .seed-salt, sanitize.profile.yaml, patterns.yaml
+# Gitignored: .scour-secrets.local.yaml (per-user discovered-value overlay)
+
+# Every member runs the same bare command from anywhere in the repo;
+# the flags all come from the committed config:
+export SCOUR_SECRETS_PASSWORD=…   # shared out-of-band, never committed
+scour-secrets support-bundle.tar.gz
+
+# Same input → byte-identical output on every machine. patterns.yaml is
+# never modified; discoveries land in each member's local overlay and are
+# re-loaded on that member's later runs.
+```
+
+**Discovered values to a local overlay, shared secrets file untouched:**
+
+```bash
+# patterns.yaml stays byte-identical (safe to keep committed); "hunter2"
+# discovered by the profile pass is appended to the overlay instead:
+scour-secrets config.yaml --profile fields.yaml \
+  -s patterns.yaml --handoff-file .scour-secrets.local.yaml
+
+# The overlay is loaded on later runs, so the log run still redacts it:
+scour-secrets server.log -s patterns.yaml --handoff-file .scour-secrets.local.yaml
 ```
 
 **Deterministic mode (same seed → same replacements every run):**
