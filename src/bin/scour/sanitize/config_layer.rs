@@ -53,6 +53,7 @@ fn apply_settings_layer(cli: &mut Cli, s: SanitizeConfig) {
     merge_list(&mut cli.include_path, s.include_path);
     merge_list(&mut cli.context_keywords, s.context_keywords);
     // Bool flags
+    apply_bool_flag!(cli, s, deterministic);
     apply_bool_flag!(cli, s, fail_on_match);
     apply_bool_flag!(cli, s, strict);
     apply_bool_flag!(cli, s, no_structured_handoff);
@@ -105,7 +106,13 @@ fn apply_project_config_layer(cli: &mut Cli, pc: SanitizeConfig, config_dir: &st
             cli.profile = Some(config_dir.join(rel));
         }
     }
+    if cli.seed_salt_file.is_none() {
+        if let Some(rel) = pc.seed_salt_file {
+            cli.seed_salt_file = Some(config_dir.join(rel));
+        }
+    }
     // Bool flags
+    apply_bool_flag!(cli, pc, deterministic);
     apply_bool_flag!(cli, pc, fail_on_match);
     apply_bool_flag!(cli, pc, strict);
     apply_bool_flag!(cli, pc, no_structured_handoff);
@@ -344,6 +351,64 @@ mod tests {
         };
         apply_project_config_layer(&mut cli, pc, Path::new("/repo"));
         assert_eq!(cli.profile, Some(PathBuf::from("/repo/my.profile.yaml")));
+    }
+
+    #[test]
+    fn project_layer_resolves_seed_salt_file_relative_to_config_dir() {
+        let mut cli = default_cli();
+        let pc = SanitizeConfig {
+            seed_salt_file: Some(PathBuf::from(".seed-salt")),
+            deterministic: Some(true),
+            ..Default::default()
+        };
+        apply_project_config_layer(&mut cli, pc, Path::new("/repo"));
+        assert_eq!(cli.seed_salt_file, Some(PathBuf::from("/repo/.seed-salt")));
+        assert!(cli.deterministic);
+    }
+
+    #[test]
+    fn project_layer_does_not_override_cli_seed_salt_file() {
+        let mut cli = Cli::try_parse_from([
+            "scour-secrets",
+            "file.txt",
+            "--seed-salt-file",
+            "/explicit/salt",
+        ])
+        .unwrap();
+        let pc = SanitizeConfig {
+            seed_salt_file: Some(PathBuf::from(".seed-salt")),
+            ..Default::default()
+        };
+        apply_project_config_layer(&mut cli, pc, Path::new("/repo"));
+        assert_eq!(cli.seed_salt_file, Some(PathBuf::from("/explicit/salt")));
+    }
+
+    #[test]
+    fn settings_layer_applies_deterministic() {
+        let mut cli = default_cli();
+        assert!(!cli.deterministic);
+        apply_settings_layer(
+            &mut cli,
+            SanitizeConfig {
+                deterministic: Some(true),
+                ..Default::default()
+            },
+        );
+        assert!(cli.deterministic);
+    }
+
+    #[test]
+    fn cli_deterministic_flag_survives_config_false() {
+        let mut cli = Cli::try_parse_from(["scour-secrets", "file.txt", "-d"]).unwrap();
+        apply_project_config_layer(
+            &mut cli,
+            SanitizeConfig {
+                deterministic: Some(false),
+                ..Default::default()
+            },
+            Path::new("/repo"),
+        );
+        assert!(cli.deterministic);
     }
 
     #[test]

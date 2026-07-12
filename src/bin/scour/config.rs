@@ -40,8 +40,15 @@ pub(crate) struct SanitizeConfig {
     pub(crate) encrypted_secrets: Option<bool>,
     /// Path to a field-level profile YAML, relative to the config file location.
     pub(crate) profile: Option<PathBuf>,
+    /// Path to a deterministic seed-salt file, relative to the config file
+    /// location (`--seed-salt-file`). Commit it alongside the project config so
+    /// every team member reproduces identical deterministic output.
+    pub(crate) seed_salt_file: Option<PathBuf>,
 
     // --- Bool scan-behavior flags ----------------------------------------
+    /// HMAC-deterministic replacements (`--deterministic`). Requires a password
+    /// via `--password` / `SCOUR_SECRETS_PASSWORD` / prompt at run time.
+    pub(crate) deterministic: Option<bool>,
     /// Exit with code 2 when any match is found (`--fail-on-match`).
     pub(crate) fail_on_match: Option<bool>,
     /// Abort on the first processing error (`--strict`).
@@ -244,6 +251,13 @@ pub(crate) const SETTINGS_TEMPLATE: &str = "\
 # Walk hidden files and directories (--hidden).
 # hidden: false
 
+# HMAC-deterministic replacements — identical inputs produce identical outputs
+# across runs and machines (--deterministic). Requires a password at run time
+# (--password or SCOUR_SECRETS_PASSWORD). Pair with a shared seed-salt file
+# (--seed-salt-file or seed_salt_file: in a project .scour-secrets.yaml) so a
+# team reproduces identical output.
+# deterministic: false
+
 # Shannon entropy threshold for high-entropy token detection (--entropy-threshold).
 # entropy_threshold: 4.5
 
@@ -422,7 +436,9 @@ fn show_config_fields(cfg: &SanitizeConfig, config_dir: Option<&Path>) {
         path_field("secrets_file:", cfg.secrets_file.as_deref(), config_dir);
         opt("encrypted_secrets:", cfg.encrypted_secrets);
         path_field("profile:", cfg.profile.as_deref(), config_dir);
+        path_field("seed_salt_file:", cfg.seed_salt_file.as_deref(), config_dir);
     }
+    opt("deterministic:", cfg.deterministic);
     opt("fail_on_match:", cfg.fail_on_match);
     opt("strict:", cfg.strict);
     opt("no_structured_handoff:", cfg.no_structured_handoff);
@@ -569,6 +585,8 @@ include_path: ["**/*.log"]
 secrets_file: secrets.yaml
 encrypted_secrets: true
 profile: profile.yaml
+seed_salt_file: .seed-salt
+deterministic: true
 fail_on_match: true
 strict: true
 no_structured_handoff: true
@@ -597,6 +615,8 @@ quiet: true
         assert_eq!(cfg.secrets_file, Some(PathBuf::from("secrets.yaml")));
         assert_eq!(cfg.encrypted_secrets, Some(true));
         assert_eq!(cfg.profile, Some(PathBuf::from("profile.yaml")));
+        assert_eq!(cfg.seed_salt_file, Some(PathBuf::from(".seed-salt")));
+        assert_eq!(cfg.deterministic, Some(true));
         assert_eq!(cfg.fail_on_match, Some(true));
         assert_eq!(cfg.strict, Some(true));
         assert_eq!(cfg.no_structured_handoff, Some(true));

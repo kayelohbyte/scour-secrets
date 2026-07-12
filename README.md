@@ -262,6 +262,8 @@ Same seed + same input produces identical replacements across runs and machines 
 scour-secrets data.csv -s patterns.yaml -d
 ```
 
+For a whole team, commit `deterministic: true` and a shared `seed_salt_file:` in the project's `.scour-secrets.yaml` so nobody has to remember the flags — see [Team setup](docs/cli-reference.md#team-setup).
+
 ### Shannon entropy detection
 
 Catch high-entropy tokens not covered by any pattern — useful for novel API keys, obfuscated secrets, or anything that wasn't anticipated when the patterns file was written.

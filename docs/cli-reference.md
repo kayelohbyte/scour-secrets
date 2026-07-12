@@ -525,6 +525,15 @@ secrets_file: patterns.yaml
 # Profile YAML for field-level rules, relative to this file.
 # profile: sanitize.profile.yaml
 
+# HMAC-deterministic replacements for every run in this project
+# (--deterministic). Requires a password at run time (SCOUR_SECRETS_PASSWORD,
+# --password-file, or -p) — never put the password in this file.
+# deterministic: true
+
+# Deterministic seed salt file, relative to this file (--seed-salt-file).
+# Commit it so every team member reproduces identical output.
+# seed_salt_file: .seed-salt
+
 # Exit 2 when any match is found (--fail-on-match).
 # fail_on_match: false
 
@@ -547,6 +556,35 @@ secrets_file: patterns.yaml
 4. CLI flags (always win)
 
 **Multi-customer use:** create a `.scour-secrets.yaml` in each customer directory pointing to that customer's `secrets_file`. Running `scour-secrets ./customer-a/` picks up `customer-a/.scour-secrets.yaml` automatically.
+
+#### Team setup
+
+To share one configuration across a team — same detection rules, same field profile, and identical replacements for identical input — commit the config, profile, and seed salt to the repository and keep the password out-of-band:
+
+```
+<repo>/
+  .scour-secrets.yaml     # committed: app, allow, profile, secrets_file,
+                          #            deterministic: true, seed_salt_file: .seed-salt
+  .seed-salt              # committed: any stable content; it is a salt, not a secret key
+  sanitize.profile.yaml   # committed: field rules contain no secret material
+  patterns.yaml           # committed: regex/entropy/allow rules — see the write-back
+                          #            caveat below before committing this
+```
+
+```yaml
+# .scour-secrets.yaml
+profile: sanitize.profile.yaml
+secrets_file: patterns.yaml
+deterministic: true
+seed_salt_file: .seed-salt
+```
+
+Each member supplies the shared password via `SCOUR_SECRETS_PASSWORD` or `--password-file` (a file outside the repo); with the same password and the committed salt, every machine produces byte-identical sanitized output for the same input.
+
+Two caveats:
+
+- **Write-back.** When a profile is active, discovered field values — real secret values — are appended to `secrets_file` after every run. Do not commit a plaintext secrets file that receives write-back: either set `no_structured_handoff: true` in the project config (rules stay pattern-only and stable), or use an encrypted secrets file (`encrypted_secrets: true`), accepting that the binary file re-encrypts on every discovery and does not merge across branches.
+- **Verification oracle.** Deterministic replacements are `HMAC(key, value)` with a key derived from the shared password and salt. Anyone holding both can confirm whether a guessed value appears in sanitized output. That is inherent to deterministic mode; treat the password with the same care as the data it protects, and use random (default) mode when output leaves the team boundary.
 
 Override the file path directly with `SCOUR_SECRETS_CONFIG=/path/to/file.yaml`.  
 Set `SCOUR_SECRETS_NO_CONFIG=1` to disable project config entirely (useful in CI or when composing flags from multiple repos).
@@ -668,8 +706,8 @@ When neither `-s`/`--secrets-file` nor `--app` is provided, the built-in pattern
 | `-r, --report [PATH]` | `-r` | Write a JSON report to `PATH` (or stderr if no path given). Use `--report -` to write the report to stdout. The report includes: `metadata` (tool version, flags), `summary` (totals, `duration_ms`, `pattern_counts`), and a `files` array with per-file `matches`, `replacements`, byte counts, `pattern_counts`, and `method`. `pattern_counts` maps each pattern `label` to its scanner hit count; it is empty (`{}`) when all matches came from the structured-processor pass or when patterns have no label. |
 | `--max-match-locations <N>` | | Maximum number of match locations recorded per file in the `--report` output (default: `500`; `0` disables location recording). Each location holds the 1-based line number, 0-based byte offset, and pattern label of a scanner match — positions refer to the input file, never the matched value itself. When the cap is hit, `truncated: true` is set on the file's `match_locations` object. Lower it to keep reports small on very noisy files. |
 | `--strict` | | Abort on the first error instead of skipping and continuing. |
-| `-d, --deterministic` | `-d` | Use HMAC-deterministic replacements (reproducible across runs with the same password **and** seed salt). Requires a password via `SCOUR_SECRETS_PASSWORD`, `--password-file`, or `-p`. The seed salt is unique per install by default (generated at `<config_dir>/seed-salt`, mode `0600`); see `--seed-salt-file`. |
-| `--seed-salt-file <PATH>` | | File whose contents (any length; SHA-256-normalized) are used as the deterministic seed salt. Overrides the per-install salt and the `SCOUR_SECRETS_SEED_SALT` env var. Share this file (or the env var) across machines to reproduce identical deterministic output for a team. Note: 0.16.0 switched the seed KDF to Argon2id, so output is not comparable to pre-0.16.0 runs even with the same salt. |
+| `-d, --deterministic` | `-d` | Use HMAC-deterministic replacements (reproducible across runs with the same password **and** seed salt). Requires a password via `SCOUR_SECRETS_PASSWORD`, `--password-file`, or `-p`. The seed salt is unique per install by default (generated at `<config_dir>/seed-salt`, mode `0600`); see `--seed-salt-file`. Can also be enabled with `deterministic: true` in `settings.yaml` or `.scour-secrets.yaml`. |
+| `--seed-salt-file <PATH>` | | File whose contents (any length; SHA-256-normalized) are used as the deterministic seed salt. Overrides the per-install salt and the `SCOUR_SECRETS_SEED_SALT` env var. Share this file (or the env var) across machines to reproduce identical deterministic output for a team. Can also be set with `seed_salt_file:` in `.scour-secrets.yaml` (relative to that file). Note: 0.16.0 switched the seed KDF to Argon2id, so output is not comparable to pre-0.16.0 runs even with the same salt. |
 | `--randomize-length` | | Draw each replacement's length from a per-category band instead of preserving the original's length, so the output no longer leaks how long the secret was. Output stays type-valid (a number stays digits, an email stays an email, a path keeps its extension) and preserved substrings (email domain, file extension, ARN/Azure segments) are unchanged. Canonical-shape categories (UUID, MAC, IPv4/6, container ID, Windows SID, JWT) keep their natural length. Composes with `--deterministic`. See SECURITY.md §4. |
 | `--no-structured-handoff` | | Suppress the structured-to-scanner value handoff. By default, when a profile is active (`--profile` or `--app` with a profile) and `--secrets-file` is provided, values discovered in typed fields are appended to that file as `kind: literal` entries so the scanner pass can catch those same values in logs, comments, and unstructured text. The write-back preserves the file's on-disk form: an **encrypted** secrets file is decrypted, merged, and re-encrypted with the same password (never downgraded to plaintext), and JSON/YAML/TOML plaintext files keep their own format; the file is written with `0600` permissions. Disabling this weakens coverage — the scanner will no longer see values that were only found by the structured pass. |
 | `--include-binary` | | Process entries that appear to be binary data (default: skip). |

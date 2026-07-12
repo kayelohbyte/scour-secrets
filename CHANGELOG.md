@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Deterministic mode is now configurable in config files.** `deterministic:
+  true` is accepted in `settings.yaml` and `.scour-secrets.yaml`, and
+  `seed_salt_file:` in `.scour-secrets.yaml` (resolved relative to the config
+  file, like `secrets_file:`). A team can commit both alongside a shared
+  profile so every member reproduces identical replacements without
+  remembering `-d --seed-salt-file …`. Explicit CLI flags still win; the
+  password is still required at run time (`SCOUR_SECRETS_PASSWORD`,
+  `--password-file`, or prompt) and deliberately has no config-file field.
+  New "Team setup" section in the CLI reference documents the shared-repo
+  layout and the deterministic-mode verification-oracle caveat.
+
 ## [0.19.0] - 2026-07-10
 
 ### Fixed
