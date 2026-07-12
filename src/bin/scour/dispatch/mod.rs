@@ -500,6 +500,7 @@ pub(crate) fn save_discovered_secrets(
     password: Option<&str>,
     was_encrypted: bool,
     format: Option<SecretsFormat>,
+    skip_patterns: Option<&std::collections::HashSet<String>>,
 ) -> std::result::Result<usize, String> {
     let mut new_entries: Vec<SecretEntry> = store
         .iter()
@@ -507,6 +508,9 @@ pub(crate) fn save_discovered_secrets(
         // reject as too short (see MIN_DISCOVERED_LITERAL_LEN) — a 1–3 char
         // value written here poisons every future run with false positives.
         .filter(|(_, original, _)| original.len() >= MIN_DISCOVERED_LITERAL_LEN)
+        // Values recorded elsewhere (the shared secrets file, when the
+        // write-back is redirected to a handoff overlay) are not new.
+        .filter(|(_, original, _)| !skip_patterns.is_some_and(|s| s.contains(original.as_str())))
         .map(|(category, original, _)| {
             SecretEntry::new(original.to_string(), "literal", category.to_string())
                 .with_label("discovered")
@@ -679,7 +683,7 @@ mod tests {
     fn save_discovered_secrets_empty_store_returns_zero() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("secrets.yaml");
-        let n = save_discovered_secrets(&empty_store(), &path, None, false, None).unwrap();
+        let n = save_discovered_secrets(&empty_store(), &path, None, false, None, None).unwrap();
         assert_eq!(n, 0);
         assert!(
             !path.exists(),
@@ -701,7 +705,7 @@ mod tests {
                 .unwrap();
         }
 
-        let n = save_discovered_secrets(&store, &path, None, false, None).unwrap();
+        let n = save_discovered_secrets(&store, &path, None, false, None, None).unwrap();
         assert_eq!(n, 0, "sub-threshold values must not be persisted");
         assert!(
             !path.exists(),
@@ -728,7 +732,7 @@ mod tests {
             )
             .unwrap();
 
-        let n = save_discovered_secrets(&store, &path, None, false, None).unwrap();
+        let n = save_discovered_secrets(&store, &path, None, false, None, None).unwrap();
         assert_eq!(n, 1, "one entry per pattern regardless of category");
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(
@@ -739,12 +743,36 @@ mod tests {
     }
 
     #[test]
+    fn save_discovered_secrets_skips_patterns_in_skip_set() {
+        // With --handoff-file, values the shared secrets file already records
+        // as literals arrive via the skip set and must not be duplicated into
+        // the overlay; genuinely new values still land there.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("overlay.yaml");
+        let store = empty_store();
+        store
+            .get_or_insert(&scour_secrets::Category::AuthToken, "known-value")
+            .unwrap();
+        store
+            .get_or_insert(&scour_secrets::Category::AuthToken, "fresh-value")
+            .unwrap();
+        let skip: std::collections::HashSet<String> =
+            std::iter::once("known-value".to_string()).collect();
+
+        let n = save_discovered_secrets(&store, &path, None, false, None, Some(&skip)).unwrap();
+        assert_eq!(n, 1, "only the value absent from the skip set is written");
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("fresh-value"));
+        assert!(!content.contains("known-value"));
+    }
+
+    #[test]
     fn save_discovered_secrets_writes_new_entries() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("secrets.yaml");
         let store = store_with_entry("abc123");
 
-        let n = save_discovered_secrets(&store, &path, None, false, None).unwrap();
+        let n = save_discovered_secrets(&store, &path, None, false, None, None).unwrap();
         assert_eq!(n, 1);
         let content = fs::read_to_string(&path).unwrap();
         assert!(
@@ -764,10 +792,10 @@ mod tests {
 
         // First write.
         let store = store_with_entry("abc123");
-        save_discovered_secrets(&store, &path, None, false, None).unwrap();
+        save_discovered_secrets(&store, &path, None, false, None, None).unwrap();
 
         // Second write with the same value — should add 0 new entries.
-        let n = save_discovered_secrets(&store, &path, None, false, None).unwrap();
+        let n = save_discovered_secrets(&store, &path, None, false, None, None).unwrap();
         assert_eq!(n, 0);
 
         // File should still have exactly one entry.
@@ -781,10 +809,10 @@ mod tests {
         let path = dir.path().join("secrets.yaml");
 
         let store1 = store_with_entry("first_secret");
-        save_discovered_secrets(&store1, &path, None, false, None).unwrap();
+        save_discovered_secrets(&store1, &path, None, false, None, None).unwrap();
 
         let store2 = store_with_entry("second_secret");
-        let n = save_discovered_secrets(&store2, &path, None, false, None).unwrap();
+        let n = save_discovered_secrets(&store2, &path, None, false, None, None).unwrap();
         assert_eq!(n, 1);
 
         let content = fs::read_to_string(&path).unwrap();
@@ -807,7 +835,7 @@ mod tests {
         fs::write(&path, original).unwrap();
 
         let store = store_with_entry("freshly_discovered");
-        let n = save_discovered_secrets(&store, &path, None, false, None).unwrap();
+        let n = save_discovered_secrets(&store, &path, None, false, None, None).unwrap();
         assert_eq!(n, 1);
 
         let content = fs::read_to_string(&path).unwrap();
@@ -830,7 +858,7 @@ mod tests {
         fs::write(&path, "[]\n").unwrap();
 
         let store = store_with_entry("freshly_discovered");
-        let n = save_discovered_secrets(&store, &path, None, false, None).unwrap();
+        let n = save_discovered_secrets(&store, &path, None, false, None, None).unwrap();
         assert_eq!(n, 1);
 
         let content = fs::read_to_string(&path).unwrap();
@@ -846,7 +874,7 @@ mod tests {
         fs::write(&path, b"this: is: not: valid: yaml: ][[[").unwrap();
 
         let store = store_with_entry("abc123");
-        let result = save_discovered_secrets(&store, &path, None, false, None);
+        let result = save_discovered_secrets(&store, &path, None, false, None, None);
         assert!(
             result.is_err(),
             "malformed YAML should return an error, not silently lose data"
@@ -864,7 +892,7 @@ mod tests {
         fs::write(&path, encrypt_secrets(initial, pw).unwrap()).unwrap();
 
         let store = store_with_entry("discovered_secret");
-        let n = save_discovered_secrets(&store, &path, Some(pw), true, None).unwrap();
+        let n = save_discovered_secrets(&store, &path, Some(pw), true, None, None).unwrap();
         assert_eq!(n, 1);
 
         // File must still be encrypted — never downgraded to plaintext.
@@ -899,7 +927,7 @@ mod tests {
         let before = fs::read(&path).unwrap();
 
         let store = store_with_entry("discovered");
-        let result = save_discovered_secrets(&store, &path, Some("wrong"), true, None);
+        let result = save_discovered_secrets(&store, &path, Some("wrong"), true, None, None);
         assert!(result.is_err(), "wrong password must fail the write-back");
         assert_eq!(fs::read(&path).unwrap(), before, "file must be unchanged");
     }
@@ -914,7 +942,7 @@ mod tests {
         let before = fs::read(&path).unwrap();
 
         let store = store_with_entry("discovered");
-        let result = save_discovered_secrets(&store, &path, None, false, None);
+        let result = save_discovered_secrets(&store, &path, None, false, None, None);
         assert!(
             result.is_err(),
             "encrypted-looking file without password must fail"
@@ -930,7 +958,8 @@ mod tests {
 
         let store = store_with_entry("discovered");
         let n =
-            save_discovered_secrets(&store, &path, None, false, Some(SecretsFormat::Json)).unwrap();
+            save_discovered_secrets(&store, &path, None, false, Some(SecretsFormat::Json), None)
+                .unwrap();
         assert_eq!(n, 1);
 
         // Must reparse as JSON — not YAML-overwritten.
@@ -952,7 +981,8 @@ mod tests {
 
         let store = store_with_entry("discovered");
         let n =
-            save_discovered_secrets(&store, &path, None, false, Some(SecretsFormat::Toml)).unwrap();
+            save_discovered_secrets(&store, &path, None, false, Some(SecretsFormat::Toml), None)
+                .unwrap();
         assert_eq!(n, 1);
 
         let raw = fs::read(&path).unwrap();

@@ -60,6 +60,7 @@ pub(crate) fn run_scan(args: &ScanArgs) -> Result<(), (String, i32)> {
         seed_salt_file: None,
         randomize_length: false,
         no_structured_handoff: true,
+        handoff_file: None,
         no_field_signal: false,
         no_baseline: false,
         include_binary: false,

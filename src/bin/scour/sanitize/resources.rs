@@ -18,6 +18,11 @@ struct LoadedSecrets {
     /// Extension-derived plaintext format, used so the handoff write-back
     /// preserves the file's own format instead of assuming YAML.
     format: Option<SecretsFormat>,
+    /// Pattern strings of `kind: literal` entries. When `--handoff-file`
+    /// redirects the write-back, these are skipped so values already recorded
+    /// in the (shared, immutable) secrets file are not duplicated into the
+    /// overlay.
+    literal_patterns: Vec<String>,
 }
 
 fn load_secrets_data(
@@ -92,11 +97,17 @@ fn load_secrets_data(
     let bytes_for_entropy: &[u8] = plaintext_bytes
         .as_deref()
         .map_or(raw_bytes.as_slice(), |v| v);
-    let entropy_configs = if let Ok(ent_entries) = parse_secrets(bytes_for_entropy, None) {
-        entropy_configs_from_entries(&ent_entries)
-    } else {
-        vec![]
-    };
+    let (entropy_configs, literal_patterns) =
+        if let Ok(ent_entries) = parse_secrets(bytes_for_entropy, None) {
+            let literals = ent_entries
+                .iter()
+                .filter(|e| e.kind == "literal")
+                .map(|e| e.pattern.clone())
+                .collect();
+            (entropy_configs_from_entries(&ent_entries), literals)
+        } else {
+            (vec![], vec![])
+        };
 
     Ok(Some(LoadedSecrets {
         patterns,
@@ -106,6 +117,65 @@ fn load_secrets_data(
         plaintext_bytes,
         was_encrypted,
         format: secrets_format,
+        literal_patterns,
+    }))
+}
+
+struct HandoffOverlay {
+    patterns: Vec<ScanPattern>,
+    allow_patterns: Vec<String>,
+}
+
+/// Load the `--handoff-file` overlay as an additional pattern source.
+///
+/// Returns `Ok(None)` when no handoff file is configured, it does not exist
+/// yet (first run), or it is the same path as the secrets file (already
+/// loaded). The overlay is written by this tool as plaintext with owner-only
+/// permissions; a file that looks AES-GCM encrypted fails closed rather than
+/// being silently skipped.
+fn load_handoff_overlay(cli: &Cli) -> Result<Option<HandoffOverlay>, (String, i32)> {
+    let path = match cli.handoff_file.as_ref() {
+        Some(p) if Some(p) != cli.secrets_file.as_ref() => p,
+        _ => return Ok(None),
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = Zeroizing::new(fs::read(path).map_err(|e| {
+        (
+            format!("failed to read handoff file {}: {e}", path.display()),
+            1,
+        )
+    })?);
+    if scour_secrets::secrets::looks_encrypted(&raw) {
+        return Err((
+            format!(
+                "handoff file {} is encrypted — the overlay must be plaintext \
+                 (point --secrets-file at encrypted files instead)",
+                path.display()
+            ),
+            1,
+        ));
+    }
+    let format = SecretsFormat::from_extension(path.to_string_lossy().as_ref());
+    let loaded =
+        scour_secrets::secrets::load_secrets_auto(&raw, None, format, true).map_err(|e| {
+            (
+                format!("failed to load handoff file {}: {e}", path.display()),
+                1,
+            )
+        })?;
+    for (idx, err) in &loaded.warnings {
+        warn!(handoff_file = %path.display(), entry = idx, error = %err, "handoff entry warning");
+    }
+    info!(
+        handoff_file = %path.display(),
+        patterns = loaded.patterns.len(),
+        "loaded handoff overlay"
+    );
+    Ok(Some(HandoffOverlay {
+        patterns: loaded.patterns,
+        allow_patterns: loaded.allow_patterns,
     }))
 }
 
@@ -164,6 +234,10 @@ pub(super) struct RunResources {
     pub(super) secrets_was_encrypted: bool,
     /// Extension-derived secrets file format for format-preserving write-back.
     pub(super) secrets_format: Option<SecretsFormat>,
+    /// `kind: literal` pattern strings from the loaded secrets file. Passed to
+    /// the write-back as a skip set when `--handoff-file` redirects it, so the
+    /// overlay never duplicates values the shared file already records.
+    pub(super) base_literal_patterns: std::collections::HashSet<String>,
 }
 
 pub(super) fn load_run_resources(
@@ -205,6 +279,13 @@ pub(super) fn load_run_resources(
         base_patterns.extend(ls.patterns.iter().cloned());
         all_allow_patterns.extend(ls.allow_patterns.iter().cloned());
         entropy_configs.extend(ls.entropy_configs.iter().cloned());
+    }
+
+    // A handoff overlay holds values discovered on earlier runs of this user;
+    // load it as an additional pattern source so they keep being redacted.
+    if let Some(overlay) = load_handoff_overlay(cli)? {
+        base_patterns.extend(overlay.patterns);
+        all_allow_patterns.extend(overlay.allow_patterns);
     }
 
     if !cli.quick.is_empty() {
@@ -369,6 +450,10 @@ pub(super) fn load_run_resources(
     let (secrets_was_encrypted, secrets_format) = loaded_secrets
         .as_ref()
         .map_or((false, None), |ls| (ls.was_encrypted, ls.format));
+    let base_literal_patterns: std::collections::HashSet<String> = loaded_secrets
+        .as_ref()
+        .map(|ls| ls.literal_patterns.iter().cloned().collect())
+        .unwrap_or_default();
 
     Ok(RunResources {
         scanner,
@@ -382,5 +467,6 @@ pub(super) fn load_run_resources(
         secrets_password: effective_password,
         secrets_was_encrypted,
         secrets_format,
+        base_literal_patterns,
     })
 }

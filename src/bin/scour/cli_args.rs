@@ -162,6 +162,13 @@ pub(crate) struct Cli {
     #[arg(long)]
     pub(crate) no_structured_handoff: bool,
 
+    /// Write newly-discovered values to this plaintext file instead of the
+    /// secrets file, and load it as an additional pattern source when it
+    /// exists. Keeps a shared (committed) secrets file immutable while each
+    /// user accumulates discoveries in a local, gitignored overlay.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) handoff_file: Option<PathBuf>,
+
     /// Disable automatic entropy-based flagging of sensitive-named fields (password, token, …).
     #[arg(long)]
     pub(crate) no_field_signal: bool,
@@ -373,6 +380,7 @@ impl Default for Cli {
             seed_salt_file: None,
             randomize_length: false,
             no_structured_handoff: false,
+            handoff_file: None,
             no_field_signal: false,
             no_baseline: false,
             include_binary: false,

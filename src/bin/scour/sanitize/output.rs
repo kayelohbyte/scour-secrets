@@ -19,6 +19,9 @@ pub(super) struct SecretsWriteback {
     pub(super) password: Option<Zeroizing<String>>,
     pub(super) was_encrypted: bool,
     pub(super) format: Option<SecretsFormat>,
+    /// `kind: literal` patterns already in the loaded secrets file; skipped
+    /// when the write-back is redirected to a `--handoff-file` overlay.
+    pub(super) base_literal_patterns: std::collections::HashSet<String>,
 }
 
 pub(super) fn write_run_output(
@@ -31,14 +34,34 @@ pub(super) fn write_run_output(
     writeback: SecretsWriteback,
 ) -> Result<(), (String, i32)> {
     if !cli.no_structured_handoff && !profiles.is_empty() {
-        if let Some(save_path) = &cli.secrets_file {
-            match save_discovered_secrets(
-                store,
-                save_path,
+        // A handoff overlay takes the write-back instead of the secrets file,
+        // keeping a shared (committed) secrets file immutable. The overlay is
+        // always plaintext; values the shared file already records as literals
+        // are skipped so the overlay holds only genuinely new discoveries.
+        let redirected = cli.handoff_file.is_some() && cli.handoff_file != cli.secrets_file;
+        let (save_path, password, was_encrypted, format, skip) = if redirected {
+            let path = cli
+                .handoff_file
+                .as_ref()
+                .expect("checked: handoff_file is set");
+            (
+                Some(path),
+                None,
+                false,
+                SecretsFormat::from_extension(path.to_string_lossy().as_ref()),
+                Some(&writeback.base_literal_patterns),
+            )
+        } else {
+            (
+                cli.secrets_file.as_ref(),
                 writeback.password.as_ref().map(|p| p.as_str()),
                 writeback.was_encrypted,
                 writeback.format,
-            ) {
+                None,
+            )
+        };
+        if let Some(save_path) = save_path {
+            match save_discovered_secrets(store, save_path, password, was_encrypted, format, skip) {
                 Ok(0) => {}
                 Ok(n) => info!(
                     path = %save_path.display(),

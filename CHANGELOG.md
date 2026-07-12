@@ -19,6 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `--password-file`, or prompt) and deliberately has no config-file field.
   New "Team setup" section in the CLI reference documents the shared-repo
   layout and the deterministic-mode verification-oracle caveat.
+- **`--handoff-file` / `handoff_file:` — discovered-value overlay.** Redirects
+  the structured-handoff write-back to a local plaintext file instead of the
+  secrets file, and loads that file as an additional pattern source on later
+  runs. A shared secrets file committed to a repository stays immutable while
+  each user accumulates discoveries in a gitignored overlay; values the shared
+  file already records as `kind: literal` are not duplicated into it. With a
+  single `--app` and no `--secrets-file`, the handoff file also takes the
+  write-back that previously went to the local app copy. The overlay must be
+  plaintext — an encrypted file at that path is an error, never overwritten.
+  A handoff file alone satisfies `--profile`'s requirement for a
+  discovered-value destination.
 
 ## [0.19.0] - 2026-07-10
 

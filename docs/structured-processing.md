@@ -574,19 +574,19 @@ When `--deterministic` is set alongside `--profile`, values found by the structu
 ```bash
 # First run: config.yaml is processed structurally.
 # Discovered values (e.g. "hunter2") are appended to secrets.yaml.
-SCOUR_SECRETS_PASSWORD=secret sanitize config.yaml \
+SCOUR_SECRETS_PASSWORD=secret scour-secrets config.yaml \
   --profile profile.yaml \
   --deterministic \
   --secrets-file secrets.yaml
 
 # Second run against a log file: "hunter2" is now in secrets.yaml
 # so the streaming scanner replaces it in app.log with the same value.
-SCOUR_SECRETS_PASSWORD=secret sanitize app.log \
+SCOUR_SECRETS_PASSWORD=secret scour-secrets app.log \
   --deterministic \
   --secrets-file secrets.yaml
 ```
 
-A secrets file is always required when using `--profile`. The file can be empty on the first run — `--deterministic` will create it if it does not yet exist.
+A secrets file (or a `--handoff-file`, see below) is always required when using `--profile`. The file can be empty on the first run — `--deterministic` will create it if it does not yet exist.
 
 The replacement value for any given input is determined solely by the password and the original string — not by the secrets file contents. This means:
 
@@ -596,12 +596,33 @@ The replacement value for any given input is determined solely by the password a
 
 ```bash
 # Separate runs, same password → consistent replacements across both outputs
-SCOUR_SECRETS_PASSWORD=secret sanitize log-one.txt --deterministic -s secrets.yaml
-SCOUR_SECRETS_PASSWORD=secret sanitize log-two.txt --deterministic -s secrets.yaml
+SCOUR_SECRETS_PASSWORD=secret scour-secrets log-one.txt --deterministic -s secrets.yaml
+SCOUR_SECRETS_PASSWORD=secret scour-secrets log-two.txt --deterministic -s secrets.yaml
 # "hunter2" maps to the same replacement in both outputs
 ```
 
-**Treat your secrets file like a schema:** version-control it and only ever append. Removing a pattern breaks coverage for that value in future runs.
+**Treat your secrets file like a schema:** only ever append; removing a pattern breaks coverage for that value in future runs. But be deliberate about *where* discovered values land before you version-control it — the write-back appends real secret values as `kind: literal` entries, so a plaintext secrets file that receives write-back must not be committed as-is.
+
+### Keeping a shared secrets file immutable: `--handoff-file`
+
+`--handoff-file` (or `handoff_file:` in `.scour-secrets.yaml`) splits the two roles the secrets file plays: the secrets file stays a read-only pattern source, and discovered values are written to a separate local plaintext overlay instead. The overlay is loaded as an additional pattern source on later runs, so discovery propagation works exactly as before — the shared file just never changes.
+
+```bash
+# patterns.yaml (committed, shared) is never modified; discoveries go to the
+# gitignored overlay and are re-loaded on every subsequent run.
+SCOUR_SECRETS_PASSWORD=secret scour-secrets config.yaml \
+  --profile profile.yaml \
+  --secrets-file patterns.yaml \
+  --handoff-file .scour-secrets.local.yaml
+
+# Later log run: "hunter2" was discovered above, lives in the overlay, and is
+# replaced here with the same value.
+SCOUR_SECRETS_PASSWORD=secret scour-secrets app.log \
+  --secrets-file patterns.yaml \
+  --handoff-file .scour-secrets.local.yaml
+```
+
+Values the shared file already records as `kind: literal` are never duplicated into the overlay, and an encrypted file at the handoff path is an error — the overlay is always plaintext (written `0600`). See [Team setup](cli-reference.md#team-setup) for the full committed-repo layout.
 
 ---
 

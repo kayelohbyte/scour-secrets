@@ -44,6 +44,10 @@ pub(crate) struct SanitizeConfig {
     /// location (`--seed-salt-file`). Commit it alongside the project config so
     /// every team member reproduces identical deterministic output.
     pub(crate) seed_salt_file: Option<PathBuf>,
+    /// Local plaintext overlay receiving discovered-value write-back instead of
+    /// the secrets file (`--handoff-file`), relative to the config file
+    /// location. Keeps a committed secrets file immutable; gitignore this one.
+    pub(crate) handoff_file: Option<PathBuf>,
 
     // --- Bool scan-behavior flags ----------------------------------------
     /// HMAC-deterministic replacements (`--deterministic`). Requires a password
@@ -437,6 +441,7 @@ fn show_config_fields(cfg: &SanitizeConfig, config_dir: Option<&Path>) {
         opt("encrypted_secrets:", cfg.encrypted_secrets);
         path_field("profile:", cfg.profile.as_deref(), config_dir);
         path_field("seed_salt_file:", cfg.seed_salt_file.as_deref(), config_dir);
+        path_field("handoff_file:", cfg.handoff_file.as_deref(), config_dir);
     }
     opt("deterministic:", cfg.deterministic);
     opt("fail_on_match:", cfg.fail_on_match);
@@ -586,6 +591,7 @@ secrets_file: secrets.yaml
 encrypted_secrets: true
 profile: profile.yaml
 seed_salt_file: .seed-salt
+handoff_file: .scour-secrets.local.yaml
 deterministic: true
 fail_on_match: true
 strict: true
@@ -616,6 +622,10 @@ quiet: true
         assert_eq!(cfg.encrypted_secrets, Some(true));
         assert_eq!(cfg.profile, Some(PathBuf::from("profile.yaml")));
         assert_eq!(cfg.seed_salt_file, Some(PathBuf::from(".seed-salt")));
+        assert_eq!(
+            cfg.handoff_file,
+            Some(PathBuf::from(".scour-secrets.local.yaml"))
+        );
         assert_eq!(cfg.deterministic, Some(true));
         assert_eq!(cfg.fail_on_match, Some(true));
         assert_eq!(cfg.strict, Some(true));

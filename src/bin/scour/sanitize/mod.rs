@@ -112,7 +112,13 @@ pub(crate) fn run_sanitize(
                      (ignore if you customized it)"
                 );
             }
-            if !cli.no_structured_handoff && cli.app.len() == 1 && cli.secrets_file.is_none() {
+            // A configured handoff file takes over the write-back instead, so
+            // the local app copy stays byte-identical to the shared bundle.
+            if !cli.no_structured_handoff
+                && cli.app.len() == 1
+                && cli.secrets_file.is_none()
+                && cli.handoff_file.is_none()
+            {
                 info!(
                     app = %app_name,
                     path = %secrets_path.display(),
@@ -123,9 +129,13 @@ pub(crate) fn run_sanitize(
         }
     }
 
-    if cli.profile.is_some() && cli.secrets_file.is_none() && !cli.no_structured_handoff {
+    if cli.profile.is_some()
+        && cli.secrets_file.is_none()
+        && cli.handoff_file.is_none()
+        && !cli.no_structured_handoff
+    {
         return Err((
-            "a secrets file is required when using --profile\n\
+            "a secrets file (or handoff file) is required when using --profile\n\
              \n\
              Without one, discovered values from the profile pass have nowhere to go\n\
              and the scanner pass runs blind — sensitive data in logs that the profile\n\
@@ -135,7 +145,10 @@ pub(crate) fn run_sanitize(
              discovered literals automatically:\n\
              \n\
              touch secrets.yaml\n\
-             scour-secrets --profile my.profile.yaml --secrets-file secrets.yaml [paths...]"
+             scour-secrets --profile my.profile.yaml --secrets-file secrets.yaml [paths...]\n\
+             \n\
+             To keep a shared secrets file unmodified, send discoveries to a local\n\
+             overlay instead: --handoff-file .scour-secrets.local.yaml"
                 .into(),
             1,
         ));
@@ -171,6 +184,7 @@ pub(crate) fn run_sanitize(
         secrets_password,
         secrets_was_encrypted,
         secrets_format,
+        base_literal_patterns,
     } = resources::load_run_resources(&cli, pre_resolved_password)?;
 
     let report_enabled = cli.report.is_some()
@@ -520,6 +534,7 @@ pub(crate) fn run_sanitize(
             password: secrets_password,
             was_encrypted: secrets_was_encrypted,
             format: secrets_format,
+            base_literal_patterns,
         },
     )
 }

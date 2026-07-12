@@ -420,15 +420,18 @@ Created by `scour-secrets init-hook`. Provides persistent defaults for CLI flags
 | `allow` | list of strings | `[]` | Values to pass through unchanged. Supports exact strings, `*` glob wildcards, and `regex:<pattern>`. Merged with `--allow` on the CLI. |
 | `fail_on_match` | bool | `false` | Exit with code 2 when any match is found. Equivalent to `--fail-on-match`. |
 | `strict` | bool | `false` | Abort on the first error instead of skipping and continuing. Equivalent to `--strict`. |
+| `deterministic` | bool | `false` | HMAC-deterministic replacements on every run. Equivalent to `--deterministic`; still requires a password at run time (`SCOUR_SECRETS_PASSWORD`, `--password-file`, or `-p`). |
 | `no_structured_handoff` | bool | `false` | Suppress the Phase 1 → Phase 2 value handoff (discovered field values are not seeded into the scanner). Equivalent to `--no-structured-handoff`. |
 | `no_field_signal` | bool | `false` | Disable the field-name entropy heuristic. When active, key names matching sensitive keywords (`password`, `secret`, `token`, …) are flagged by their value's Shannon entropy even without an explicit `FieldRule`. Default thresholds: 3.0 bits/char for strong keywords, 3.5 for ambiguous ones. Equivalent to `--no-field-signal`. |
 | `threads` | integer | auto | Worker thread count. Omit or set to `null` for auto-detect. Equivalent to `--threads`. |
 | `log_format` | string | `"human"` | Log output format: `"human"` or `"json"` for SIEM ingestion. Equivalent to `--log-format`. |
 | `log_level` | string | `"warn"` | Log verbosity: `"off"`, `"error"`, `"warn"`, `"info"`, `"debug"`, or `"trace"`. Overridden by the `SCOUR_SECRETS_LOG` env var. Equivalent to `--log-level`. |
 | `no_progress` | bool | `false` | Disable progress output. Equivalent to `--no-progress`. |
-| `secrets_file` | string | _(none)_ | Secrets file to load on every run. Equivalent to `-s`/`--secrets-file`. |
-| `encrypted_secrets` | bool | `false` | Treat `secrets_file` as AES-256-GCM encrypted. Equivalent to `--encrypted-secrets`. |
-| `profile` | string | _(none)_ | File-type profile to load on every run. Equivalent to `--profile`. |
+| `secrets_file` | string | _(none)_ | **Project config only** — ignored in `settings.yaml`. Secrets file path, relative to the config file. Equivalent to `-s`/`--secrets-file`. |
+| `encrypted_secrets` | bool | `false` | **Project config only** — ignored in `settings.yaml`. Treat `secrets_file` as AES-256-GCM encrypted. Equivalent to `--encrypted-secrets`. |
+| `profile` | string | _(none)_ | **Project config only** — ignored in `settings.yaml`. File-type profile path, relative to the config file. Equivalent to `--profile`. |
+| `seed_salt_file` | string | _(none)_ | **Project config only** — ignored in `settings.yaml`. Deterministic seed-salt file, relative to the config file. Equivalent to `--seed-salt-file`. |
+| `handoff_file` | string | _(none)_ | **Project config only** — ignored in `settings.yaml`. Plaintext overlay receiving discovered-value write-back instead of the secrets file, relative to the config file. Equivalent to `--handoff-file`. |
 | `exclude_path` | list of strings | `[]` | Glob patterns excluded from directory walks. Equivalent to `--exclude-path`. |
 | `include_path` | list of strings | `[]` | Glob patterns that restrict directory walks. Equivalent to `--include-path`. |
 | `force_text` | bool | `false` | Bypass structured processors, streaming scanner only. Equivalent to `--force-text`. |
@@ -534,6 +537,11 @@ secrets_file: patterns.yaml
 # Commit it so every team member reproduces identical output.
 # seed_salt_file: .seed-salt
 
+# Local plaintext overlay that receives discovered-value write-back instead of
+# secrets_file, keeping the committed secrets file immutable (--handoff-file).
+# Add it to .gitignore — it accumulates real secret values.
+# handoff_file: .scour-secrets.local.yaml
+
 # Exit 2 when any match is found (--fail-on-match).
 # fail_on_match: false
 
@@ -563,28 +571,29 @@ To share one configuration across a team — same detection rules, same field pr
 
 ```
 <repo>/
-  .scour-secrets.yaml     # committed: app, allow, profile, secrets_file,
-                          #            deterministic: true, seed_salt_file: .seed-salt
-  .seed-salt              # committed: any stable content; it is a salt, not a secret key
-  sanitize.profile.yaml   # committed: field rules contain no secret material
-  patterns.yaml           # committed: regex/entropy/allow rules — see the write-back
-                          #            caveat below before committing this
+  .scour-secrets.yaml         # committed: app, allow, profile, secrets_file,
+                              #            deterministic, seed_salt_file, handoff_file
+  .seed-salt                  # committed: any stable content; it is a salt, not a secret key
+  sanitize.profile.yaml       # committed: field rules contain no secret material
+  patterns.yaml               # committed: regex/entropy/allow rules — stays immutable
+                              #            because handoff_file takes the write-back
+  .scour-secrets.local.yaml   # GITIGNORED: per-user overlay of discovered values
 ```
 
 ```yaml
 # .scour-secrets.yaml
 profile: sanitize.profile.yaml
 secrets_file: patterns.yaml
+handoff_file: .scour-secrets.local.yaml
 deterministic: true
 seed_salt_file: .seed-salt
 ```
 
 Each member supplies the shared password via `SCOUR_SECRETS_PASSWORD` or `--password-file` (a file outside the repo); with the same password and the committed salt, every machine produces byte-identical sanitized output for the same input.
 
-Two caveats:
+`handoff_file` is what makes committing `patterns.yaml` safe: discovered field values — real secret values — are written to the local overlay instead of the shared file, and the overlay is loaded on later runs so those values keep being redacted. Add the overlay to `.gitignore`. Without a handoff file, either set `no_structured_handoff: true` (rules stay pattern-only and stable, at the cost of discovery persistence) or use an encrypted secrets file (`encrypted_secrets: true`), accepting that the binary file re-encrypts on every discovery and does not merge across branches.
 
-- **Write-back.** When a profile is active, discovered field values — real secret values — are appended to `secrets_file` after every run. Do not commit a plaintext secrets file that receives write-back: either set `no_structured_handoff: true` in the project config (rules stay pattern-only and stable), or use an encrypted secrets file (`encrypted_secrets: true`), accepting that the binary file re-encrypts on every discovery and does not merge across branches.
-- **Verification oracle.** Deterministic replacements are `HMAC(key, value)` with a key derived from the shared password and salt. Anyone holding both can confirm whether a guessed value appears in sanitized output. That is inherent to deterministic mode; treat the password with the same care as the data it protects, and use random (default) mode when output leaves the team boundary.
+One caveat: deterministic replacements are `HMAC(key, value)` with a key derived from the shared password and salt. Anyone holding both can confirm whether a guessed value appears in sanitized output. That is inherent to deterministic mode; treat the password with the same care as the data it protects, and use random (default) mode when output leaves the team boundary.
 
 Override the file path directly with `SCOUR_SECRETS_CONFIG=/path/to/file.yaml`.  
 Set `SCOUR_SECRETS_NO_CONFIG=1` to disable project config entirely (useful in CI or when composing flags from multiple repos).
@@ -710,10 +719,11 @@ When neither `-s`/`--secrets-file` nor `--app` is provided, the built-in pattern
 | `--seed-salt-file <PATH>` | | File whose contents (any length; SHA-256-normalized) are used as the deterministic seed salt. Overrides the per-install salt and the `SCOUR_SECRETS_SEED_SALT` env var. Share this file (or the env var) across machines to reproduce identical deterministic output for a team. Can also be set with `seed_salt_file:` in `.scour-secrets.yaml` (relative to that file). Note: 0.16.0 switched the seed KDF to Argon2id, so output is not comparable to pre-0.16.0 runs even with the same salt. |
 | `--randomize-length` | | Draw each replacement's length from a per-category band instead of preserving the original's length, so the output no longer leaks how long the secret was. Output stays type-valid (a number stays digits, an email stays an email, a path keeps its extension) and preserved substrings (email domain, file extension, ARN/Azure segments) are unchanged. Canonical-shape categories (UUID, MAC, IPv4/6, container ID, Windows SID, JWT) keep their natural length. Composes with `--deterministic`. See SECURITY.md §4. |
 | `--no-structured-handoff` | | Suppress the structured-to-scanner value handoff. By default, when a profile is active (`--profile` or `--app` with a profile) and `--secrets-file` is provided, values discovered in typed fields are appended to that file as `kind: literal` entries so the scanner pass can catch those same values in logs, comments, and unstructured text. The write-back preserves the file's on-disk form: an **encrypted** secrets file is decrypted, merged, and re-encrypted with the same password (never downgraded to plaintext), and JSON/YAML/TOML plaintext files keep their own format; the file is written with `0600` permissions. Disabling this weakens coverage — the scanner will no longer see values that were only found by the structured pass. |
+| `--handoff-file <PATH>` | | Redirect the discovered-value write-back to this **plaintext** file instead of the secrets file, and load it as an additional pattern source when it exists. The secrets file is then never modified — useful when it is shared and committed to a repository (see [Team setup](#team-setup)); gitignore the handoff file. Values the secrets file already records as `kind: literal` are not duplicated into it. With `--app`, the local app copy also stops receiving write-back. Can be set with `handoff_file:` in `.scour-secrets.yaml` (relative to that file). An encrypted file at this path is an error, never silently overwritten. |
 | `--include-binary` | | Process entries that appear to be binary data (default: skip). |
 | `--threads <N>` | | Number of worker threads. When multiple input files are given, files are processed in parallel up to this limit. For a single archive input, entries are sanitized in parallel using the same budget. Defaults to the number of logical CPUs. Capped to available parallelism. |
 | `--max-archive-depth <N>` | | Maximum nesting depth for recursive archive processing (default: `5`, max: `10`). Each nesting level may buffer up to 256 MiB. Advanced flag — hidden from `--help` but works at runtime. |
-| `--profile <FILE>` | | Path to a file-type profile (JSON or YAML). Enables structured field-level sanitization for matched files. **Requires `--secrets-file`** — without one, discovered field values have nowhere to go and Phase 2 runs blind, producing incomplete sanitization. The secrets file may be empty on the first run; discovered literals are appended to it automatically (see `--no-structured-handoff`) so subsequent runs catch those values everywhere. See [Structured Processing](structured-processing.md). |
+| `--profile <FILE>` | | Path to a file-type profile (JSON or YAML). Enables structured field-level sanitization for matched files. **Requires `--secrets-file` or `--handoff-file`** — without one, discovered field values have nowhere to go and Phase 2 runs blind, producing incomplete sanitization. The secrets file may be empty on the first run; discovered literals are appended to it automatically (see `--no-structured-handoff`) so subsequent runs catch those values everywhere. See [Structured Processing](structured-processing.md). |
 | `--app <APPS>` | | Load built-in secrets patterns and structured field profiles for one or more applications. Comma-separated app names (e.g. `--app gitlab` or `--app gitlab,nginx`). Additive with `--secrets-file` and `--profile`. Run `scour-secrets apps` to list available app names. |
 | `--no-baseline` | | Skip the built-in baseline detectors (emails, IPs, UUIDs, home paths, common token formats, and their companion allow-patterns). The baseline loads for plain runs (no `-s`, `--app`, or `--profile`) and is layered under **every** `--app` run as a floor beneath the bundle's patterns; an explicit `-s` without `--app` already runs without it. Pass this for app-only precision when the bundle's patterns alone should decide what is replaced. |
 | `--allow <PATTERN>` | | Allow a specific value through unchanged (repeatable). Matched values are not replaced and not recorded in the mapping store — they will pass through in every file processed in the same run. Supports exact strings and `*` glob patterns. Matching is **case-insensitive** by default (patterns and values are lowercased before comparison). Examples: `--allow localhost`, `--allow "*.internal"`, `--allow "192.168.1.*"`. Allowlist entries can also be placed in the secrets file as `kind: allow` entries. |
@@ -1377,6 +1387,37 @@ SCOUR_SECRETS_PASSWORD=secret scour-secrets config.yaml \
 # the same replacement as in the first run
 SCOUR_SECRETS_PASSWORD=secret scour-secrets server.log \
   --deterministic --secrets-file patterns.yaml
+```
+
+**Team-shared config (identical output for every member, shared file immutable):**
+
+```bash
+# Committed to the repo — see the Team setup section for the full layout:
+#   .scour-secrets.yaml   profile, secrets_file, handoff_file,
+#                         deterministic: true, seed_salt_file: .seed-salt
+#   .seed-salt, sanitize.profile.yaml, patterns.yaml
+# Gitignored: .scour-secrets.local.yaml (per-user discovered-value overlay)
+
+# Every member runs the same bare command from anywhere in the repo;
+# the flags all come from the committed config:
+export SCOUR_SECRETS_PASSWORD=…   # shared out-of-band, never committed
+scour-secrets support-bundle.tar.gz
+
+# Same input → byte-identical output on every machine. patterns.yaml is
+# never modified; discoveries land in each member's local overlay and are
+# re-loaded on that member's later runs.
+```
+
+**Discovered values to a local overlay, shared secrets file untouched:**
+
+```bash
+# patterns.yaml stays byte-identical (safe to keep committed); "hunter2"
+# discovered by the profile pass is appended to the overlay instead:
+scour-secrets config.yaml --profile fields.yaml \
+  -s patterns.yaml --handoff-file .scour-secrets.local.yaml
+
+# The overlay is loaded on later runs, so the log run still redacts it:
+scour-secrets server.log -s patterns.yaml --handoff-file .scour-secrets.local.yaml
 ```
 
 **Deterministic mode (same seed → same replacements every run):**

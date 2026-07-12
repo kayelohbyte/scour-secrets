@@ -111,6 +111,11 @@ fn apply_project_config_layer(cli: &mut Cli, pc: SanitizeConfig, config_dir: &st
             cli.seed_salt_file = Some(config_dir.join(rel));
         }
     }
+    if cli.handoff_file.is_none() {
+        if let Some(rel) = pc.handoff_file {
+            cli.handoff_file = Some(config_dir.join(rel));
+        }
+    }
     // Bool flags
     apply_bool_flag!(cli, pc, deterministic);
     apply_bool_flag!(cli, pc, fail_on_match);
@@ -381,6 +386,20 @@ mod tests {
         };
         apply_project_config_layer(&mut cli, pc, Path::new("/repo"));
         assert_eq!(cli.seed_salt_file, Some(PathBuf::from("/explicit/salt")));
+    }
+
+    #[test]
+    fn project_layer_resolves_handoff_file_relative_to_config_dir() {
+        let mut cli = default_cli();
+        let pc = SanitizeConfig {
+            handoff_file: Some(PathBuf::from(".scour-secrets.local.yaml")),
+            ..Default::default()
+        };
+        apply_project_config_layer(&mut cli, pc, Path::new("/repo"));
+        assert_eq!(
+            cli.handoff_file,
+            Some(PathBuf::from("/repo/.scour-secrets.local.yaml"))
+        );
     }
 
     #[test]
