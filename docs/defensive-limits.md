@@ -52,7 +52,7 @@ The 256 MiB cap is intentionally generous relative to real-world config files. N
 
 ### Pattern Count Limits
 
-The `StreamScanner` rejects pattern sets exceeding 10 000 patterns at construction time. This bounds matcher automaton memory: regex patterns contribute to `RegexSet` memory, and literal patterns contribute to the Aho-Corasick automaton.
+The `StreamScanner` enforces two pattern caps at construction time, one per matcher engine. Regex-bound patterns are rejected beyond 10 000: `RegexSet` automaton memory scales linearly with pattern count, and with the per-pattern 1 MiB size/DFA limits an unbounded set could claim tens of GiB. Literal patterns — including every field value discovered by a profile pass, which for a large input (e.g. a full Dataiku DATA_DIR) legitimately reaches tens of thousands — compile into a single Aho-Corasick automaton whose memory scales with total literal bytes instead, so they get a far looser cap of 500 000.
 
 ### Memory Characteristics for Large Inputs
 
@@ -67,7 +67,8 @@ Structured-processor limits are centralized in `src/processor/limits.rs`; scanne
 | Limit | Default Value | Configurable | Notes |
 |-------|---------------|--------------|-------|
 | Max structured file size | 256 MiB | `--max-structured-size` | Applies to standalone JSON, YAML, XML, CSV files and archive entries routed to structured processors. Oversized inputs fall back to the streaming scanner. Real config files never approach this limit; the fallback is only relevant for large data dumps and log files. |
-| Max pattern count | 10 000 | Compile-time (`DEFAULT_MAX_PATTERNS`) | Bounds matcher automaton memory (`RegexSet` + Aho-Corasick). |
+| Max regex pattern count | 10 000 | Compile-time (`DEFAULT_MAX_PATTERNS`) | Bounds `RegexSet` automaton memory (scales linearly with pattern count). |
+| Max literal pattern count | 500 000 | Compile-time (`MAX_LITERAL_PATTERNS`) | Bounds Aho-Corasick automaton memory. Looser than the regex cap: profile passes over large inputs legitimately discover tens of thousands of literal values. |
 | Max mapping store entries | 10 000 000 | `--max-mappings` | Prevents unbounded heap growth. |
 | Regex automaton size | 1 MiB | Compile-time (`REGEX_SIZE_LIMIT`) | Per-pattern limit. |
 | Regex DFA cache size | 1 MiB | Compile-time (`REGEX_DFA_SIZE_LIMIT`) | Per-pattern limit. |

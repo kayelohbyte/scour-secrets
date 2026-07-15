@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Large inputs no longer abort with "pattern count exceeds maximum
+  allowed".** The 10 000-pattern cap (F-05) exists to bound `RegexSet`
+  automaton memory, but it was applied to the *total* pattern count — even
+  though literal patterns (every value discovered by a profile pass) are
+  matched by Aho-Corasick and never touch the `RegexSet`. A profile pass over
+  a large input (e.g. a full Dataiku DATA_DIR discovering ~48 000 field
+  values) killed the whole run at the augmented-scanner build. The cap now
+  applies to regex-bound patterns only; literals get their own far looser
+  cap (500 000). `StreamScanner::new_with_max_patterns`'s `max_patterns`
+  parameter accordingly now bounds regex patterns only.
+
 ### Added
 
 - **Deterministic mode is now configurable in config files.** `deterministic:

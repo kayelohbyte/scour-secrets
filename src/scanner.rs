@@ -94,13 +94,25 @@ const REGEX_DFA_SIZE_LIMIT: usize = 1 << 20; // 1 MiB
 /// file with 10 000 patterns could claim up to ~20 GiB of automaton memory.
 const REGEX_SET_SIZE_CAP: usize = 256 * 1024 * 1024; // 256 MiB
 
-/// Maximum number of patterns allowed in a single scanner (F-05 fix).
-/// The `RegexSet` automaton memory scales linearly with pattern count.
-/// With 1 MiB size/DFA limits per pattern, 10 000 patterns could
+/// Maximum number of regex-bound patterns allowed in a single scanner
+/// (F-05 fix). The `RegexSet` automaton memory scales linearly with pattern
+/// count. With 1 MiB size/DFA limits per pattern, 10 000 patterns could
 /// allocate up to ~20 GiB of automaton memory.  This cap prevents
-/// accidental resource exhaustion.  Override via
+/// accidental resource exhaustion.  Literal patterns are exempt: they are
+/// matched by Aho-Corasick, not the `RegexSet` (see
+/// [`MAX_LITERAL_PATTERNS`]).  Override via
 /// [`StreamScanner::new_with_max_patterns`] if needed.
 const DEFAULT_MAX_PATTERNS: usize = 10_000;
+
+/// Maximum number of literal patterns allowed in a single scanner.
+///
+/// Literals compile into a single Aho-Corasick automaton whose memory scales
+/// with total literal bytes, not with a per-pattern automaton budget, so this
+/// cap is far looser than [`DEFAULT_MAX_PATTERNS`]. A profile pass over a
+/// large input (e.g. a full Dataiku DATA_DIR) legitimately discovers tens of
+/// thousands of field values; the cap only guards against a pathological
+/// input claiming unbounded automaton memory.
+const MAX_LITERAL_PATTERNS: usize = 500_000;
 
 /// Fixed marker emitted in place of a single match that is longer than the
 /// scanner is willing to buffer (see [`StreamScanner::scan_reader_with_callbacks`]).
@@ -703,15 +715,19 @@ impl StreamScanner {
     /// Create a new streaming scanner with a custom pattern limit.
     ///
     /// This is identical to [`new`](Self::new) but allows overriding the
-    /// default pattern cap (10 000).  Use this
-    /// when you have a legitimate need for more patterns and have
-    /// verified that your system has enough memory for the resulting
-    /// `RegexSet`.
+    /// default regex pattern cap (10 000).  Use this when you have a
+    /// legitimate need for more regex patterns and have verified that your
+    /// system has enough memory for the resulting `RegexSet`.
+    ///
+    /// `max_patterns` applies to regex-bound patterns only. Literal patterns
+    /// are matched by a shared Aho-Corasick automaton and are capped
+    /// separately at 500 000, independent of this parameter.
     ///
     /// # Errors
     ///
     /// Returns [`SanitizeError::InvalidConfig`] if the configuration is
-    /// invalid or the pattern count exceeds `max_patterns`.
+    /// invalid, the regex pattern count exceeds `max_patterns`, or the
+    /// literal pattern count exceeds the literal cap.
     pub fn new_with_max_patterns(
         patterns: Vec<ScanPattern>,
         store: Arc<MappingStore>,
@@ -719,16 +735,6 @@ impl StreamScanner {
         max_patterns: usize,
     ) -> Result<Self> {
         config.validate()?;
-
-        // F-05 fix: enforce maximum pattern count to bound RegexSet memory.
-        if patterns.len() > max_patterns {
-            return Err(SanitizeError::InvalidConfig(format!(
-                "pattern count ({}) exceeds maximum allowed ({}) — \
-                 RegexSet memory scales linearly with pattern count",
-                patterns.len(),
-                max_patterns
-            )));
-        }
 
         // Partition patterns into literal (Aho-Corasick) and regex (RegexSet)
         // so each is matched by the most efficient engine.
@@ -745,6 +751,28 @@ impl StreamScanner {
                 regex_strs.push(pattern.regex_pattern());
                 regex_indices.push(i);
             }
+        }
+
+        // F-05 fix: enforce maximum pattern count to bound automaton memory.
+        // Only regex-bound patterns count toward `max_patterns` — the
+        // RegexSet is what scales linearly per pattern. Literals go to a
+        // shared Aho-Corasick automaton and get their own, far looser cap:
+        // a profile pass over a large input routinely discovers tens of
+        // thousands of literal field values.
+        if regex_strs.len() > max_patterns {
+            return Err(SanitizeError::InvalidConfig(format!(
+                "regex pattern count ({}) exceeds maximum allowed ({}) — \
+                 RegexSet memory scales linearly with pattern count",
+                regex_strs.len(),
+                max_patterns
+            )));
+        }
+        if literal_bytes.len() > MAX_LITERAL_PATTERNS {
+            return Err(SanitizeError::InvalidConfig(format!(
+                "literal pattern count ({}) exceeds maximum allowed ({})",
+                literal_bytes.len(),
+                MAX_LITERAL_PATTERNS
+            )));
         }
 
         // Build Aho-Corasick automaton for literal patterns (SIMD-accelerated,
@@ -793,7 +821,7 @@ impl StreamScanner {
     /// # Errors
     ///
     /// Returns [`SanitizeError`] if automaton construction fails or the
-    /// combined pattern count exceeds the default limit.
+    /// combined pattern counts exceed the default regex/literal limits.
     pub fn with_extra_literals(&self, extra: Vec<ScanPattern>) -> Result<Self> {
         let mut patterns = self.patterns.clone();
         patterns.extend(extra);
@@ -812,7 +840,7 @@ impl StreamScanner {
     /// # Errors
     ///
     /// Returns [`SanitizeError`] if Aho-Corasick or RegexSet construction fails
-    /// or the combined pattern count exceeds the default limit.
+    /// or the combined pattern counts exceed the default regex/literal limits.
     pub fn for_structured_pass(&self, extra: Vec<ScanPattern>) -> Result<Self> {
         let mut patterns: Vec<ScanPattern> = self
             .patterns
@@ -1633,6 +1661,52 @@ mod tests {
             "ipv4",
         )
         .unwrap()
+    }
+
+    // ---- Pattern-count caps (F-05) ----
+
+    #[test]
+    fn pattern_cap_applies_to_regex_patterns_only() {
+        let gen = Arc::new(HmacGenerator::new([42u8; 32]));
+        let store = Arc::new(MappingStore::new(gen, None));
+        let config = ScanConfig {
+            chunk_size: 64,
+            overlap_size: 16,
+        };
+
+        // Literals far beyond `max_patterns` must compile: they are matched
+        // by Aho-Corasick, not the RegexSet the cap protects. A profile pass
+        // over a large input legitimately discovers tens of thousands.
+        let mut patterns: Vec<ScanPattern> = (0..20)
+            .map(|i| {
+                ScanPattern::from_literal(
+                    &format!("discovered-value-{i}"),
+                    Category::AuthToken,
+                    "lit",
+                )
+                .unwrap()
+            })
+            .collect();
+        patterns.push(email_pattern());
+        assert!(StreamScanner::new_with_max_patterns(
+            patterns,
+            Arc::clone(&store),
+            config.clone(),
+            10
+        )
+        .is_ok());
+
+        // Regex-bound patterns above the cap are still rejected.
+        let regexes: Vec<ScanPattern> = (0..11)
+            .map(|i| {
+                ScanPattern::from_regex(&format!(r"token{i}-\d+"), Category::AuthToken, "rx")
+                    .unwrap()
+            })
+            .collect();
+        let err = StreamScanner::new_with_max_patterns(regexes, store, config, 10)
+            .err()
+            .expect("regex-bound patterns above the cap must be rejected");
+        assert!(err.to_string().contains("regex pattern count"));
     }
 
     // ---- Word boundaries for name-category literals ----

@@ -8,7 +8,7 @@ All public types are re-exported from the crate root (`scour_secrets::*`) for co
 |-----------------|-------------|
 | `StreamScanner` | Streaming regex scanner. Processes input in chunks with overlap to catch boundary-straddling matches. |
 | `StreamScanner::new(patterns, store, config)` | Create a scanner from a `Vec<ScanPattern>`, a `MappingStore`, and a `ScanConfig`. |
-| `StreamScanner::new_with_max_patterns(patterns, store, config, max_patterns)` | Same as `new()` but with a custom pattern count limit (default: 10 000). |
+| `StreamScanner::new_with_max_patterns(patterns, store, config, max_patterns)` | Same as `new()` but with a custom regex pattern count limit (default: 10 000). Applies to regex-bound patterns only; literal patterns are matched by Aho-Corasick and capped separately at 500 000. |
 | `StreamScanner::from_encrypted_secrets(bytes, password, format, store, config, extra)` | Convenience constructor that decrypts a secrets file and builds patterns. Returns a `SecretsLoadResult { scanner, warnings, allow_patterns }`. Pass `allow_patterns` to `AllowlistMatcher::new` to honour `kind: allow` entries. |
 | `StreamScanner::from_plaintext_secrets(plaintext, format, store, config, extra)` | Convenience constructor that parses a plaintext secrets file and builds patterns. Returns a `SecretsLoadResult { scanner, warnings, allow_patterns }`. Pass `allow_patterns` to `AllowlistMatcher::new` to honour `kind: allow` entries. |
 | `StreamScanner::scan_reader(reader, writer)` | Scan a `Read` stream, writing sanitized output to a `Write` stream. Returns `ScanStats`. |
