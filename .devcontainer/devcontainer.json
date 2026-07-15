@@ -1,6 +1,6 @@
 {
   "name": "scour-secrets",
-  "image": "rust:1.75",
+  "image": "rust:1.86",
   "workspaceFolder": "/workspace",
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
 
